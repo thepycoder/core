@@ -1,5 +1,21 @@
 use crate::characters::CHARACTERS;
 use regex::Regex;
+use std::path::Path;
+
+/// Stable staging id: `{session_id}_{meeting_id}_{seq}` (seq is 0-based per meeting).
+pub fn composite_id(session_id: u32, meeting_id: u32, seq: i32) -> String {
+    format!("{}_{}_{}", session_id, meeting_id, seq)
+}
+
+/// Cache path relative to `SCRAPER_CACHE_DIR` for portable provenance columns.
+pub fn relative_cache_path(full_path: &Path, cache_root: &Path) -> String {
+    full_path
+        .strip_prefix(cache_root)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| full_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
 
 pub fn dutch_month_to_number(month: &str) -> Option<u32> {
     match month.to_lowercase().as_str() {

@@ -3,6 +3,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
+use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use scraper::{Html, Selector};
 use std::error::Error;
@@ -25,6 +26,8 @@ struct ScrapedCommission {
     subchairs: String,
     permanent_members: String,
     replacement_members: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct CommissionIndex {
@@ -76,6 +79,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             subchairs: extract_members(&doc, "Ondervoorzitter"),
             permanent_members: extract_members(&doc, "Vaste Leden"),
             replacement_members: extract_members(&doc, "Plaatsvervangers"),
+            source_url: entry.url.clone(),
+            cache_path: relative_cache_path(&entry.cache_path, &cache_dir()),
         });
     }
 
@@ -101,6 +106,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedCommission]) -> Result<(), Box<dyn 
         Field::new("subchairs", DataType::Utf8, false),
         Field::new("permanent_members", DataType::Utf8, false),
         Field::new("replacement_members", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     macro_rules! col {
@@ -118,6 +125,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedCommission]) -> Result<(), Box<dyn 
             col!(|r| r.subchairs.clone()),
             col!(|r| r.permanent_members.clone()),
             col!(|r| r.replacement_members.clone()),
+            col!(|r| r.source_url.clone()),
+            col!(|r| r.cache_path.clone()),
         ],
     )?;
 

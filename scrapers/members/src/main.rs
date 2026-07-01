@@ -4,7 +4,7 @@ use arrow::record_batch::RecordBatch;
 use chrono::NaiveDate;
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
-use crawl::utils::{dutch_language_to_language_code, dutch_month_to_number};
+use crawl::utils::{dutch_language_to_language_code, dutch_month_to_number, relative_cache_path};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
@@ -98,6 +98,8 @@ struct ScrapedMember {
     email: String,
     active: bool,
     start: Option<String>,
+    source_url: String,
+    cache_path: String,
 }
 
 #[derive(Hash)]
@@ -194,6 +196,8 @@ fn write_parquet(path: &Path, members: &[ScrapedMember]) -> Result<(), Box<dyn E
         Field::new("email", DataType::Utf8, false),
         Field::new("active", DataType::Utf8, false),
         Field::new("start", DataType::Utf8, true),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     macro_rules! col {
@@ -227,6 +231,8 @@ fn write_parquet(path: &Path, members: &[ScrapedMember]) -> Result<(), Box<dyn E
             col!(|m| m.email.clone()),
             col!(|m| m.active.to_string()),
             col_opt!(|m| m.start.clone()),
+            col!(|m| m.source_url.clone()),
+            col!(|m| m.cache_path.clone()),
         ],
     )?;
 
@@ -311,6 +317,9 @@ async fn extract_members(
             fs::write(&detail_path, &content).await?;
         }
 
+        let detail_url = format!("https://www.dekamer.be/kvvcr/{}", member_detail_page_link);
+        let detail_cache_path = relative_cache_path(&detail_path, &cache_dir());
+
         // Read detail page
         let content = read_to_string(&detail_path)?;
         let detail = Html::parse_document(&content);
@@ -352,6 +361,8 @@ async fn extract_members(
             email,
             active,
             start: extract_start_date(&detail),
+            source_url: detail_url,
+            cache_path: detail_cache_path,
         });
 
         pb.inc(1);

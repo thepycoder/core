@@ -3,6 +3,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{Local, NaiveDate};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
+use crawl::utils::relative_cache_path;
 use encoding_rs::WINDOWS_1252;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
@@ -68,6 +69,8 @@ struct ScrapedDossier {
     latest_report_url: Option<String>,
     eurovoc_main_descriptor: String,
     eurovoc_descriptors: String,
+    source_url: String,
+    cache_path: String,
 }
 
 /// A scraped subdocument.
@@ -78,6 +81,8 @@ struct ScrapedSubdocument {
     document_type: String,
     authors: String,
     file_url: Option<String>,
+    source_url: String,
+    cache_path: String,
 }
 
 /// A dossier.
@@ -423,6 +428,12 @@ async fn scrape_all_dossiers(
             .find(|s| matches!(s.document_type, DocumentType::Verslag) && s.file_url.is_some())
             .and_then(|s| s.file_url.clone());
 
+        let cache_path_rel = relative_cache_path(&path, &cache_dir());
+        let source_url = format!(
+            "https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat={}&dossierID={}",
+            session_id, dossier_id
+        );
+
         for subdocument in dossier.subdocuments {
             subdocuments.push(ScrapedSubdocument {
                 dossier_id: subdocument.dossier_id,
@@ -431,6 +442,8 @@ async fn scrape_all_dossiers(
                 document_type: subdocument.document_type.to_string(),
                 authors: subdocument.authors.join(","),
                 file_url: subdocument.file_url,
+                source_url: source_url.clone(),
+                cache_path: cache_path_rel.clone(),
             });
         }
 
@@ -449,6 +462,8 @@ async fn scrape_all_dossiers(
             latest_report_url,
             eurovoc_main_descriptor: dossier.eurovoc_main_descriptor,
             eurovoc_descriptors: dossier.eurovoc_descriptors,
+            source_url,
+            cache_path: cache_path_rel,
         });
         pb.inc(1);
     }
@@ -789,6 +804,8 @@ fn write_dossiers(path: &Path, rows: &[ScrapedDossier]) -> Result<(), Box<dyn Er
         Field::new("latest_report_url", DataType::Utf8, true),
         Field::new("eurovoc_main_descriptor", DataType::Utf8, false),
         Field::new("eurovoc_descriptors", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
@@ -808,6 +825,8 @@ fn write_dossiers(path: &Path, rows: &[ScrapedDossier]) -> Result<(), Box<dyn Er
             col_opt!(rows, |d| d.latest_report_url.clone()),
             col!(rows, |d| d.eurovoc_main_descriptor.clone()),
             col!(rows, |d| d.eurovoc_descriptors.clone()),
+            col!(rows, |d| d.source_url.clone()),
+            col!(rows, |d| d.cache_path.clone()),
         ],
     )
 }
@@ -820,6 +839,8 @@ fn write_subdocuments(path: &Path, rows: &[ScrapedSubdocument]) -> Result<(), Bo
         Field::new("type", DataType::Utf8, false),
         Field::new("authors", DataType::Utf8, false),
         Field::new("file_url", DataType::Utf8, true),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     write_parquet(
@@ -832,6 +853,8 @@ fn write_subdocuments(path: &Path, rows: &[ScrapedSubdocument]) -> Result<(), Bo
             col!(rows, |s| s.document_type.clone()),
             col!(rows, |s| s.authors.clone()),
             col_opt!(rows, |s| s.file_url.clone()),
+            col!(rows, |s| s.source_url.clone()),
+            col!(rows, |s| s.cache_path.clone()),
         ],
     )
 }

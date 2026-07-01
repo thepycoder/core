@@ -2,6 +2,7 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crawl::paths::{cache_dir, data_dir};
+use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use scraper::{Html, Selector};
 use std::error::Error;
@@ -18,6 +19,8 @@ struct ScrapedSession {
     session_id: String,
     start_date: String,
     end_date: String,
+    source_url: String,
+    cache_path: String,
 }
 
 #[tokio::main]
@@ -40,7 +43,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let content = std::fs::read_to_string(&index_cache)?;
     let document = Html::parse_document(&content);
-    let sessions = extract_sessions(&document);
+    let sessions = extract_sessions(&document, url, &relative_cache_path(&index_cache, &cache_dir()));
 
     write_parquet(&parquet_path, &sessions)?;
     println!(
@@ -56,6 +59,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedSession]) -> Result<(), Box<dyn Err
         Field::new("session_id", DataType::Utf8, false),
         Field::new("start_date", DataType::Utf8, false),
         Field::new("end_date", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     macro_rules! col {
@@ -70,6 +75,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedSession]) -> Result<(), Box<dyn Err
             col!(|r| r.session_id.clone()),
             col!(|r| r.start_date.clone()),
             col!(|r| r.end_date.clone()),
+            col!(|r| r.source_url.clone()),
+            col!(|r| r.cache_path.clone()),
         ],
     )?;
 
@@ -79,7 +86,7 @@ fn write_parquet(path: &Path, rows: &[ScrapedSession]) -> Result<(), Box<dyn Err
     Ok(())
 }
 
-fn extract_sessions(document: &Html) -> Vec<ScrapedSession> {
+fn extract_sessions(document: &Html, source_url: &str, cache_path: &str) -> Vec<ScrapedSession> {
     let mut sessions = Vec::new();
 
     for element in document.select(&SEL_SESSION) {
@@ -111,6 +118,8 @@ fn extract_sessions(document: &Html) -> Vec<ScrapedSession> {
             session_id,
             start_date: parts[0].trim().to_string(),
             end_date: parts[1].trim().to_string(),
+            source_url: source_url.to_string(),
+            cache_path: cache_path.to_string(),
         });
     }
 

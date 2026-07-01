@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
-use crawl::utils::clean_text;
+use crawl::utils::{clean_text, composite_id, relative_cache_path};
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -94,10 +94,12 @@ struct ScrapedMeeting {
     end_time: String,
     commission: String,
     chair: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct ScrapedQuestion {
-    question_id: i32,
+    question_id: String,
     session_id: u32,
     meeting_id: u32,
     questioners: String,
@@ -105,7 +107,9 @@ struct ScrapedQuestion {
     topics_nl: String,
     topics_fr: String,
     discussion: String,
-    dossier_ids: String,
+    internal_ids: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct MeetingOutput {
@@ -118,7 +122,7 @@ struct QuestionData {
     respondents: Vec<String>,
     topics: Vec<String>,
     discussion: String,
-    dossier_ids: Vec<String>,
+    internal_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -225,13 +229,15 @@ fn write_parquet(
 fn write_meetings(path: &Path, rows: &[ScrapedMeeting]) -> Result<(), Box<dyn Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("session_id", DataType::Utf8, false),
-        Field::new("commission_id", DataType::Utf8, false),
+        Field::new("meeting_id", DataType::Utf8, false),
         Field::new("date", DataType::Utf8, false),
         Field::new("time_of_day", DataType::Utf8, false),
         Field::new("start_time", DataType::Utf8, false),
         Field::new("end_time", DataType::Utf8, false),
         Field::new("commission", DataType::Utf8, false),
         Field::new("chair", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
@@ -245,6 +251,8 @@ fn write_meetings(path: &Path, rows: &[ScrapedMeeting]) -> Result<(), Box<dyn Er
             col!(rows, |c| c.end_time.clone()),
             col!(rows, |c| c.commission.clone()),
             col!(rows, |c| c.chair.clone()),
+            col!(rows, |c| c.source_url.clone()),
+            col!(rows, |c| c.cache_path.clone()),
         ],
     )
 }
@@ -259,13 +267,15 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
         Field::new("discussion", DataType::Utf8, false),
-        Field::new("dossier_ids", DataType::Utf8, false),
+        Field::new("internal_ids", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
         schema,
         vec![
-            col!(rows, |q| q.question_id.to_string()),
+            col!(rows, |q| q.question_id.clone()),
             col!(rows, |q| q.session_id.to_string()),
             col!(rows, |q| q.meeting_id.to_string()),
             col!(rows, |q| q.questioners.clone()),
@@ -273,7 +283,9 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
             col!(rows, |q| q.discussion.clone()),
-            col!(rows, |q| q.dossier_ids.clone()),
+            col!(rows, |q| q.internal_ids.clone()),
+            col!(rows, |q| q.source_url.clone()),
+            col!(rows, |q| q.cache_path.clone()),
         ],
     )
 }
@@ -402,12 +414,12 @@ async fn scrape_meeting(
         "sessions/{}/meetings/commission/{}-{}.html",
         session_id, session_id, meeting_id
     ));
+    let url = format!(
+        "https://www.dekamer.be/doc/CCRI/html/{}/ic{:03}x.html",
+        session_id, meeting_id
+    );
 
     if !filepath.exists() {
-        let url = format!(
-            "https://www.dekamer.be/doc/CCRI/html/{}/ic{:03}x.html",
-            session_id, meeting_id
-        );
         let response = client.get(&url).await?;
         *web_request_count += 1;
         let raw_bytes = response.bytes().await?;
@@ -418,6 +430,7 @@ async fn scrape_meeting(
         std::fs::write(&filepath, decoded_str.as_ref())?;
     }
 
+    let cache_path = relative_cache_path(&filepath, &cache_dir());
     let content = read_to_string(&filepath)?;
     let document = Html::parse_document(&content);
 
@@ -428,7 +441,13 @@ async fn scrape_meeting(
     let chair = extract_chair_from_document(&document)?;
     let commission = extract_commission_from_document(&document)?;
 
-    let questions = extract_questions(&document, session_id, meeting_id)?;
+    let questions = extract_questions(
+        &document,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    )?;
 
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
@@ -440,6 +459,8 @@ async fn scrape_meeting(
             end_time,
             commission,
             chair,
+            source_url: url,
+            cache_path,
         },
         questions,
     })
@@ -449,18 +470,20 @@ fn extract_questions(
     document: &Html,
     session_id: u32,
     meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
 ) -> Result<Vec<ScrapedQuestion>, Box<dyn Error>> {
     let mut questions = Vec::new();
     let mut previous_nl = String::new();
     let mut previous_fr = String::new();
     let mut previous_discussion = String::new();
-    let mut question_id: i32 = 0;
+    let mut question_seq: i32 = 0;
 
     // Commission reports always contain questions from the start; no section header needed.
     let french_indicators = ["questions jointes", "question de"];
     let dutch_indicators = ["samengevoegde vragen", "toegevoegde vragen", "vraag van"];
 
-    let flush = |id: i32,
+    let flush = |seq: i32,
                  nl: &str,
                  fr: &str,
                  discussion: &str|
@@ -471,7 +494,7 @@ fn extract_questions(
         let data_nl = extract_question_data(nl, discussion)?;
         let data_fr = extract_question_data(fr, discussion)?;
         Ok(Some(ScrapedQuestion {
-            question_id: id,
+            question_id: composite_id(session_id, meeting_id, seq),
             session_id,
             meeting_id,
             questioners: data_nl.questioners.join(","),
@@ -479,7 +502,9 @@ fn extract_questions(
             topics_nl: data_nl.topics.join(";"),
             topics_fr: data_fr.topics.join(";"),
             discussion: data_nl.discussion,
-            dossier_ids: data_nl.dossier_ids.join(","),
+            internal_ids: data_nl.internal_ids.join(","),
+            source_url: source_url.to_string(),
+            cache_path: cache_path.to_string(),
         }))
     };
 
@@ -538,13 +563,13 @@ fn extract_questions(
                 // then reset state so the hearing's discussion doesn't bleed in.
                 if !previous_nl.is_empty() && !previous_fr.is_empty() {
                     if let Some(q) = flush(
-                        question_id,
+                        question_seq,
                         &previous_nl,
                         &previous_fr,
                         &previous_discussion,
                     )? {
                         questions.push(q);
-                        question_id += 1;
+                        question_seq += 1;
                     }
                 }
                 previous_nl.clear();
@@ -569,13 +594,13 @@ fn extract_questions(
             if is_group_start || is_single {
                 if !previous_nl.is_empty() && !previous_fr.is_empty() {
                     if let Some(q) = flush(
-                        question_id,
+                        question_seq,
                         &previous_nl,
                         &previous_fr,
                         &previous_discussion,
                     )? {
                         questions.push(q);
-                        question_id += 1;
+                        question_seq += 1;
                     }
                     previous_discussion.clear();
                     previous_nl.clear();
@@ -616,7 +641,7 @@ fn extract_questions(
     // Flush the last question.
     if !previous_nl.is_empty() && !previous_fr.is_empty() {
         if let Some(q) = flush(
-            question_id,
+            question_seq,
             &previous_nl,
             &previous_fr,
             &previous_discussion,
@@ -635,7 +660,7 @@ fn extract_question_data(
     let mut questioners = Vec::new();
     let mut topics = Vec::new();
     let mut respondents = Vec::new();
-    let mut dossier_ids = Vec::new();
+    let mut internal_ids = Vec::new();
 
     for capture in question_regex().captures_iter(question_text) {
         let questioner = capture[1].trim().replace("- ", "").replace("de heer ", "");
@@ -644,13 +669,13 @@ fn extract_question_data(
             .map(|m| m.as_str().trim().to_string())
             .unwrap_or_else(|| "Onbekend".to_string());
         let topic = capture[3].trim().to_string();
-        let dossier_id = format!("Q{}", capture[4].trim());
+        let internal_id = format!("Q{}", capture[4].trim());
 
         questioners.push(questioner);
         if !respondents.contains(&respondent) {
             respondents.push(respondent);
         }
-        dossier_ids.push(dossier_id);
+        internal_ids.push(internal_id);
         topics.push(topic);
     }
 
@@ -659,7 +684,7 @@ fn extract_question_data(
         respondents,
         topics,
         discussion: get_discussion_json(discussion_text),
-        dossier_ids,
+        internal_ids,
     })
 }
 

@@ -2,6 +2,7 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crawl::paths::{cache_dir, data_dir};
+use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use scraper::{ElementRef, Html, Selector};
 use std::error::Error;
@@ -19,6 +20,8 @@ struct ScrapedLobby {
     contacts: String,
     interests: String,
     url: String,
+    source_url: String,
+    cache_path: String,
 }
 
 #[tokio::main]
@@ -44,7 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let content = read_to_string(&source_path)?;
     let document = Html::parse_document(&content);
 
-    let lobby = extract_lobby(document)?;
+    let lobby = extract_lobby(document, &source_path)?;
     write_parquet(&lobby_path, &lobby)?;
 
     println!("Scraped {} lobby entries.", lobby.len());
@@ -58,6 +61,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedLobby]) -> Result<(), Box<dyn Error
         Field::new("contacts", DataType::Utf8, false),
         Field::new("interests", DataType::Utf8, false),
         Field::new("url", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     macro_rules! col {
@@ -73,6 +78,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedLobby]) -> Result<(), Box<dyn Error
             col!(|r| r.contacts.clone()),
             col!(|r| r.interests.clone()),
             col!(|r| r.url.clone()),
+            col!(|r| r.source_url.clone()),
+            col!(|r| r.cache_path.clone()),
         ],
     )?;
 
@@ -83,7 +90,9 @@ fn write_parquet(path: &Path, rows: &[ScrapedLobby]) -> Result<(), Box<dyn Error
     Ok(())
 }
 
-fn extract_lobby(document: Html) -> Result<Vec<ScrapedLobby>, Box<dyn Error>> {
+fn extract_lobby(document: Html, source_path: &Path) -> Result<Vec<ScrapedLobby>, Box<dyn Error>> {
+    let cache_path = relative_cache_path(source_path, &cache_dir());
+    let source_url = String::new();
     let rows: Vec<_> = document.select(&ROW_SELECTOR).skip(1).collect();
     let total_rows = rows.len();
 
@@ -95,6 +104,8 @@ fn extract_lobby(document: Html) -> Result<Vec<ScrapedLobby>, Box<dyn Error>> {
             contacts: extract_contacts(&row, 1),
             interests: extract_cell(&row, 2),
             url: extract_cell(&row, 3),
+            source_url: source_url.clone(),
+            cache_path: cache_path.clone(),
         });
     }
 

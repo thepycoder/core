@@ -1,6 +1,7 @@
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::paths::{cache_dir, data_dir};
+use crawl::utils::relative_cache_path;
 use headless_chrome::Browser;
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
@@ -33,6 +34,8 @@ struct ScrapedRemuneration {
     institute: String,
     remuneration_min: String,
     remuneration_max: String,
+    source_url: String,
+    cache_path: String,
 }
 
 #[tokio::main]
@@ -116,6 +119,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
         Field::new("institute", DataType::Utf8, false),
         Field::new("remuneration_min", DataType::Utf8, false),
         Field::new("remuneration_max", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
 
     macro_rules! col {
@@ -134,6 +139,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
             col!(|r| r.institute.clone()),
             col!(|r| r.remuneration_min.clone()),
             col!(|r| r.remuneration_max.clone()),
+            col!(|r| r.source_url.clone()),
+            col!(|r| r.cache_path.clone()),
         ],
     )?;
 
@@ -154,13 +161,14 @@ async fn extract_remunerations(
         "remunerations/{}-{}-{}.html",
         last_name, first_name, year
     ));
+    let source_url = format!(
+        "https://public.regimand.be/?mandatary={} {}&year={}",
+        first_name, last_name, year
+    );
+    let cache_path_rel = relative_cache_path(&cache_path, &cache_dir());
 
     if !cache_path.exists() {
-        let url = format!(
-            "https://public.regimand.be/?mandatary={} {}&year={}",
-            first_name, last_name, year
-        );
-        tab.navigate_to(&url)?;
+        tab.navigate_to(&source_url)?;
         *web_requests += 1;
         tab.wait_for_element("kendo-autocomplete")?;
 
@@ -209,6 +217,8 @@ async fn extract_remunerations(
             institute,
             remuneration_min,
             remuneration_max,
+            source_url: source_url.clone(),
+            cache_path: cache_path_rel.clone(),
         });
     }
 

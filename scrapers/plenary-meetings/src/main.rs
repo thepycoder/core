@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
-use crawl::utils::clean_text;
+use crawl::utils::{clean_text, composite_id, relative_cache_path};
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -128,10 +128,12 @@ struct ScrapedMeeting {
     time_of_day: String,
     start_time: String,
     end_time: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct ScrapedVote {
-    vote_id: i32,
+    vote_id: String,
     session_id: u32,
     meeting_id: u32,
     date: String,
@@ -146,10 +148,12 @@ struct ScrapedVote {
     dossier_id: String,
     document_id: String,
     motion_id: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct ScrapedQuestion {
-    question_id: i32,
+    question_id: String,
     session_id: u32,
     meeting_id: u32,
     questioners: String,
@@ -158,24 +162,30 @@ struct ScrapedQuestion {
     topics_fr: String,
     discussion: String,
     internal_ids: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct ScrapedProposition {
-    proposition_id: i32,
+    proposition_id: String,
     session_id: u32,
     meeting_id: u32,
     title_nl: String,
     title_fr: String,
     dossier_id: String,
     document_id: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct ScrapedNotice {
-    notice_id: i32,
+    notice_id: String,
     session_id: u32,
     meeting_id: u32,
     title_nl: String,
     title_fr: String,
+    source_url: String,
+    cache_path: String,
 }
 
 struct MeetingOutput {
@@ -252,6 +262,8 @@ fn write_meetings(path: &Path, rows: &[ScrapedMeeting]) -> Result<(), Box<dyn Er
         Field::new("time_of_day", DataType::Utf8, false),
         Field::new("start_time", DataType::Utf8, false),
         Field::new("end_time", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
@@ -263,6 +275,8 @@ fn write_meetings(path: &Path, rows: &[ScrapedMeeting]) -> Result<(), Box<dyn Er
             col!(rows, |m| m.time_of_day.clone()),
             col!(rows, |m| m.start_time.clone()),
             col!(rows, |m| m.end_time.clone()),
+            col!(rows, |m| m.source_url.clone()),
+            col!(rows, |m| m.cache_path.clone()),
         ],
     )
 }
@@ -278,12 +292,14 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("topics_fr", DataType::Utf8, false),
         Field::new("discussion", DataType::Utf8, false),
         Field::new("internal_ids", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
         schema,
         vec![
-            col!(rows, |q| q.question_id.to_string()),
+            col!(rows, |q| q.question_id.clone()),
             col!(rows, |q| q.session_id.to_string()),
             col!(rows, |q| q.meeting_id.to_string()),
             col!(rows, |q| q.questioners.clone()),
@@ -292,6 +308,8 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.topics_fr.clone()),
             col!(rows, |q| q.discussion.clone()),
             col!(rows, |q| q.internal_ids.clone()),
+            col!(rows, |q| q.source_url.clone()),
+            col!(rows, |q| q.cache_path.clone()),
         ],
     )
 }
@@ -305,18 +323,22 @@ fn write_propositions(path: &Path, rows: &[ScrapedProposition]) -> Result<(), Bo
         Field::new("title_fr", DataType::Utf8, false),
         Field::new("dossier_id", DataType::Utf8, false),
         Field::new("document_id", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
         schema,
         vec![
-            col!(rows, |p| p.proposition_id.to_string()),
+            col!(rows, |p| p.proposition_id.clone()),
             col!(rows, |p| p.session_id.to_string()),
             col!(rows, |p| p.meeting_id.to_string()),
             col!(rows, |p| p.title_nl.clone()),
             col!(rows, |p| p.title_fr.clone()),
             col!(rows, |p| p.dossier_id.clone()),
             col!(rows, |p| p.document_id.clone()),
+            col!(rows, |p| p.source_url.clone()),
+            col!(rows, |p| p.cache_path.clone()),
         ],
     )
 }
@@ -338,12 +360,14 @@ fn write_votes(path: &Path, rows: &[ScrapedVote]) -> Result<(), Box<dyn Error>> 
         Field::new("dossier_id", DataType::Utf8, false),
         Field::new("document_id", DataType::Utf8, false),
         Field::new("motion_id", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
         schema,
         vec![
-            col!(rows, |v| v.vote_id.to_string()),
+            col!(rows, |v| v.vote_id.clone()),
             col!(rows, |v| v.session_id.to_string()),
             col!(rows, |v| v.meeting_id.to_string()),
             col!(rows, |v| v.date.clone()),
@@ -358,6 +382,8 @@ fn write_votes(path: &Path, rows: &[ScrapedVote]) -> Result<(), Box<dyn Error>> 
             col!(rows, |v| v.dossier_id.clone()),
             col!(rows, |v| v.document_id.clone()),
             col!(rows, |v| v.motion_id.clone()),
+            col!(rows, |v| v.source_url.clone()),
+            col!(rows, |v| v.cache_path.clone()),
         ],
     )
 }
@@ -369,16 +395,20 @@ fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Erro
         Field::new("meeting_id", DataType::Utf8, false),
         Field::new("title_nl", DataType::Utf8, false),
         Field::new("title_fr", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
     ]));
     write_parquet(
         path,
         schema,
         vec![
-            col!(rows, |n| n.notice_id.to_string()),
+            col!(rows, |n| n.notice_id.clone()),
             col!(rows, |n| n.session_id.to_string()),
             col!(rows, |n| n.meeting_id.to_string()),
             col!(rows, |n| n.title_nl.clone()),
             col!(rows, |n| n.title_fr.clone()),
+            col!(rows, |n| n.source_url.clone()),
+            col!(rows, |n| n.cache_path.clone()),
         ],
     )
 }
@@ -535,12 +565,12 @@ async fn scrape_meeting(
         "sessions/{}/meetings/plenary/{}-{}.html",
         session_id, session_id, meeting_id
     ));
+    let url = format!(
+        "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
+        session_id, meeting_id
+    );
 
     if !filepath.exists() {
-        let url = format!(
-            "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
-            session_id, meeting_id
-        );
         let response = client.get(&url).await?;
         *web_request_count += 1;
         let raw_bytes = response.bytes().await?;
@@ -551,6 +581,7 @@ async fn scrape_meeting(
         std::fs::write(&filepath, decoded_str.as_ref())?;
     }
 
+    let cache_path = relative_cache_path(&filepath, &cache_dir());
     let content = read_to_string(&filepath)?;
     let document = Html::parse_document(&content);
 
@@ -567,22 +598,41 @@ async fn scrape_meeting(
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect();
 
-    let questions = extract_questions(&document, session_id, meeting_id, &typo_map).await?;
+    let questions = extract_questions(
+        &document,
+        session_id,
+        meeting_id,
+        &typo_map,
+        &url,
+        &cache_path,
+    )
+    .await?;
     let propositions = extract_propositions(
         &document,
         session_id,
         meeting_id,
         &date,
         encountered_dossier_ids,
+        &url,
+        &cache_path,
     )
     .await?;
-    let notices = extract_notices(&document, session_id, meeting_id).await?;
+    let notices = extract_notices(
+        &document,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    )
+    .await?;
     let votes = extract_votes(
         &document,
         session_id,
         meeting_id,
         &date,
         encountered_dossier_ids,
+        &url,
+        &cache_path,
     )
     .await?;
 
@@ -594,6 +644,8 @@ async fn scrape_meeting(
             time_of_day,
             start_time,
             end_time,
+            source_url: url,
+            cache_path,
         },
         questions,
         propositions,
@@ -607,16 +659,18 @@ async fn extract_questions(
     session_id: u32,
     meeting_id: u32,
     typo_map: &HashMap<String, String>,
+    source_url: &str,
+    cache_path: &str,
 ) -> Result<Vec<ScrapedQuestion>, Box<dyn Error>> {
     let mut questions = Vec::new();
     let mut previous_nl = String::new();
     let mut previous_fr = String::new();
     let mut previous_discussion = String::new();
-    let mut question_id: i32 = 0;
+    let mut question_seq: i32 = 0;
     let mut found_questions_section = false;
     let mut processing = false;
 
-    let flush_question = |id: i32,
+    let flush_question = |seq: i32,
                           nl: &str,
                           fr: &str,
                           discussion: &str,
@@ -628,7 +682,7 @@ async fn extract_questions(
         let data_nl = extract_question_data(typo_map, nl, discussion)?;
         let data_fr = extract_question_data(typo_map, fr, discussion)?;
         Ok(Some(ScrapedQuestion {
-            question_id: id,
+            question_id: composite_id(session_id, meeting_id, seq),
             session_id,
             meeting_id,
             questioners: data_nl.questioners.join(","),
@@ -637,6 +691,8 @@ async fn extract_questions(
             topics_fr: data_fr.topics.join(";"),
             discussion: data_nl.discussion,
             internal_ids: data_nl.internal_ids.join(","),
+            source_url: source_url.to_string(),
+            cache_path: cache_path.to_string(),
         }))
     };
 
@@ -669,7 +725,7 @@ async fn extract_questions(
                 processing = true;
             } else if found_questions_section {
                 if let Some(q) = flush_question(
-                    question_id,
+                    question_seq,
                     &previous_nl,
                     &previous_fr,
                     &previous_discussion,
@@ -705,7 +761,7 @@ async fn extract_questions(
             // If it's none of the above, it's a non-question h2 — flush and stop.
             if !is_group_start && !is_subquestion && !is_single {
                 if let Some(q) = flush_question(
-                    question_id,
+                    question_seq,
                     &previous_nl,
                     &previous_fr,
                     &previous_discussion,
@@ -719,14 +775,14 @@ async fn extract_questions(
             if is_group_start || is_single {
                 if !previous_nl.is_empty() && !previous_fr.is_empty() {
                     if let Some(q) = flush_question(
-                        question_id,
+                        question_seq,
                         &previous_nl,
                         &previous_fr,
                         &previous_discussion,
                         typo_map,
                     )? {
                         questions.push(q);
-                        question_id += 1;
+                        question_seq += 1;
                     }
                     previous_discussion.clear();
                     previous_nl.clear();
@@ -760,14 +816,14 @@ async fn extract_questions(
 
             if text.contains("Het incident is gesloten") || text.contains("L'incident est clos") {
                 if let Some(q) = flush_question(
-                    question_id,
+                    question_seq,
                     &previous_nl,
                     &previous_fr,
                     &previous_discussion,
                     typo_map,
                 )? {
                     questions.push(q);
-                    question_id += 1;
+                    question_seq += 1;
                 }
                 previous_discussion.clear();
                 previous_nl.clear();
@@ -795,9 +851,11 @@ async fn extract_propositions(
     meeting_id: u32,
     date: &str,
     encountered_dossier_ids: &mut HashMap<String, String>,
+    source_url: &str,
+    cache_path: &str,
 ) -> Result<Vec<ScrapedProposition>, Box<dyn Error>> {
     let mut propositions = Vec::new();
-    let mut proposition_id: i32 = 0;
+    let mut proposition_seq: i32 = 0;
     let mut found = false;
     let mut processing = false;
     let proposition_keywords_nl = ["voorstel", "wetsvoorstel"];
@@ -910,15 +968,17 @@ async fn extract_propositions(
             let dossier_id_opt = data_nl.dossier_id.clone();
 
             propositions.push(ScrapedProposition {
-                proposition_id,
+                proposition_id: composite_id(session_id, meeting_id, proposition_seq),
                 session_id,
                 meeting_id,
                 title_nl: data_nl.topic,
                 title_fr: data_fr.topic,
                 dossier_id: dossier_id_opt.clone().unwrap_or_default(),
                 document_id: data_nl.document_id.unwrap_or_default(),
+                source_url: source_url.to_string(),
+                cache_path: cache_path.to_string(),
             });
-            proposition_id += 1;
+            proposition_seq += 1;
 
             if let Some(ref id) = dossier_id_opt {
                 record_dossier(encountered_dossier_ids, id, date);
@@ -938,9 +998,11 @@ async fn extract_notices(
     document: &Html,
     session_id: u32,
     meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
 ) -> Result<Vec<ScrapedNotice>, Box<dyn Error>> {
     let mut notices = Vec::new();
-    let mut notice_id: i32 = 0;
+    let mut notice_seq: i32 = 0;
     let mut found = false;
     let mut processing = false;
     let notice_keywords_nl = ["mededeling", "mededelingen"];
@@ -1049,13 +1111,15 @@ async fn extract_notices(
 
         for (nl, fr) in nl_titles.iter().zip(fr_titles.iter()) {
             notices.push(ScrapedNotice {
-                notice_id,
+                notice_id: composite_id(session_id, meeting_id, notice_seq),
                 session_id,
                 meeting_id,
                 title_nl: nl.clone(),
                 title_fr: fr.clone(),
+                source_url: source_url.to_string(),
+                cache_path: cache_path.to_string(),
             });
-            notice_id += 1;
+            notice_seq += 1;
         }
     }
 
@@ -1077,6 +1141,8 @@ async fn extract_votes(
     meeting_id: u32,
     date: &str,
     encountered_dossier_ids: &mut HashMap<String, String>,
+    source_url: &str,
+    cache_path: &str,
 ) -> Result<Vec<ScrapedVote>, Box<dyn Error>> {
     let mut votes = Vec::new();
     let mut vote_text_nl = String::new();
@@ -1084,7 +1150,7 @@ async fn extract_votes(
     let mut previous_vote_title_nl = String::new();
     let mut previous_vote_title_fr = String::new();
     let mut found_votes_section = false;
-    let mut vote_id: i32 = 0;
+    let mut vote_seq: i32 = 0;
     let mut collecting_grouped_vote = false;
     let mut known_vote_results: HashMap<String, CachedVote> = HashMap::new();
 
@@ -1142,7 +1208,7 @@ async fn extract_votes(
 
                         // Push vote.
                         votes.push(ScrapedVote {
-                            vote_id,
+                            vote_id: composite_id(session_id, meeting_id, vote_seq),
                             session_id,
                             meeting_id,
                             date: date.to_string(),
@@ -1165,8 +1231,10 @@ async fn extract_votes(
                             dossier_id: data_nl.dossier_id.unwrap_or_default(),
                             document_id: data_nl.document_id.unwrap_or_default(),
                             motion_id: data_nl.motion_id.unwrap_or_default(),
+                            source_url: source_url.to_string(),
+                            cache_path: cache_path.to_string(),
                         });
-                        vote_id += 1;
+                        vote_seq += 1;
                     }
                 }
             }
@@ -1372,7 +1440,7 @@ async fn extract_votes(
 
             // Push vote.
             votes.push(ScrapedVote {
-                vote_id,
+                vote_id: composite_id(session_id, meeting_id, vote_seq),
                 session_id,
                 meeting_id,
                 date: date.to_string(),
@@ -1395,8 +1463,10 @@ async fn extract_votes(
                 dossier_id: data_nl.dossier_id.unwrap_or_default(),
                 document_id: data_nl.document_id.unwrap_or_default(),
                 motion_id: data_nl.motion_id.unwrap_or_default(),
+                source_url: source_url.to_string(),
+                cache_path: cache_path.to_string(),
             });
-            vote_id += 1;
+            vote_seq += 1;
         }
     }
     Ok(votes)
