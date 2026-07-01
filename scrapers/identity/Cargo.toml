@@ -1,0 +1,19 @@
+[package]
+name = "identity"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+crawl = { path = "../crawl" }
+parquet = { version = "54.3.0", features = ["arrow"] }
+arrow = "54.3.0"
+regex = "1"
+dotenvy = "0.15.7"
+
+[lib]
+name = "identity"
+path = "src/lib.rs"
+
+[[bin]]
+name = "identity"
+path = "src/main.rs"

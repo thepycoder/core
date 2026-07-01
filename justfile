@@ -22,6 +22,9 @@ scrape-remunerations:
 scrape-commissions:
     cargo run --bin commissions
 
+build-identity:
+    cargo run --bin identity
+
 summarize-text:
     cargo run --bin text-summarizer
 

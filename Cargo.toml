@@ -10,6 +10,7 @@ members = [
     "scrapers/plenary-meetings",
     "scrapers/commission-meetings",
     "scrapers/dossiers",
+    "scrapers/identity",
     "summarizers/dossier-summarizer",
     "summarizers/text-summarizer"
 ]
