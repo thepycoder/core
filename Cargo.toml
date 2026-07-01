@@ -11,6 +11,8 @@ members = [
     "scrapers/commission-meetings",
     "scrapers/dossiers",
     "scrapers/identity",
+    "scrapers/normalize",
+    "scrapers/graph",
     "summarizers/dossier-summarizer",
     "summarizers/text-summarizer"
 ]

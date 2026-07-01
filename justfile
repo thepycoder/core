@@ -25,6 +25,12 @@ scrape-commissions:
 build-identity:
     cargo run --bin identity
 
+normalize-edges:
+    cargo run --bin normalize
+
+build-graph:
+    cargo run --bin graph
+
 summarize-text:
     cargo run --bin text-summarizer
 

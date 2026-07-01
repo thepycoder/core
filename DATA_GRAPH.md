@@ -2,6 +2,15 @@
 
 Canonical model for Belgian Chamber (dekamer.be) data. Staging may stay Parquet/JSONL; this is the target graph.
 
+## Data stack
+
+Decisions for anyone (human or LLM) extending this repo:
+
+- **Canonical storage = Parquet** (open, portable, engine-neutral). It is the source of truth and the data product; optimize it for longevity and universal queryability.
+- **Query/serving engines are swappable and derived** — never the canonical form. Do not promote an engine-specific database file (`.duckdb`, `.kuzu`, etc.) to source of truth; emit such files only as rebuildable convenience artifacts.
+- **DuckDB is the current query engine** (used by the `web` consumer at build time), but treated as one swappable consumer, not a commitment.
+- **Future LLM/GraphRAG use cases** (e.g. "standpoint of person X on topic Y") need hybrid retrieval: embeddings + vector search + graph traversal + structured filters. Add these as derived indexes (DuckDB `vss`/`fts`, or Lance/LanceDB for embedding-heavy tables) rebuilt from Parquet, keyed to graph node ids. The hard part is modeling (topic links + embeddings on utterances/questions, stance signals, minister resolution), not the container format.
+
 ## Nodes
 
 
@@ -85,8 +94,8 @@ Canonical model for Belgian Chamber (dekamer.be) data. Staging may stay Parquet/
 | Status                                     | Nodes / edges                                                                                                                                                                                     |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Scraped, flat**                          | Session, Person, Commission, Meeting, Question (oral), Vote, Dossier, Document (meta), Remuneration                                                                                               |
-| **Canonicalized and working**              | Identity seed tables: Person, Party, Commission, party memberships, commission memberships, person aliases, and unresolved-person report                                                           |
-| **Parsed but not normalized**              | Utterance (inside `discussion` JSON), VoteCast (CSV names), Document authors (CSV), questioners/respondents, and non-commission speaker strings                                                   |
+| **Canonicalized and working**              | Identity seed tables: Person, Party, Commission, party memberships, commission memberships, person aliases, and unresolved-person report; normalized edges (`vote_casts`, `authored`, `asked`, `holds_role`, `utterances`) and graph Parquet (`nodes`, `edges`, `source_artifacts`) |
+| **Parsed but not normalized**              | General plenary debate utterances (outside Q&A `discussion` JSON), respondent/minister titles (`ANSWERED` not wired), commission role edges beyond chair                                              |
 | **Parser exists but source is incomplete** | LobbyOrg                                                                                                                                                                                          |
 | **Not scraped / not normalized**           | Written Question/Answer, general plenary Utterances, Motion, Interpellation/Hearing, InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar, Beknopt verslag, full FLWB dossier discovery |
 
@@ -96,8 +105,10 @@ Verified against the repo on 2026-07-01:
 
 - **Done and working:** Stage 0 staging contract is documented in `STAGING.md`; the workspace has an `identity` crate and `just build-identity`; identity tests pass; `cargo run --bin identity` writes `data/identity/persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`.
 - **Current identity quality:** 175 persons, 13 parties, 175 party memberships, 1127 resolved commission memberships, 21 unresolved commission-member occurrences. The only unresolved raw name currently reported is the placeholder `N .`, so real commission-member names are resolving.
-- **Stage 0 QA is working as a soft report:** `data/qa/summary.md` reports 97 passes and 2 issues: generated commission-question data still shows the old `dossier_ids` mislabel signal, and one plenary vote total mismatch remains in meeting 129. The current commission/plenary source writes `internal_ids`, so regenerate staging + QA to confirm the old schema warning is gone.
-- **Not done yet:** downstream normalization has not routed vote casts, document authors, questioners/respondents, or utterance speakers through the resolver; there is no staging-to-graph node/edge builder yet; minister/government resolution and graph-level QA are still future work.
+- **Stage 0 QA is working as a soft report:** `data/qa/summary.md` reports 97 passes and 2 issues: generated commission-question data still shows the old `dossier_ids` mislabel signal, and one plenary vote total mismatch remains in meeting 129. Regenerated staging passes the normalize staging check (`internal_ids` present, no `dossier_ids`); re-run Stage 0 QA to clear the stale schema warning.
+- **Step 2 is working:** `just normalize-edges` routes vote roll-calls, document authors, questioners, commission chairs, and Q&A discussion speakers through the identity resolver into `data/normalized/*.parquet` (189 400 vote casts, 1 851 authored, 2 693 asked, 67 holds_role, 7 975 utterances; 870 unresolved names, mostly speakers and respondent titles). One vote reconciliation mismatch remains (`56_129_4`, same as Stage 0 QA). Minister/government resolution and `ANSWERED` edges are not started yet — respondent titles only land in `unresolved_persons`.
+- **Step 3 is working:** `just build-graph` writes `data/graph/nodes.parquet` (10 652 nodes), `edges.parquet` (215 991 edges: MEMBER_OF, CAST, AUTHORED, ASKED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (660 artifacts). Referential integrity is clean on `from` endpoints; 141 `VOTED_ON` edges point at dossier ids not present as nodes (partial vote-title refs like `1-5`, not full `56/N` dossiers). Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
+- **Not done yet:** minister/government resolution, graph-level QA (Step 5), and the missing parliamentary sources in Step 4.
 
 
 ## Scrutiny
@@ -146,7 +157,7 @@ Three questions to keep answering at every step: did anything fail to link, does
 
 ## Next steps to reach the target graph
 
-Step 0 is done at the contract/source level, and Step 1 is working for the first identity slice. Regenerate staging + QA once before relying on the generated data, then continue at Step 2. Data quality (Step 5) still needs graph-level checks once normalized edges exist.
+Step 0 is done at the contract/source level, Step 1 is working for the first identity slice, and Steps 2–3 are working end-to-end (`just normalize-edges` → `just build-graph`). Continue at Step 4 (missing sources) and Step 5 (graph-level QA). Re-run Stage 0 QA once to clear the stale `dossier_ids` warning.
 
 **0. Freeze the staging contract. Done in contract/source; data regeneration check pending**
 
@@ -159,17 +170,17 @@ Step 0 is done at the contract/source level, and Step 1 is working for the first
 - Expose a single `resolve_person(raw_name, context) -> person_id | Unresolved` used by every downstream transform. No `SPOKE` / `CAST` / `AUTHORED` edge is committed for an `Unresolved`.
 - Current gap: the resolver exists and identity tables build, but most downstream scrapers/transforms do not consume it yet. Treat `N .` commission placeholders as vacancies or source placeholders rather than alias candidates.
 
-**2. Normalize the high-value edges you already have (no new scraping yet). Next step / start here**
+**2. Normalize the high-value edges you already have (no new scraping yet). Done and working**
 
-- Route vote roll-call CSVs → `VoteCast` first, using the identity resolver and writing unresolved vote names to the same unresolved-person bucket. This is the best next slice because votes already have person-name lists, stable meeting-scoped ids, and a QA issue around vote-total reconciliation.
-- Then route document authors, chairs, questioners/respondents, and remaining commission role edges through the same resolver.
-- Convert the `discussion` JSON blobs into `utterances` (speaker ref, text, detected language, agenda context); send unresolved speakers to the same bucket.
-- Start minister/government resolution: build a portfolio-title→person-over-time table so `ANSWERED` respondents stop being free strings.
+- `just normalize-edges` routes vote roll-calls, document authors, commission chairs, questioners, and Q&A discussion speakers through the identity resolver into `data/normalized/`.
+- Unresolved names aggregate to `data/normalized/unresolved_persons.parquet`; vote reconciliation is in `vote_reconciliation.parquet` (1 mismatch: `56_129_4`).
+- **Remaining in this step:** minister/government resolution (portfolio-title→person-over-time table and `ANSWERED` edges); utterance ids can collide when the same question appears in both plenary and commission extracts (~1 273 duplicate `utterance_id`s today).
 
-**3. Stand up the graph builder early (not last).**
+**3. Stand up the graph builder early (not last). Done and working**
 
-- Add the deterministic staging→node/edge Parquet builder now, with only the edges from Step 2. This is the architecture the later QA block runs its referential and domain checks over.
-- Every node/edge carries `source_artifact_id`, `source_url`, `scraped_at`, parser version, and `confidence`.
+- `just build-graph` emits deterministic `data/graph/nodes.parquet`, `edges.parquet`, and `source_artifacts.parquet` from identity, staging, and normalized outputs.
+- Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; artifacts carry `parser_version`.
+- **Remaining in this step:** populate `scraped_at` on artifacts; decide whether to add explicit `VoteCast` nodes (today CAST is Person→Vote); fix or flag orphan `VOTED_ON` targets (141 edges to dossier refs not in the graph).
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
 

@@ -1045,6 +1045,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph"
+version = "1.0.0"
+dependencies = [
+ "arrow",
+ "crawl",
+ "dotenvy",
+ "identity",
+ "parquet",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1812,6 +1823,19 @@ name = "nodrop"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
+
+[[package]]
+name = "normalize"
+version = "1.0.0"
+dependencies = [
+ "arrow",
+ "crawl",
+ "dotenvy",
+ "identity",
+ "parquet",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "num"
