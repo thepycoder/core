@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Graph Debug Explorer</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Graph Debug Explorer</h1>
+    <div id="health-status" class="muted">Loading…</div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <section>
+        <h2>Search</h2>
+        <input id="search-input" type="search" placeholder="Name, title, utterance text…" />
+        <label class="field-label" for="search-type">Node type</label>
+        <select id="search-type">
+          <option value="">All types</option>
+          <option value="Person">Person</option>
+          <option value="Party">Party</option>
+          <option value="Vote">Vote</option>
+          <option value="Question">Question</option>
+          <option value="Dossier">Dossier</option>
+          <option value="Meeting">Meeting</option>
+          <option value="Document">Document</option>
+          <option value="Utterance">Utterance</option>
+          <option value="Commission">Commission</option>
+          <option value="Topic">Topic</option>
+        </select>
+        <button id="search-btn">Search</button>
+        <ul id="search-results"></ul>
+      </section>
+
+      <section>
+        <h2>Issues</h2>
+        <ul id="issues-list"></ul>
+      </section>
+    </aside>
+
+    <section id="inspector-panel">
+      <div id="breadcrumb-bar"></div>
+      <div id="provenance-bar" class="hidden"></div>
+      <div id="inspector-content" class="muted">
+        Search for an entity or click an issue sample to inspect links and open source documents.
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

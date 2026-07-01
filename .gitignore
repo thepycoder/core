@@ -12,3 +12,5 @@
 /summarizers/**/adopted_text_original.pdf
 /summarizers/**/report_extraction.html
 /summarizers/**/adopted_text_extraction.html
+
+**/__pycache__/
