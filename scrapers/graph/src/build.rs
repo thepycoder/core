@@ -1,6 +1,7 @@
 use crate::provenance::register_artifact;
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use crawl::utils::ensure_question_id;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use std::collections::HashMap;
 use std::error::Error;
@@ -25,6 +26,7 @@ pub struct EdgeRow {
     pub from_id: String,
     pub to_type: String,
     pub to_id: String,
+    pub role: String,
     pub source_artifact_id: String,
     pub source_url: String,
     pub cache_path: String,
@@ -73,6 +75,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
                         from_id: &str,
                         to_type: &str,
                         to_id: &str,
+                        role: &str,
                         source_url: &str,
                         cache_path: &str,
                         confidence: &str| {
@@ -86,6 +89,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
             from_id: from_id.to_string(),
             to_type: to_type.to_string(),
             to_id: to_id.to_string(),
+            role: role.to_string(),
             source_artifact_id: artifact,
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
@@ -113,6 +117,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
             .cmp(&b.edge_type)
             .then(a.from_id.cmp(&b.from_id))
             .then(a.to_id.cmp(&b.to_id))
+            .then(a.role.cmp(&b.role))
     });
 
     let parser_version = env!("CARGO_PKG_VERSION").to_string();
@@ -206,23 +211,24 @@ fn load_staging_nodes(
     ] {
         for batch in read_all_rows(&session.join(rel))? {
             let question_ids = read_string_column(&batch, "question_id")?;
+            let session_ids = read_string_column(&batch, "session_id")?;
             let topics = read_string_column(&batch, "topics_nl")?;
             let source_urls = read_string_column(&batch, "source_url")?;
             let cache_paths = read_string_column(&batch, "cache_path")?;
             for i in 0..batch.num_rows() {
+                let question_id = ensure_question_id(&session_ids[i], kind, &question_ids[i]);
                 let label = if topics[i].is_empty() {
-                    question_ids[i].clone()
+                    question_id.clone()
                 } else {
                     topics[i].chars().take(120).collect()
                 };
                 add_node(
                     "Question",
-                    &question_ids[i],
+                    &question_id,
                     &label,
                     &source_urls[i],
                     &cache_paths[i],
                 );
-                let _ = kind;
             }
         }
     }
@@ -298,12 +304,13 @@ fn load_normalized_nodes(
 
 fn load_membership_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join("identity/memberships.parquet"))? {
         let person_ids = read_string_column(&batch, "person_id")?;
         let org_types = read_string_column(&batch, "org_type")?;
         let org_ids = read_string_column(&batch, "org_id")?;
+        let roles = read_string_column(&batch, "role")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let confidences = read_string_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
@@ -318,6 +325,7 @@ fn load_membership_edges(
                 &person_ids[i],
                 to_type,
                 &org_ids[i],
+                &roles[i],
                 &source_urls[i],
                 "",
                 &confidences[i],
@@ -329,7 +337,7 @@ fn load_membership_edges(
 
 fn load_vote_cast_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/vote_casts.parquet");
     if !path.exists() {
@@ -348,6 +356,7 @@ fn load_vote_cast_edges(
                 &person_ids[i],
                 "Vote",
                 &vote_ids[i],
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 &confidences[i],
@@ -359,7 +368,7 @@ fn load_vote_cast_edges(
 
 fn load_voted_on_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join(format!("sessions/{SESSION_ID}/plenary/votes.parquet")))? {
         let vote_ids = read_string_column(&batch, "vote_id")?;
@@ -377,6 +386,7 @@ fn load_voted_on_edges(
                     &vote_ids[i],
                     "Dossier",
                     &dossier_node,
+                    "",
                     &source_urls[i],
                     &cache_paths[i],
                     "exact",
@@ -389,6 +399,7 @@ fn load_voted_on_edges(
                     &vote_ids[i],
                     "Document",
                     &document_ids[i],
+                    "",
                     &source_urls[i],
                     &cache_paths[i],
                     "exact",
@@ -401,7 +412,7 @@ fn load_voted_on_edges(
 
 fn load_submitted_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join(format!("sessions/{SESSION_ID}/subdocuments.parquet")))? {
         let dossier_ids = read_string_column(&batch, "dossier_id")?;
@@ -416,6 +427,7 @@ fn load_submitted_edges(
                 &doc_ids[i],
                 "Dossier",
                 &dossier_node,
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 "exact",
@@ -428,7 +440,7 @@ fn load_submitted_edges(
 fn load_tagged_with_edges(
     data_dir: &Path,
     add_node: &mut impl FnMut(&str, &str, &str, &str, &str),
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join(format!("sessions/{SESSION_ID}/dossiers.parquet")))? {
         let session_ids = read_string_column(&batch, "session_id")?;
@@ -439,20 +451,25 @@ fn load_tagged_with_edges(
         let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
             let dossier_node = format!("{}/{}", session_ids[i], dossier_ids[i]);
-            if !main[i].is_empty() {
-                add_node("Topic", &main[i], &main[i], &source_urls[i], &cache_paths[i]);
+            let main_topic = main[i].trim();
+            if !main_topic.is_empty() {
+                add_node("Topic", main_topic, main_topic, &source_urls[i], &cache_paths[i]);
                 add_edge(
                     "TAGGED_WITH",
                     "Dossier",
                     &dossier_node,
                     "Topic",
-                    &main[i],
+                    main_topic,
+                    "",
                     &source_urls[i],
                     &cache_paths[i],
                     "exact",
                 );
             }
             for topic in descriptors[i].split(',').map(str::trim).filter(|t| !t.is_empty()) {
+                if !main_topic.is_empty() && topic.eq_ignore_ascii_case(main_topic) {
+                    continue;
+                }
                 add_node("Topic", topic, topic, &source_urls[i], &cache_paths[i]);
                 add_edge(
                     "TAGGED_WITH",
@@ -460,6 +477,7 @@ fn load_tagged_with_edges(
                     &dossier_node,
                     "Topic",
                     topic,
+                    "",
                     &source_urls[i],
                     &cache_paths[i],
                     "exact",
@@ -472,7 +490,7 @@ fn load_tagged_with_edges(
 
 fn load_authored_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/authored.parquet");
     if !path.exists() {
@@ -497,6 +515,7 @@ fn load_authored_edges(
                 &person_ids[i],
                 to_type,
                 &target_ids[i],
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 &confidences[i],
@@ -508,7 +527,7 @@ fn load_authored_edges(
 
 fn load_asked_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/asked.parquet");
     if !path.exists() {
@@ -527,6 +546,7 @@ fn load_asked_edges(
                 &person_ids[i],
                 "Question",
                 &question_ids[i],
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 &confidences[i],
@@ -538,7 +558,7 @@ fn load_asked_edges(
 
 fn load_holds_role_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/holds_role.parquet");
     if !path.exists() {
@@ -557,6 +577,7 @@ fn load_holds_role_edges(
                 &person_ids[i],
                 "Meeting",
                 &target_ids[i],
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 &confidences[i],
@@ -568,7 +589,7 @@ fn load_holds_role_edges(
 
 fn load_spoke_and_part_of_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/utterances.parquet");
     if !path.exists() {
@@ -588,6 +609,7 @@ fn load_spoke_and_part_of_edges(
                 &utterance_ids[i],
                 "Question",
                 &question_ids[i],
+                "",
                 &source_urls[i],
                 &cache_paths[i],
                 "exact",
@@ -599,6 +621,7 @@ fn load_spoke_and_part_of_edges(
                     &speaker_ids[i],
                     "Utterance",
                     &utterance_ids[i],
+                    "",
                     &source_urls[i],
                     &cache_paths[i],
                     &confidences[i],
@@ -642,6 +665,7 @@ pub fn write_edges(path: &Path, rows: &[EdgeRow]) -> Result<(), Box<dyn Error>> 
         utf8_field("from_id", false),
         utf8_field("to_type", false),
         utf8_field("to_id", false),
+        utf8_field("role", false),
         utf8_field("source_artifact_id", false),
         utf8_field("source_url", false),
         utf8_field("cache_path", false),
@@ -661,6 +685,7 @@ pub fn write_edges(path: &Path, rows: &[EdgeRow]) -> Result<(), Box<dyn Error>> 
             col!(|r| r.from_id.clone()),
             col!(|r| r.to_type.clone()),
             col!(|r| r.to_id.clone()),
+            col!(|r| r.role.clone()),
             col!(|r| r.source_artifact_id.clone()),
             col!(|r| r.source_url.clone()),
             col!(|r| r.cache_path.clone()),

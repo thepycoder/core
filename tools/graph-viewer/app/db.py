@@ -37,6 +37,7 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("from_id", "VARCHAR"),
             ("to_type", "VARCHAR"),
             ("to_id", "VARCHAR"),
+            ("role", "VARCHAR"),
             ("source_artifact_id", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),

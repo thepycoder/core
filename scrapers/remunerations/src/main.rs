@@ -100,6 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     pb.finish_with_message("done");
+    dedupe_remunerations(&mut all_remunerations);
     write_parquet(&remunerations_path, &all_remunerations)?;
 
     println!(
@@ -223,6 +224,21 @@ async fn extract_remunerations(
     }
 
     Ok(rows)
+}
+
+fn dedupe_remunerations(rows: &mut Vec<ScrapedRemuneration>) {
+    let mut seen = HashSet::new();
+    rows.retain(|row| {
+        seen.insert((
+            row.first_name.clone(),
+            row.last_name.clone(),
+            row.year,
+            row.mandate.clone(),
+            row.institute.clone(),
+            row.remuneration_min.clone(),
+            row.remuneration_max.clone(),
+        ))
+    });
 }
 
 fn clean_remuneration(raw: &str) -> Option<(String, String)> {

@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let document = Html::parse_document(&content);
 
     let lobby = extract_lobby(document, &source_path)?;
+    let lobby = dedupe_lobby(lobby);
     write_parquet(&lobby_path, &lobby)?;
 
     println!("Scraped {} lobby entries.", lobby.len());
@@ -110,6 +111,19 @@ fn extract_lobby(document: Html, source_path: &Path) -> Result<Vec<ScrapedLobby>
     }
 
     Ok(lobby)
+}
+
+fn dedupe_lobby(mut rows: Vec<ScrapedLobby>) -> Vec<ScrapedLobby> {
+    rows.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.url.cmp(&b.url))
+            .then(a.contacts.cmp(&b.contacts))
+    });
+    rows.dedup_by(|a, b| {
+        a.name == b.name && a.contacts == b.contacts && a.interests == b.interests && a.url == b.url
+    });
+    rows
 }
 
 fn extract_contacts(row: &ElementRef, index: usize) -> String {

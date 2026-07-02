@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
-use crawl::utils::{clean_text, composite_id, relative_cache_path};
+use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -682,7 +682,7 @@ async fn extract_questions(
         let data_nl = extract_question_data(typo_map, nl, discussion)?;
         let data_fr = extract_question_data(typo_map, fr, discussion)?;
         Ok(Some(ScrapedQuestion {
-            question_id: composite_id(session_id, meeting_id, seq),
+            question_id: composite_scoped_id(session_id, "plenary", meeting_id, seq),
             session_id,
             meeting_id,
             questioners: data_nl.questioners.join(","),

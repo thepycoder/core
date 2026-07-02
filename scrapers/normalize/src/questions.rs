@@ -3,6 +3,7 @@ use crate::common::{
 };
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use crawl::utils::ensure_question_id;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::resolver::{Bucket, Resolution, Resolver, UnresolvedReason};
 use std::collections::HashSet;
@@ -55,16 +56,21 @@ pub fn normalize_asked(
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
+                let question_id = ensure_question_id(
+                    &session_ids[i],
+                    meeting_kind,
+                    &question_ids[i],
+                );
                 for name in split_csv(&questioners[i]) {
                     let detail = resolver.resolve_detail(&name, Bucket::Questioner);
                     match detail.resolution {
                         Resolution::Resolved(person_id) => {
-                            let key = (person_id.clone(), question_ids[i].clone());
+                            let key = (person_id.clone(), question_id.clone());
                             if seen.insert(key) {
                                 asked.push(AskedRow {
-                                    asked_id: format!("{}_{person_id}", question_ids[i]),
+                                    asked_id: format!("{question_id}_{person_id}"),
                                     person_id,
-                                    question_id: question_ids[i].clone(),
+                                    question_id: question_id.clone(),
                                     session_id: session_ids[i].clone(),
                                     meeting_id: meeting_ids[i].clone(),
                                     meeting_kind: meeting_kind.to_string(),
@@ -84,8 +90,8 @@ pub fn normalize_asked(
                                 reason: reason_label(&reason).to_string(),
                                 source_bucket: "questioners".to_string(),
                                 role: "questioner".to_string(),
-                                context_id: question_ids[i].clone(),
-                                context_label: format!("question {}", question_ids[i]),
+                                context_id: question_id.clone(),
+                                context_label: format!("question {question_id}"),
                                 raw_field: name,
                                 source_url: source_urls[i].clone(),
                                 cache_path: cache_paths[i].clone(),
@@ -111,8 +117,8 @@ pub fn normalize_asked(
                             .to_string(),
                             source_bucket: "respondents".to_string(),
                             role: "respondent_title".to_string(),
-                            context_id: question_ids[i].clone(),
-                            context_label: format!("question {}", question_ids[i]),
+                            context_id: question_id.clone(),
+                            context_label: format!("question {question_id}"),
                             raw_field: title,
                             source_url: source_urls[i].clone(),
                             cache_path: cache_paths[i].clone(),

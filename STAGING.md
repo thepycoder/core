@@ -6,7 +6,7 @@ Cache paths in `cache_path` are relative to `SCRAPER_CACHE_DIR` (default `scrape
 
 ## ID conventions
 
-Meeting-scoped entities use composite ids: `{session_id}_{meeting_id}_{seq}` where `seq` is a 0-based counter within that meeting (questions, votes, propositions, notices). These ids are stable across re-scrapes as long as parse order within a meeting is unchanged.
+Meeting-scoped entities use composite ids: `{session_id}_{meeting_id}_{seq}` where `seq` is a 0-based counter within that meeting (votes, propositions, notices). Questions include meeting kind: `{session_id}_{meeting_kind}_{meeting_id}_{seq}` so plenary and commission meeting numbers do not collide.
 
 Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on question rows, not in `question_id`.
 

@@ -3,6 +3,7 @@ use crate::common::{
 };
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use crawl::utils::ensure_question_id;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::resolver::{Bucket, Resolution, Resolver};
 use serde::Deserialize;
@@ -72,11 +73,16 @@ pub fn normalize_utterances(
                 if discussions[i].trim().is_empty() {
                     continue;
                 }
+                let question_id = ensure_question_id(
+                    &session_ids[i],
+                    meeting_kind,
+                    &question_ids[i],
+                );
                 let entries: Vec<DiscussionEntry> =
                     serde_json::from_str(&discussions[i]).unwrap_or_default();
 
                 for (seq, entry) in entries.iter().enumerate() {
-                    let utterance_id = format!("{}_{seq}", question_ids[i]);
+                    let utterance_id = format!("{question_id}_{seq}");
                     let speaker = entry.speaker.trim().to_string();
                     let (speaker_person_id, confidence) = if skip_speaker(&speaker) {
                         (String::new(), String::new())
@@ -93,7 +99,7 @@ pub fn normalize_utterances(
                                     reason: reason_label(&reason).to_string(),
                                     source_bucket: "speakers".to_string(),
                                     role: "speaker".to_string(),
-                                    context_id: question_ids[i].clone(),
+                                    context_id: question_id.clone(),
                                     context_label: format!("utterance {utterance_id}"),
                                     raw_field: speaker.clone(),
                                     source_url: source_urls[i].clone(),
@@ -106,7 +112,7 @@ pub fn normalize_utterances(
 
                     rows.push(UtteranceRow {
                         utterance_id,
-                        question_id: question_ids[i].clone(),
+                        question_id: question_id.clone(),
                         session_id: session_ids[i].clone(),
                         meeting_id: meeting_ids[i].clone(),
                         meeting_kind: meeting_kind.to_string(),

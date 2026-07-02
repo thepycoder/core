@@ -7,6 +7,63 @@ pub fn composite_id(session_id: u32, meeting_id: u32, seq: i32) -> String {
     format!("{}_{}_{}", session_id, meeting_id, seq)
 }
 
+/// Meeting-kind-scoped id: `{session_id}_{scope}_{meeting_id}_{seq}`.
+/// Used for questions so plenary and commission meeting numbers do not collide.
+pub fn composite_scoped_id(session_id: u32, scope: &str, meeting_id: u32, seq: i32) -> String {
+    format!("{}_{}_{}_{}", session_id, scope, meeting_id, seq)
+}
+
+/// Upgrade legacy question ids (`{session}_{meeting}_{seq}`) using meeting kind from context.
+pub fn ensure_question_id(
+    session_id: &str,
+    meeting_kind: &str,
+    question_id: &str,
+) -> String {
+    let scoped_prefix = format!("{session_id}_{meeting_kind}_");
+    if question_id.starts_with(&scoped_prefix) {
+        return question_id.to_string();
+    }
+    let session_prefix = format!("{session_id}_");
+    let rest = question_id
+        .strip_prefix(&session_prefix)
+        .unwrap_or(question_id);
+    format!("{session_id}_{meeting_kind}_{rest}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composite_scoped_id_includes_kind() {
+        assert_eq!(composite_scoped_id(56, "plenary", 10, 0), "56_plenary_10_0");
+        assert_eq!(
+            composite_scoped_id(56, "commission", 10, 2),
+            "56_commission_10_2"
+        );
+    }
+
+    #[test]
+    fn ensure_question_id_upgrades_legacy() {
+        assert_eq!(
+            ensure_question_id("56", "plenary", "56_10_0"),
+            "56_plenary_10_0"
+        );
+        assert_eq!(
+            ensure_question_id("56", "commission", "56_10_0"),
+            "56_commission_10_0"
+        );
+    }
+
+    #[test]
+    fn ensure_question_id_is_idempotent() {
+        assert_eq!(
+            ensure_question_id("56", "plenary", "56_plenary_10_0"),
+            "56_plenary_10_0"
+        );
+    }
+}
+
 /// Cache path relative to `SCRAPER_CACHE_DIR` for portable provenance columns.
 pub fn relative_cache_path(full_path: &Path, cache_root: &Path) -> String {
     full_path
