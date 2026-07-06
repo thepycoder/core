@@ -4,6 +4,13 @@ use std::sync::LazyLock;
 
 static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
+static TITLE_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^(?:e\s+)?(?:e\s*)?erste\s+minister|(?:eerste\s+minister|ministre(?:\s+président)?|minister|staatssecretaris|de\s+heer|mevrouw|le\s+ministre|la\s+ministre|monsieur|madame)\s+",
+    )
+    .unwrap()
+});
+
 /// Known misspellings scraped from plenary question headers (wrong -> correct).
 pub fn typo_corrections() -> HashMap<String, String> {
     [
@@ -20,6 +27,17 @@ pub fn apply_typo_fix(raw: &str, typo_map: &HashMap<String, String>) -> String {
         .get(raw.trim())
         .cloned()
         .unwrap_or_else(|| raw.trim().to_string())
+}
+
+/// Strip honorifics and fix common scrape artefacts before name matching.
+pub fn clean_raw_name(raw: &str) -> String {
+    let collapsed = WHITESPACE
+        .replace_all(raw.trim(), " ")
+        .into_owned();
+    TITLE_PREFIX
+        .replace(&collapsed, "")
+        .trim()
+        .to_string()
 }
 
 /// Lowercase, transliterate accents, collapse whitespace.
@@ -49,15 +67,19 @@ pub fn normalize_name(raw: &str) -> String {
         .into_owned()
 }
 
-/// List page stores names as "Last First"; reorder to "First Last".
+/// List/vote appendix stores names as "Last First"; reorder to "First Last".
+///
+/// Two tokens swap simply (`Jambon Jan` → `Jan Jambon`). Longer vote appendix
+/// names keep surname particles with the trailing surname word
+/// (`Donckt Wim Van der` → `Wim Van der Donckt`).
 pub fn reorder_name(raw: &str) -> String {
     let raw = raw.trim();
-    let mut parts: Vec<&str> = raw.split_whitespace().collect();
-    if parts.len() > 1 {
-        let first = parts.pop().unwrap();
-        format!("{} {}", first, parts.join(" "))
-    } else {
-        raw.to_string()
+    let parts: Vec<&str> = raw.split_whitespace().collect();
+    match parts.as_slice() {
+        [] => String::new(),
+        [only] => (*only).to_string(),
+        [a, b] => format!("{b} {a}"),
+        [head, middle, tail @ ..] => format!("{middle} {} {head}", tail.join(" ")),
     }
 }
 
@@ -102,6 +124,29 @@ mod tests {
     #[test]
     fn reorder_name_swaps_last_first() {
         assert_eq!(reorder_name("Jambon Jan"), "Jan Jambon");
+    }
+
+    #[test]
+    fn reorder_name_handles_surname_particles() {
+        assert_eq!(reorder_name("Donckt Wim Van der"), "Wim Van der Donckt");
+        assert_eq!(reorder_name("Bosch Annik Van den"), "Annik Van den Bosch");
+        assert_eq!(reorder_name("Roover Peter De"), "Peter De Roover");
+        assert_eq!(reorder_name("Riet Katrijn van"), "Katrijn van Riet");
+        assert_eq!(reorder_name("Ngoi Mutyebele"), "Mutyebele Ngoi");
+    }
+
+    #[test]
+    fn clean_raw_name_strips_titles() {
+        assert_eq!(
+            clean_raw_name("E eerste minister  Alexander De Croo"),
+            "Alexander De Croo"
+        );
+        assert_eq!(
+            clean_raw_name("E erste minister  Alexander De Croo"),
+            "Alexander De Croo"
+        );
+        assert_eq!(clean_raw_name("De heer Jan Jambon"), "Jan Jambon");
+        assert_eq!(clean_raw_name("Minister Georges Gilkinet"), "Georges Gilkinet");
     }
 
     #[test]

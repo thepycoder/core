@@ -3,6 +3,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
+use identity::convert_name;
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -1878,15 +1879,6 @@ fn extract_voter_names(document: &Html, vote_index: &str) -> (String, String, St
         }
     }
     (yes_voters, no_voters, abstain_voters)
-}
-
-fn convert_name(name: &str) -> String {
-    let parts: Vec<&str> = name.split_whitespace().collect();
-    match parts.as_slice() {
-        [] => String::new(),
-        [only] => only.to_string(),
-        [rest @ .., first] => format!("{} {}", first, rest.join(" ")),
-    }
 }
 
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {

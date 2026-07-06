@@ -2139,6 +2139,7 @@ dependencies = [
  "dotenvy",
  "encoding_rs",
  "http 1.4.1",
+ "identity",
  "indicatif 0.18.4",
  "itertools",
  "parquet",
