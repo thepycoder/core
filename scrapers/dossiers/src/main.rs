@@ -27,6 +27,8 @@ static SELECTOR_TABLE: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_TBODY: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_A: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_FONT: OnceLock<Selector> = OnceLock::new();
+static LIST_FROM_TO_REGEX: OnceLock<Regex> = OnceLock::new();
+static FLWB_DOSSIER_ID_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn selector_tr() -> &'static Selector {
     SELECTOR_TR.get_or_init(|| Selector::parse("tr").unwrap())
@@ -45,6 +47,18 @@ fn selector_a() -> &'static Selector {
 }
 fn selector_font() -> &'static Selector {
     SELECTOR_FONT.get_or_init(|| Selector::parse("font").unwrap())
+}
+
+fn list_from_to_regex() -> &'static Regex {
+    LIST_FROM_TO_REGEX.get_or_init(|| {
+        Regex::new(r"(?i)ListFromTo\.cfm\?legislat=(\d+)&from=(\d+)&to=(\d+)").unwrap()
+    })
+}
+
+fn flwb_dossier_id_regex() -> &'static Regex {
+    FLWB_DOSSIER_ID_REGEX.get_or_init(|| {
+        Regex::new(r#"(?i)flwbn\.cfm[^"'<>]*dossierID=(\d+)"#).unwrap()
+    })
 }
 
 /// The output of this scraper.
@@ -228,18 +242,19 @@ async fn download_dossiers(
     web_request_count: &mut u32,
     mp: &MultiProgress,
 ) -> Result<(), Box<dyn Error>> {
-    let ids_path = cache_dir().join(format!("sessions/{}/dossier_ids.txt", session_id));
-    let content = std::fs::read_to_string(&ids_path)?;
-    let id_dates: HashMap<String, String> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| {
-            let mut parts = l.splitn(2, '\t');
-            let id = parts.next()?.trim().to_string();
-            let date = parts.next().unwrap_or("").trim().to_string();
-            Some((id, date))
-        })
-        .collect();
+    let mut id_dates = load_plenary_dossier_ids(session_id);
+    let flwb_ids = discover_all_dossier_ids(session_id, client, web_request_count).await?;
+    let plenary_only = id_dates.len();
+    for id in flwb_ids {
+        id_dates.entry(id).or_insert_with(String::new);
+    }
+    let flwb_only = id_dates.len().saturating_sub(plenary_only);
+    println!(
+        "[dossiers] {} dossier ids to download ({} plenary, {} FLWB-only)",
+        id_dates.len(),
+        plenary_only,
+        flwb_only
+    );
 
     let pb = mp.add(ProgressBar::new(id_dates.len() as u64));
     pb.set_style(
@@ -264,6 +279,140 @@ async fn download_dossiers(
 
     pb.finish_with_message("done");
     Ok(())
+}
+
+fn load_plenary_dossier_ids(session_id: u32) -> HashMap<String, String> {
+    let ids_path = cache_dir().join(format!("sessions/{}/dossier_ids.txt", session_id));
+    let content = match std::fs::read_to_string(&ids_path) {
+        Ok(content) => content,
+        Err(_) => {
+            eprintln!(
+                "[dossiers] no dossier_ids.txt from plenary scrape; using FLWB discovery only"
+            );
+            return HashMap::new();
+        }
+    };
+
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| {
+            let mut parts = l.splitn(2, '\t');
+            let id = parts.next()?.trim().to_string();
+            let date = parts.next().unwrap_or("").trim().to_string();
+            Some((id, date))
+        })
+        .collect()
+}
+
+async fn discover_all_dossier_ids(
+    session_id: u32,
+    client: &ScrapingClient,
+    web_request_count: &mut u32,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let list_url = format!(
+        "{}/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/ListDocument.cfm?legislat={}",
+        DEKAMER_BASE, session_id
+    );
+    let list_html = fetch_html(client, &list_url, web_request_count).await?;
+    let range_urls = extract_list_from_to_urls(&list_html, session_id);
+
+    if range_urls.is_empty() {
+        return Err(format!(
+            "FLWB discovery found no ListFromTo ranges for session {session_id}"
+        )
+        .into());
+    }
+
+    let range_count = range_urls.len();
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for range_url in range_urls {
+        let range_html = fetch_html(client, &range_url, web_request_count).await?;
+        for id in extract_flwb_dossier_ids(&range_html) {
+            if seen.insert(id.clone()) {
+                ids.push(id);
+            }
+        }
+    }
+
+    ids.sort_by(|a, b| {
+        a.parse::<u32>()
+            .unwrap_or(0)
+            .cmp(&b.parse::<u32>().unwrap_or(0))
+    });
+
+    println!(
+        "[dossiers] FLWB browse discovered {} dossier ids across {} ranges",
+        ids.len(),
+        range_count
+    );
+    Ok(ids)
+}
+
+async fn fetch_html(
+    client: &ScrapingClient,
+    url: &str,
+    web_request_count: &mut u32,
+) -> Result<String, Box<dyn Error>> {
+    let response = client.get(url).await?;
+    *web_request_count += 1;
+    let raw_bytes = response.bytes().await?;
+    let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
+    Ok(decoded_str.into_owned())
+}
+
+fn decode_html_entities(raw: &str) -> String {
+    raw.replace("&amp;", "&")
+}
+
+fn normalize_dossier_id(raw: &str) -> String {
+    let trimmed = raw.trim().trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn extract_list_from_to_urls(html: &str, session_id: u32) -> Vec<String> {
+    let decoded = decode_html_entities(html);
+    let mut urls = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for caps in list_from_to_regex().captures_iter(&decoded) {
+        let legislat: u32 = caps[1].parse().unwrap_or(0);
+        if legislat != session_id {
+            continue;
+        }
+        let from = caps[2].to_string();
+        let to = caps[3].to_string();
+        let url = format!(
+            "{}/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=ListFromTo.cfm?legislat={}&from={}&to={}",
+            DEKAMER_BASE, session_id, from, to
+        );
+        if seen.insert(url.clone()) {
+            urls.push(url);
+        }
+    }
+
+    urls
+}
+
+fn extract_flwb_dossier_ids(html: &str) -> Vec<String> {
+    let decoded = decode_html_entities(html);
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for caps in flwb_dossier_id_regex().captures_iter(&decoded) {
+        let id = normalize_dossier_id(&caps[1]);
+        if seen.insert(id.clone()) {
+            ids.push(id);
+        }
+    }
+
+    ids
 }
 
 /// Checks if the dossier file is already downloaded and, if not, downloads it.
@@ -872,4 +1021,41 @@ fn normalize_date(date: &str) -> String {
     NaiveDate::parse_from_str(date.trim(), "%d/%m/%Y")
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|_| date.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_dossier_id_strips_leading_zeros() {
+        assert_eq!(normalize_dossier_id("0099"), "99");
+        assert_eq!(normalize_dossier_id("0001"), "1");
+        assert_eq!(normalize_dossier_id("297"), "297");
+        assert_eq!(normalize_dossier_id("0000"), "0");
+    }
+
+    #[test]
+    fn extract_list_from_to_urls_finds_ranges() {
+        let html = r#"
+            <A HREF="showpage.cfm?section=/flwb&language=nl&amp;cfm=ListFromTo.cfm?legislat=56&amp;from=0&amp;to=99">Van 99 tot 0</A>
+            <A HREF="showpage.cfm?section=/flwb&language=nl&cfm=ListFromTo.cfm?legislat=56&from=100&to=199">Van 199 tot 100</A>
+            <A HREF="showpage.cfm?section=/flwb&language=nl&cfm=ListFromTo.cfm?legislat=55&from=0&to=99">Other session</A>
+        "#;
+        let urls = extract_list_from_to_urls(html, 56);
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("from=0&to=99"));
+        assert!(urls[1].contains("from=100&to=199"));
+    }
+
+    #[test]
+    fn extract_flwb_dossier_ids_from_range_page() {
+        let html = r#"
+            <A HREF="showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat=56&dossierID=0099">99</A>
+            <A HREF="showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat=56&dossierID=0098">98</A>
+            <A HREF="/site/wwwcfm/flwb/lastpdf.cfm?lang=N&dossierID=4">skip</A>
+        "#;
+        let ids = extract_flwb_dossier_ids(html);
+        assert_eq!(ids, vec!["99".to_string(), "98".to_string()]);
+    }
 }

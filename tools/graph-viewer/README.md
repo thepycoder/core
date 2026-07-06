@@ -31,6 +31,7 @@ Open http://127.0.0.1:8765
 - Search entities by name, id, title, or body text (utterances, dossiers, documents)
 - Inspector preview panel with metadata, excerpts, and source links per entity type
 - Filterable paginated link lists (search vote titles, question topics, etc.)
+- Vote breakdown with yes/no/abstain member lists (resolved persons are clickable)
 - Open source pages on dekamer.be and cached HTML/PDF per entity and per edge
 - Question discussion text, vote reconciliation totals, data quality issues
 

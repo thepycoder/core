@@ -92,6 +92,22 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "vote_casts",
+        "normalized/vote_casts.parquet",
+        [
+            ("vote_cast_id", "VARCHAR"),
+            ("vote_id", "VARCHAR"),
+            ("session_id", "VARCHAR"),
+            ("meeting_id", "VARCHAR"),
+            ("person_id", "VARCHAR"),
+            ("position", "VARCHAR"),
+            ("raw_name", "VARCHAR"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+            ("confidence", "VARCHAR"),
+        ],
+    ),
+    (
         "utterances",
         "normalized/utterances.parquet",
         [

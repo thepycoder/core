@@ -130,6 +130,24 @@ class EntityPreview(BaseModel):
     related: list[PreviewRelated] = Field(default_factory=list)
 
 
+class VoteCastMember(BaseModel):
+    person_id: str | None = None
+    label: str
+    raw_name: str = ""
+    confidence: str = "exact"
+    unresolved: bool = False
+
+
+class VotePositionGroup(BaseModel):
+    position: str
+    headline_count: str = ""
+    members: list[VoteCastMember] = Field(default_factory=list)
+
+
+class VoteBreakdown(BaseModel):
+    groups: list[VotePositionGroup] = Field(default_factory=list)
+
+
 class NodeDetailResponse(BaseModel):
     id: str
     type: str
@@ -141,6 +159,7 @@ class NodeDetailResponse(BaseModel):
     preview: EntityPreview | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
     vote_reconciliation: dict[str, Any] | None = None
+    vote_breakdown: VoteBreakdown | None = None
 
 
 class NodeLink(BaseModel):

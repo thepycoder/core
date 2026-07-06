@@ -197,7 +197,7 @@ async function openNode(type, id, resetNav = true) {
   if (resetNav) {
     navStack.length = 0;
   }
-  const detail = await api(`/api/node/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
+  const detail = await api(`/api/node/${encodeURIComponent(type)}/${id}`);
   pushNav(type, id, detail.label);
   inspectorNode = { type, id };
   renderNodeDetail(detail);
@@ -229,6 +229,10 @@ function renderNodeDetail(detail) {
 
   if (detail.preview) {
     el.appendChild(renderEntityPreview(detail.preview));
+  }
+
+  if (detail.vote_breakdown) {
+    el.appendChild(renderVoteBreakdown(detail.vote_breakdown));
   }
 
   if (detail.vote_reconciliation) {
@@ -320,6 +324,56 @@ function renderEntityPreview(preview) {
       related.appendChild(btn);
     }
     section.appendChild(related);
+  }
+
+  return section;
+}
+
+function renderVoteBreakdown(breakdown) {
+  const section = document.createElement("div");
+  section.className = "detail-section vote-breakdown-section";
+  section.innerHTML = `<h3>Vote breakdown</h3>`;
+
+  const positionLabels = { yes: "Yes", no: "No", abstain: "Abstain" };
+
+  for (const group of breakdown.groups || []) {
+    const details = document.createElement("details");
+    details.className = "vote-position-group";
+    if (group.members?.length) {
+      details.open = true;
+    }
+    const count = group.members?.length ?? 0;
+    const summary = document.createElement("summary");
+    summary.textContent = `${positionLabels[group.position] || group.position} (${count || group.headline_count || 0})`;
+    details.appendChild(summary);
+
+    const list = document.createElement("div");
+    list.className = "vote-cast-list";
+    for (const member of group.members || []) {
+      if (member.person_id && !member.unresolved) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "link-action-btn vote-cast-member";
+        btn.textContent = member.label;
+        btn.title = member.raw_name && member.raw_name !== member.label ? member.raw_name : "";
+        btn.addEventListener("click", () => drillTo("Person", member.person_id));
+        list.appendChild(btn);
+      } else {
+        const span = document.createElement("span");
+        span.className = "vote-cast-member unresolved";
+        span.textContent = member.label;
+        span.title = "Unresolved person";
+        list.appendChild(span);
+      }
+    }
+    if (!group.members?.length) {
+      const empty = document.createElement("div");
+      empty.className = "muted vote-cast-empty";
+      empty.textContent = "No member names recorded";
+      list.appendChild(empty);
+    }
+    details.appendChild(list);
+    section.appendChild(details);
   }
 
   return section;
@@ -521,7 +575,7 @@ async function loadLinkList(listId, direction, edgeType, q = "", offset = 0) {
 
   try {
     const data = await api(
-      `/api/node/${encodeURIComponent(inspectorNode.type)}/${encodeURIComponent(inspectorNode.id)}/links?${params}`
+      `/api/node/${encodeURIComponent(inspectorNode.type)}/${inspectorNode.id}/links?${params}`
     );
     listEl.innerHTML = "";
     if (!data.links.length) {

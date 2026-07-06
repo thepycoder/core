@@ -25,7 +25,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Utterance**                | `{meeting_id, seq}` or span ref                                 | Integraal verslag (plenary + commission); beknopt verslag; dossier PDFs                                                                                               | Q&A speaker blocks partially parsed into JSON blobs today. Full debates (`01.07 — Name (Party):`) are not normalized yet. |
 | **Question**                 | internal id (`Q…P` / `Q…C`)                                     | Oral: meeting reports; written: QRVA bulletins / FLWB                                                                                                                 | Oral partially scraped. Written Q&A database not scraped.                                                                 |
 | **Answer**                   | linked to Question                                              | Same as Question                                                                                                                                                      | Often merged into discussion text; minister ≠ MP entity resolution.                                                       |
-| **Dossier**                  | `{session_id}/{number}`                                         | [flwbn.cfm](https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm) and static `/flwb/html/{session}/N/{doc}.html` pages | Already scraped only for dossier ids discovered from plenary refs; full FLWB browse/search discovery is still missing.    |
+| **Dossier**                  | `{session_id}/{number}`                                         | [flwbn.cfm](https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm) and static `/flwb/html/{session}/N/{doc}.html` pages | Scraped via plenary refs plus full FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`).    |
 | **Document**                 | FLWB doc id (`56K1280004`)                                      | Dossier subdocuments (PDF/HTML)                                                                                                                                       | Already scraped (metadata). Body text via PDF→markdown pipeline.                                                          |
 | **Amendment**                | document id + dossier                                           | Dossier subdocuments typed `AMENDEMENT`                                                                                                                               | Same as Document; authors are structured on site.                                                                         |
 | **Report**                   | document id + dossier                                           | Subdocuments typed `VERSLAG`; commission integraal                                                                                                                    | PDF-heavy; rapporteur named on dossier page, speech inside PDF.                                                           |
@@ -78,6 +78,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | Commission integraal       | `/doc/CCRI/html/{session}/ic{N}x.html`        | Meeting, Utterance, Question                             |
 | Plenary/commission beknopt | via Documenten → Beknopt verslag              | Utterance (summary text)                                 |
 | Dossiers                   | `flwbn.cfm?legislat=&dossierID=`              | Dossier, Document, edges to Meeting/Person/Topic         |
+| FLWB browse                | `ListDocument.cfm?legislat=` → `ListFromTo.cfm` | Dossier id discovery (union with plenary refs)          |
 | FLWB PDFs                  | `/FLWB/PDF/{session}/…`                       | Document body (Report, Amendment, QRVA)                  |
 | Written Q&A                | Documenten → Bulletins schriftelijke vragen   | Question, Answer                                         |
 | Intervention analysis      | Dossier fiche + search databank               | Utterance, Topic, Person links                           |
@@ -97,7 +98,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Canonicalized and working**              | Identity seed tables: Person, Party, Commission, party memberships, commission memberships, person aliases, and unresolved-person report; normalized edges (`vote_casts`, `authored`, `asked`, `holds_role`, `utterances`) and graph Parquet (`nodes`, `edges`, `source_artifacts`) |
 | **Parsed but not normalized**              | General plenary debate utterances (outside Q&A `discussion` JSON), respondent/minister titles (`ANSWERED` not wired), commission role edges beyond chair                                              |
 | **Parser exists but source is incomplete** | LobbyOrg                                                                                                                                                                                          |
-| **Not scraped / not normalized**           | Written Question/Answer, general plenary Utterances, Motion, Interpellation/Hearing, InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar, Beknopt verslag, full FLWB dossier discovery |
+| **Not scraped / not normalized**           | Written Question/Answer, general plenary Utterances, Motion, Interpellation/Hearing, InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar, Beknopt verslag |
 
 ## Implementation state
 
@@ -108,7 +109,8 @@ Verified against the repo on 2026-07-01:
 - **Stage 0 QA is working as a soft report:** `data/qa/summary.md` reports 97 passes and 2 issues: generated commission-question data still shows the old `dossier_ids` mislabel signal, and one plenary vote total mismatch remains in meeting 129. Regenerated staging passes the normalize staging check (`internal_ids` present, no `dossier_ids`); re-run Stage 0 QA to clear the stale schema warning.
 - **Step 2 is working:** `just normalize-edges` routes vote roll-calls, document authors, questioners, commission chairs, and Q&A discussion speakers through the identity resolver into `data/normalized/*.parquet` (189 400 vote casts, 1 851 authored, 2 693 asked, 67 holds_role, 7 975 utterances; 870 unresolved names, mostly speakers and respondent titles). One vote reconciliation mismatch remains (`56_129_4`, same as Stage 0 QA). Minister/government resolution and `ANSWERED` edges are not started yet — respondent titles only land in `unresolved_persons`.
 - **Step 3 is working:** `just build-graph` writes `data/graph/nodes.parquet` (10 652 nodes), `edges.parquet` (215 991 edges: MEMBER_OF, CAST, AUTHORED, ASKED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (660 artifacts). Referential integrity is clean on `from` endpoints; 141 `VOTED_ON` edges point at dossier ids not present as nodes (partial vote-title refs like `1-5`, not full `56/N` dossiers). Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
-- **Not done yet:** minister/government resolution, graph-level QA (Step 5), and the missing parliamentary sources in Step 4.
+- **Not done yet:** minister/government resolution, graph-level QA (Step 5), and the remaining parliamentary sources in Step 4 (written Q&A, motions, dossier calendar edges).
+- **Dossier discovery (2026-07-06):** `just scrape-dossiers` now unions plenary-derived ids from `dossier_ids.txt` with all session dossiers discovered via FLWB `ListDocument.cfm` / `ListFromTo.cfm`. Graph viewer dossier clicks fixed (`{node_id:path}` route for ids like `56/297`).
 
 
 ## Scrutiny
@@ -184,7 +186,7 @@ Step 0 is done at the contract/source level, Step 1 is working for the first ide
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
 
-- Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.
+- ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done:** `scrapers/dossiers` crawls `ListDocument.cfm?legislat={session}` and each `ListFromTo.cfm` range page, unions ids with plenary refs, then downloads `flwbn.cfm` fiches.
 - Written Q&A from the QRVA bulletins (`/QRVA/pdf/{session}/…`) / search database.
 - `Motion`, `Interpellation`, `Hearing`, and procedural `Notice` handling (INQO / report sources; the commission scraper currently drops hearings).
 - Parse the dossier fiche calendar into `DISCUSSED_IN`, `SUBMITTED`, `AUTHORED`, and rapporteur/chair role edges.

@@ -1,4 +1,14 @@
-from app.models import EdgeDetailResponse, EdgeGroup, NodeDetailResponse, NodeLink, NodeLinksResponse
+from app.config import get_settings
+from app.models import (
+    EdgeDetailResponse,
+    EdgeGroup,
+    NodeDetailResponse,
+    NodeLink,
+    NodeLinksResponse,
+    VoteBreakdown,
+    VoteCastMember,
+    VotePositionGroup,
+)
 from app.queries.entity_preview import fetch_entity_preview
 
 
@@ -20,6 +30,7 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
     out_edges = _edge_groups(conn, node_type, node_id, "out")
     utterances = _fetch_utterances(conn, node_type, node_id)
     vote_reconciliation = _fetch_vote_reconciliation(conn, node_type, node_id)
+    vote_breakdown = _fetch_vote_breakdown(conn, node_type, node_id)
     preview = fetch_entity_preview(conn, node_type, node_id)
 
     return NodeDetailResponse(
@@ -33,6 +44,7 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
         preview=preview,
         utterances=utterances,
         vote_reconciliation=vote_reconciliation,
+        vote_breakdown=vote_breakdown,
     )
 
 
@@ -89,6 +101,135 @@ def _fetch_vote_reconciliation(conn, node_type: str, node_id: str) -> dict | Non
         "source_url": row[7],
         "cache_path": row[8],
     }
+
+
+def _split_csv(value: str | None) -> list[str]:
+    if not value or not value.strip():
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _person_label_lookup(conn) -> dict[str, tuple[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT node_id, label
+        FROM nodes
+        WHERE node_type = 'Person' AND label IS NOT NULL AND label != ''
+        """
+    ).fetchall()
+    return {label.lower(): (person_id, label) for person_id, label in rows}
+
+
+def _member_from_raw_name(
+    raw_name: str, lookup: dict[str, tuple[str, str]]
+) -> VoteCastMember:
+    match = lookup.get(raw_name.lower())
+    if match:
+        person_id, label = match
+        return VoteCastMember(
+            person_id=person_id,
+            label=label,
+            raw_name=raw_name,
+        )
+    return VoteCastMember(label=raw_name, raw_name=raw_name, unresolved=True)
+
+
+def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown | None:
+    if node_type != "Vote":
+        return None
+
+    settings = get_settings()
+    votes_path = settings.parquet_path("sessions/56/plenary/votes.parquet")
+    headline = {"yes": "", "no": "", "abstain": ""}
+    raw_lists: dict[str, list[str]] = {"yes": [], "no": [], "abstain": []}
+
+    if votes_path.exists():
+        row = conn.execute(
+            f"""
+            SELECT yes, no, abstain, members_yes, members_no, members_abstain
+            FROM read_parquet('{votes_path.as_posix()}')
+            WHERE vote_id = ?
+            LIMIT 1
+            """,
+            [node_id],
+        ).fetchone()
+        if row:
+            headline["yes"], headline["no"], headline["abstain"] = row[0], row[1], row[2]
+            raw_lists["yes"] = _split_csv(row[3])
+            raw_lists["no"] = _split_csv(row[4])
+            raw_lists["abstain"] = _split_csv(row[5])
+
+    rows = conn.execute(
+        """
+        SELECT
+            vc.position,
+            vc.person_id,
+            coalesce(n.label, vc.raw_name) AS label,
+            vc.raw_name,
+            vc.confidence
+        FROM vote_casts vc
+        LEFT JOIN nodes n ON n.node_type = 'Person' AND n.node_id = vc.person_id
+        WHERE vc.vote_id = ?
+        ORDER BY vc.position, label, vc.raw_name
+        """,
+        [node_id],
+    ).fetchall()
+
+    groups_by_position: dict[str, list[VoteCastMember]] = {
+        "yes": [],
+        "no": [],
+        "abstain": [],
+    }
+    resolved_names: dict[str, set[str]] = {"yes": set(), "no": set(), "abstain": set()}
+
+    for position, person_id, label, raw_name, confidence in rows:
+        if position not in groups_by_position:
+            continue
+        groups_by_position[position].append(
+            VoteCastMember(
+                person_id=person_id or None,
+                label=label or raw_name,
+                raw_name=raw_name,
+                confidence=confidence or "exact",
+            )
+        )
+        if raw_name:
+            resolved_names[position].add(raw_name)
+
+    person_lookup = _person_label_lookup(conn)
+
+    if not rows and any(raw_lists.values()):
+        for position in ("yes", "no", "abstain"):
+            groups_by_position[position] = [
+                _member_from_raw_name(name, person_lookup)
+                for name in raw_lists[position]
+            ]
+    else:
+        for position in ("yes", "no", "abstain"):
+            for name in raw_lists[position]:
+                if name not in resolved_names[position]:
+                    groups_by_position[position].append(
+                        _member_from_raw_name(name, person_lookup)
+                    )
+
+    def _has_headline(position: str) -> bool:
+        value = headline[position]
+        return bool(value and value != "0")
+
+    groups = [
+        VotePositionGroup(
+            position=position,
+            headline_count=headline[position],
+            members=groups_by_position[position],
+        )
+        for position in ("yes", "no", "abstain")
+        if groups_by_position[position] or _has_headline(position)
+    ]
+
+    if not groups and not any(headline.values()):
+        return None
+
+    return VoteBreakdown(groups=groups)
 
 
 def _edge_groups(

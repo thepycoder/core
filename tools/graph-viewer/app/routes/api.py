@@ -83,12 +83,7 @@ def expand_subgraph(body: ExpandRequest) -> SubgraphResponse:
     return fetch_expand(get_db().conn, body)
 
 
-@router.get("/node/{node_type}/{node_id}", response_model=NodeDetailResponse)
-def node_detail(node_type: str, node_id: str) -> NodeDetailResponse:
-    return fetch_node_detail(get_db().conn, node_type, node_id)
-
-
-@router.get("/node/{node_type}/{node_id}/links", response_model=NodeLinksResponse)
+@router.get("/node/{node_type}/{node_id:path}/links", response_model=NodeLinksResponse)
 def node_links(
     node_type: str,
     node_id: str,
@@ -101,6 +96,11 @@ def node_links(
     return fetch_node_links(
         get_db().conn, node_type, node_id, direction, edge_type, q, limit, offset
     )
+
+
+@router.get("/node/{node_type}/{node_id:path}", response_model=NodeDetailResponse)
+def node_detail(node_type: str, node_id: str) -> NodeDetailResponse:
+    return fetch_node_detail(get_db().conn, node_type, node_id)
 
 
 @router.get("/edge", response_model=EdgeDetailResponse)
