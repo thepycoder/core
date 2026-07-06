@@ -1,3 +1,6 @@
+# Scrape all sources, rebuild identity, normalize edges, and write graph Parquet.
+update: scrape-sessions scrape-commissions scrape-members scrape-plenary-meetings scrape-commission-meetings scrape-dossiers scrape-lobby scrape-remunerations build-identity normalize-edges build-graph
+
 scrape-sessions:
     cargo run --bin sessions
 

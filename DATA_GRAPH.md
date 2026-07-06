@@ -23,7 +23,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Meeting**                  | `{session_id, kind, meeting_id}`                                | Plenary HTML `PCRI/ip{N}x.html`; commission HTML `CCRI/ic{N}x.html`                                                                                                   | Already scraped (metadata). Gaps in commission IDs.                                                                       |
 | **AgendaItem**               | `{meeting_id, seq}`                                             | Meeting report headings (`h1`/`h2`, agenda numbers)                                                                                                                   | NL/FR pairs, mis-tagged `lang` attrs; section boundaries are heuristic.                                                   |
 | **Utterance**                | `{meeting_id, seq}` or span ref                                 | Integraal verslag (plenary + commission); beknopt verslag; dossier PDFs                                                                                               | Q&A speaker blocks partially parsed into JSON blobs today. Full debates (`01.07 — Name (Party):`) are not normalized yet. |
-| **Question**                 | internal id (`Q…P` / `Q…C`)                                     | Oral: meeting reports; written: QRVA bulletins / FLWB                                                                                                                 | Oral partially scraped. Written Q&A database not scraped.                                                                 |
+| **Question**                 | `{session}_{kind}_{meeting}_{seq}` (+ site ref in `internal_ids`) | Oral: meeting reports; written: QRVA bulletins / FLWB                                                                                                                 | Oral partially scraped. Graph `question_id` is meeting-scoped and kind-scoped; site refs (`Q…P` / `Q…C`) live in staging `internal_ids`. Written Q&A not scraped. |
 | **Answer**                   | linked to Question                                              | Same as Question                                                                                                                                                      | Often merged into discussion text; minister ≠ MP entity resolution.                                                       |
 | **Dossier**                  | `{session_id}/{number}`                                         | [flwbn.cfm](https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm) and static `/flwb/html/{session}/N/{doc}.html` pages | Scraped via plenary refs plus full FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`).    |
 | **Document**                 | FLWB doc id (`56K1280004`)                                      | Dossier subdocuments (PDF/HTML)                                                                                                                                       | Already scraped (metadata). Body text via PDF→markdown pipeline.                                                          |
@@ -99,18 +99,28 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Parsed but not normalized**              | General plenary debate utterances (outside Q&A `discussion` JSON), respondent/minister titles (`ANSWERED` not wired), commission role edges beyond chair                                              |
 | **Parser exists but source is incomplete** | LobbyOrg                                                                                                                                                                                          |
 | **Not scraped / not normalized**           | Written Question/Answer, general plenary Utterances, Motion, Interpellation/Hearing, InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar, Beknopt verslag |
+| **Debug tooling (local only)**             | `tools/graph-viewer` — search, inspector, vote breakdown, unresolved-person triage, data-quality issues over `data/graph/*.parquet` (not part of the scraper pipeline) |
 
 ## Implementation state
 
-Verified against the repo on 2026-07-01:
+Verified against branch `stage-viz` on 2026-07-06. Counts below are from the last full pipeline run (2026-07-01); re-run scrapers → `normalize-edges` → `build-graph` after dossier discovery to refresh graph size.
 
-- **Done and working:** Stage 0 staging contract is documented in `STAGING.md`; the workspace has an `identity` crate and `just build-identity`; identity tests pass; `cargo run --bin identity` writes `data/identity/persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`.
-- **Current identity quality:** 175 persons, 13 parties, 175 party memberships, 1127 resolved commission memberships, 21 unresolved commission-member occurrences. The only unresolved raw name currently reported is the placeholder `N .`, so real commission-member names are resolving.
-- **Stage 0 QA is working as a soft report:** `data/qa/summary.md` reports 97 passes and 2 issues: generated commission-question data still shows the old `dossier_ids` mislabel signal, and one plenary vote total mismatch remains in meeting 129. Regenerated staging passes the normalize staging check (`internal_ids` present, no `dossier_ids`); re-run Stage 0 QA to clear the stale schema warning.
-- **Step 2 is working:** `just normalize-edges` routes vote roll-calls, document authors, questioners, commission chairs, and Q&A discussion speakers through the identity resolver into `data/normalized/*.parquet` (189 400 vote casts, 1 851 authored, 2 693 asked, 67 holds_role, 7 975 utterances; 870 unresolved names, mostly speakers and respondent titles). One vote reconciliation mismatch remains (`56_129_4`, same as Stage 0 QA). Minister/government resolution and `ANSWERED` edges are not started yet — respondent titles only land in `unresolved_persons`.
-- **Step 3 is working:** `just build-graph` writes `data/graph/nodes.parquet` (10 652 nodes), `edges.parquet` (215 991 edges: MEMBER_OF, CAST, AUTHORED, ASKED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (660 artifacts). Referential integrity is clean on `from` endpoints; 141 `VOTED_ON` edges point at dossier ids not present as nodes (partial vote-title refs like `1-5`, not full `56/N` dossiers). Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
-- **Not done yet:** minister/government resolution, graph-level QA (Step 5), and the remaining parliamentary sources in Step 4 (written Q&A, motions, dossier calendar edges).
-- **Dossier discovery (2026-07-06):** `just scrape-dossiers` now unions plenary-derived ids from `dossier_ids.txt` with all session dossiers discovered via FLWB `ListDocument.cfm` / `ListFromTo.cfm`. Graph viewer dossier clicks fixed (`{node_id:path}` route for ids like `56/297`).
+### Pipeline (Steps 0–3)
+
+- **Stage 0 contract (partially done):** `STAGING.md` documents every current Parquet schema and ID conventions. Major scrapers now emit `source_url` + `cache_path` on staging rows. Question ids include meeting kind (`{session}_{plenary\|commission}_{meeting}_{seq}`) via `composite_scoped_id`, with `ensure_question_id` upgrading legacy rows at normalize/graph time; site-native refs stay in `internal_ids`. Still open: commission `meeting_id` vs `commission_id` rename, vote ids still meeting-scoped composites (not site-native), idempotent per-meeting incremental scraping.
+- **Stage 0 QA (soft report):** `data/qa/summary.md` last reported 97 passes and 2 issues: stale commission-question `dossier_ids` mislabel signal, and one plenary vote total mismatch in meeting 129. Regenerated staging passes the normalize staging check (`internal_ids` present, no `dossier_ids`); re-run Stage 0 QA to clear the stale schema warning.
+- **Step 1 identity (working):** `just build-identity` writes `data/identity/persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`. Last run: 175 persons, 13 parties, 175 party memberships, 1127 resolved commission memberships, 21 unresolved commission-member occurrences (placeholder `N .` only).
+- **Step 2 normalize (working):** `just normalize-edges` routes vote roll-calls, document authors, questioners, commission chairs, and Q&A discussion speakers through the identity resolver into `data/normalized/*.parquet` (189 400 vote casts, 1 851 authored, 2 693 asked, 67 holds_role, 7 975 utterances; 870 unresolved names, mostly speakers and respondent titles). One vote reconciliation mismatch remains (`56_129_4`). Minister/government resolution and `ANSWERED` edges not started — respondent titles only land in `unresolved_persons`.
+- **Step 3 graph (working):** `just build-graph` writes `data/graph/nodes.parquet` (10 652 nodes), `edges.parquet` (215 991 edges: MEMBER_OF, CAST, AUTHORED, ASKED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (660 artifacts). Referential integrity is clean on `from` endpoints; 141 `VOTED_ON` edges point at dossier ids not present as nodes (partial vote-title refs like `1-5`, not full `56/N` dossiers). Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
+
+### Branch additions since 2026-07-01
+
+- **Dossier discovery (Step 4, done):** `just scrape-dossiers` unions plenary-derived ids from `dossier_ids.txt` with all session dossiers discovered via FLWB `ListDocument.cfm` → `ListFromTo.cfm`, then downloads `flwbn.cfm` fiches. Expect more Dossier/Document nodes after a full re-scrape and graph rebuild.
+- **Graph debug viewer (`tools/graph-viewer`, local only):** FastAPI + DuckDB UI over `data/graph/*.parquet`. Search entities; inspector with metadata, excerpts, and source links; paginated edge lists; vote reconciliation totals; **vote breakdown** (yes/no/abstain member lists with clickable resolved persons); unresolved-person and data-quality issue panels; open dekamer.be source pages and cached HTML/PDF. Run: `cd tools/graph-viewer && uv sync && uv run uvicorn app.main:app --reload --port 8765` (after `just build-graph`). Node routes use `{node_id:path}` so dossier ids like `56/297` resolve correctly.
+
+### Not done yet
+
+Minister/government resolution, automated graph-level QA (Step 5), and remaining Step 4 sources (written Q&A, motions/hearings/notices, dossier calendar edges). Graph viewer is manual inspection only — it does not replace the `qa` binary described in Step 5.
 
 
 ## Scrutiny
@@ -127,10 +137,10 @@ What is missing:
 
 - A first-class `Membership` / `Mandate` shape. Party and commission membership need `role`, `start_date`, `end_date`, `source`, `active`, and sometimes replacement/permanent status; an edge with only a time range will become too thin.
 - `Motion`, `Interpellation`, `Hearing`, and probably `Notice` / procedural agenda entries. The plenary scraper already extracts propositions and notices, vote parsing references `motion_id`, and the commission scraper deliberately skips hearings.
-- A source/provenance table for raw artifacts: report HTML, dossier HTML, PDF, converted markdown, search result page. Edge-level `source_url` is good, but reproducible graph building needs `source_artifact_id`, parser version and extraction timestamp.
+- A source/provenance table for raw artifacts: report HTML, dossier HTML, PDF, converted markdown, search result page. **Partially addressed:** `source_artifacts.parquet` + edge-level `source_artifact_id`/`source_url`/`cache_path` exist; staging rows now carry `source_url`/`cache_path`. Still missing: `scraped_at` on artifacts, PDF/markdown artifact registration, parser version on every source type.
 - A canonical bilingual text strategy. Many entities have NL and FR titles/topics; some source `lang` attributes are wrong. The graph should keep language-tagged text variants rather than picking one string per entity.
 - Validation gates: row counts, referential integrity, unmatched names, duplicate site ids, and expected deltas per scrape run.
-- Stable, site-native ids for `Question` and `Vote`. Today `question_id` / `vote_id` are sequential integers assigned per scrape run, and the plenary scraper re-scrapes every meeting `1..=last` on each run, so the ids are not reproducible. Graph nodes need ids derived from the source (meeting + agenda/vote number, or the site's own reference) or every edge breaks on the next scrape.
+- Stable, site-native ids for `Question` and `Vote`. **Partially addressed for questions:** ids are now `{session}_{meeting_kind}_{meeting_id}_{seq}` (deterministic given meeting content order) with site refs in `internal_ids`; plenary/commission meeting-number collisions are fixed. **Still open for votes** and for using site-native question refs as primary graph ids; the plenary scraper still re-scrapes every meeting `1..=last` on each run.
 - A `Government` / minister-mandate concept. Respondents are portfolio title strings (`de minister van …`), not persons, and portfolios change hands mid-session. Resolving "who answered" needs a title→person-over-time table, not the MP `Person` table alone.
 - Idempotent, delta-aware scraping. Re-scraping everything and reassigning ids defeats the "expected deltas per run" check; per-meeting incremental writes with stable keys are a prerequisite for catching site changes.
 
@@ -159,24 +169,27 @@ Three questions to keep answering at every step: did anything fail to link, does
 
 ## Next steps to reach the target graph
 
-Step 0 is done at the contract/source level, Step 1 is working for the first identity slice, and Steps 2–3 are working end-to-end (`just normalize-edges` → `just build-graph`). Continue at Step 4 (missing sources) and Step 5 (graph-level QA). Re-run Stage 0 QA once to clear the stale `dossier_ids` warning.
+Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-edges` → `just build-graph`). Step 4 has one item done (FLWB dossier discovery). **Immediate next work:** re-scrape dossiers and rebuild the graph to pick up the expanded dossier set; then continue Step 4 (written Q&A, motions/hearings, calendar edges), Step 2 remainder (minister resolution), and Step 5 (automated QA). Re-run Stage 0 QA once to clear the stale `dossier_ids` warning.
 
-**0. Freeze the staging contract. Done in contract/source; data regeneration check pending**
+**0. Freeze the staging contract. Partly done**
 
-- Write down every current Parquet schema exactly as produced, then fix the known mislabels: commission meetings write the meeting id under `commission_id` (rename to `meeting_id`); commission `questions.dossier_ids` actually holds `Q…` question refs, not FLWB dossier numbers; replace per-run sequential `question_id` / `vote_id` with ids derived from meeting + agenda/vote number so they survive a re-scrape.
-- Add `source_url` + cache-path columns wherever raw HTML/PDF provenance is not yet addressable from staging rows.
+- ~~Write down every current Parquet schema exactly as produced (`STAGING.md`).~~ Done.
+- ~~Add `source_url` + `cache_path` on staging rows.~~ Done for sessions, members, commissions, plenary/commission meetings, dossiers, lobby, remunerations.
+- ~~Scope question ids by meeting kind.~~ Done (`composite_scoped_id` / `ensure_question_id`).
+- Fix known mislabels: commission meetings write the meeting id under `commission_id` (rename to `meeting_id`); commission question refs belong in `internal_ids`, not a `dossier_ids` column (fixed in scraper; regenerate + re-run QA).
+- Stable vote ids and idempotent per-meeting incremental scraping still open.
 
-**1. Canonical identity + one resolver everything routes through. Partly done / working**
+**1. Canonical identity + one resolver everything routes through. Working for normalize pipeline**
 
-- Build `persons` (seeded from `cvview*.cfm?key=`), `person_aliases` (seed from the existing questioner typo map and the "Last First"→"First Last" reorder rules), `parties`, `commissions`, and `memberships` (role, start/end, permanent vs replacement, source, active).
-- Expose a single `resolve_person(raw_name, context) -> person_id | Unresolved` used by every downstream transform. No `SPOKE` / `CAST` / `AUTHORED` edge is committed for an `Unresolved`.
-- Current gap: the resolver exists and identity tables build, but most downstream scrapers/transforms do not consume it yet. Treat `N .` commission placeholders as vacancies or source placeholders rather than alias candidates.
+- ~~Build identity seed tables and memberships.~~ Done (`just build-identity`).
+- ~~Route high-value edges through `resolve_person`.~~ Done in `just normalize-edges` (votes, authors, questioners, chairs, Q&A speakers).
+- Remaining: wire minister/government title resolution; treat `N .` commission placeholders as vacancies rather than alias candidates; extend resolver to new Step 4 sources as they land.
 
 **2. Normalize the high-value edges you already have (no new scraping yet). Done and working**
 
 - `just normalize-edges` routes vote roll-calls, document authors, commission chairs, questioners, and Q&A discussion speakers through the identity resolver into `data/normalized/`.
 - Unresolved names aggregate to `data/normalized/unresolved_persons.parquet`; vote reconciliation is in `vote_reconciliation.parquet` (1 mismatch: `56_129_4`).
-- **Remaining in this step:** minister/government resolution (portfolio-title→person-over-time table and `ANSWERED` edges); utterance ids can collide when the same question appears in both plenary and commission extracts (~1 273 duplicate `utterance_id`s today).
+- **Remaining in this step:** minister/government resolution (portfolio-title→person-over-time table and `ANSWERED` edges). Utterance ids derive from scoped `question_id` (`{question_id}_{seq}`); re-run normalize after the 2026-07-02 question-id fix to confirm plenary/commission collisions are gone.
 
 **3. Stand up the graph builder early (not last). Done and working**
 
@@ -186,13 +199,14 @@ Step 0 is done at the contract/source level, Step 1 is working for the first ide
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
 
-- ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done:** `scrapers/dossiers` crawls `ListDocument.cfm?legislat={session}` and each `ListFromTo.cfm` range page, unions ids with plenary refs, then downloads `flwbn.cfm` fiches.
+- ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done (2026-07-06):** `scrapers/dossiers` crawls `ListDocument.cfm?legislat={session}` and each `ListFromTo.cfm` range page, unions ids with plenary refs, then downloads `flwbn.cfm` fiches. **Next:** `just scrape-dossiers` → `just build-graph` to materialize new dossier/document nodes and reduce orphan `VOTED_ON` targets where full dossier ids were missing.
 - Written Q&A from the QRVA bulletins (`/QRVA/pdf/{session}/…`) / search database.
 - `Motion`, `Interpellation`, `Hearing`, and procedural `Notice` handling (INQO / report sources; the commission scraper currently drops hearings).
 - Parse the dossier fiche calendar into `DISCUSSED_IN`, `SUBMITTED`, `AUTHORED`, and rapporteur/chair role edges.
 
 **5. Now that the architecture exists, stand up QA over it.**
 
+- **Interim:** `tools/graph-viewer` already surfaces vote reconciliation, unresolved persons, alias-style triage, and structural issue panels for manual inspection; promote the same checks into an automated `qa` binary.
 - Create a `qa` binary that loads every parquet plus the graph output and runs structural + referential + domain checks: vote totals vs counted names, `meeting_id` foreign keys from questions/votes, document-id regex, dates inside the session window. The data is now stable enough to check properly.
 - Wire the resolver outputs: `unresolved_persons` and `alias_candidates` on every run, plus a soft signal for any new `fraction` string not already in `parties`.
 - Cross-check the normalized edges: every `VoteCast` person should be `MEMBER_OF` a party at the vote date — flag casts by non-members as oddities; include vote-total arithmetic in the issue report.
