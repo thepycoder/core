@@ -1,6 +1,7 @@
 pub mod aggregate;
 pub mod agenda_checks;
 pub mod baseline;
+pub mod check_catalog;
 pub mod graph;
 pub mod infrastructure;
 pub mod io;

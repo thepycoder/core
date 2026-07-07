@@ -1,3 +1,4 @@
+use crate::check_catalog::check_doc;
 use crate::types::{table_for_check_id, worst_status, CheckDetail, CheckSummary};
 use std::collections::HashMap;
 use std::error::Error;
@@ -114,27 +115,52 @@ pub fn write_summary_md(path: &Path, summaries: &[CheckSummary]) -> Result<(), B
     if !issues.is_empty() {
         out.push_str("## Issues\n\n");
         for s in issues {
+            let doc = check_doc(&s.check);
             out.push_str(&format!(
-                "- **{} / {}** (count={}): {}\n",
-                s.table, s.check, s.count, s.detail
+                "- **{} / {}** (`{}`, count={}): {}\n",
+                s.table, s.check, s.status, s.count, s.detail
             ));
+            out.push_str(&format!("  - **What:** {}\n", doc.what));
+            if !doc.measures.is_empty() {
+                out.push_str(&format!("  - **Measures:** {}\n", doc.measures));
+            }
             if !s.examples.is_empty() {
+                out.push_str("  - **Examples:**\n");
                 for ex in s.examples.split("; ") {
                     if !ex.is_empty() {
-                        out.push_str(&format!("  - `{ex}`\n"));
+                        out.push_str(&format!("    - `{ex}`\n"));
                     }
                 }
             }
+            out.push('\n');
+        }
+    }
+
+    let passing: Vec<_> = passes
+        .iter()
+        .filter(|s| s.check != META_CHECK_ID)
+        .collect();
+    if !passing.is_empty() {
+        out.push_str("## Passing checks\n\n");
+        for s in passing {
+            let doc = check_doc(&s.check);
+            out.push_str(&format!(
+                "- **{} / {}** — {}\n",
+                s.table, s.check, doc.what
+            ));
         }
         out.push('\n');
     }
 
     let meta = summaries.iter().find(|s| s.check == META_CHECK_ID);
     if let Some(m) = meta {
-        out.push_str(&format!(
-            "## Meta ({})\n\n- {}\n",
-            m.check, m.detail
-        ));
+        let doc = check_doc(&m.check);
+        out.push_str(&format!("## Meta ({})\n\n", m.check));
+        out.push_str(&format!("- **What:** {}\n", doc.what));
+        if !doc.measures.is_empty() {
+            out.push_str(&format!("- **Measures:** {}\n", doc.measures));
+        }
+        out.push_str(&format!("- **Result:** {}\n", m.detail));
     }
 
     fs::write(path, out)?;
