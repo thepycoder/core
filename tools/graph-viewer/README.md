@@ -9,8 +9,11 @@ Build graph data first (from the `core` repo root):
 ```bash
 just build-identity
 just normalize-edges
+just enrich-external-persons   # optional: MISTRAL_API_TOKEN
 just build-graph
 ```
+
+`build-identity` writes Chamber MP tables and bootstraps `ExternalPerson` from all staging name fields (Q&A, dossier authors, org/role seeds). `normalize-edges` links staging rows to those identity tables.
 
 ## Environment
 
@@ -29,6 +32,8 @@ Open http://127.0.0.1:8765
 ## Features
 
 - Search entities by name, id, title, or body text (utterances, dossiers, documents)
+- Filter by `Person` (MPs only) or `ExternalPerson` (ministers, roles, org authors)
+- ExternalPerson inspector with LLM bio when `enrich-external-persons` has run
 - Inspector preview panel with metadata, excerpts, and source links per entity type
 - Filterable paginated link lists (search vote titles, question topics, etc.)
 - Vote breakdown with yes/no/abstain member lists (resolved persons are clickable)

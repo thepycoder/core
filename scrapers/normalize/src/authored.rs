@@ -3,8 +3,9 @@ use crate::common::{
 };
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use identity::actor_resolver::{ActorResolution, ActorResolver};
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
-use identity::resolver::{Bucket, Resolution, Resolver};
+use identity::resolver::Bucket;
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
@@ -14,6 +15,8 @@ use std::sync::Arc;
 pub struct AuthoredRow {
     pub authored_id: String,
     pub person_id: String,
+    pub entity_type: String,
+    pub entity_id: String,
     pub target_type: String,
     pub target_id: String,
     pub session_id: String,
@@ -37,7 +40,7 @@ fn is_government_author(name: &str) -> bool {
 
 pub fn normalize_authored(
     data_dir: &Path,
-    resolver: &Resolver,
+    actor_resolver: &ActorResolver,
 ) -> Result<AuthoredOutput, Box<dyn Error>> {
     let mut rows = Vec::new();
     let mut unresolved = Vec::new();
@@ -54,7 +57,7 @@ pub fn normalize_authored(
         for i in 0..batch.num_rows() {
             let target_id = format!("{}/{}", session_ids[i], dossier_ids[i]);
             ingest_authors(
-                resolver,
+                actor_resolver,
                 &authors[i],
                 "dossier",
                 &target_id,
@@ -79,7 +82,7 @@ pub fn normalize_authored(
 
         for i in 0..batch.num_rows() {
             ingest_authors(
-                resolver,
+                actor_resolver,
                 &authors[i],
                 "document",
                 &doc_ids[i],
@@ -98,16 +101,15 @@ pub fn normalize_authored(
         a.target_type
             .cmp(&b.target_type)
             .then(a.target_id.cmp(&b.target_id))
-            .then(a.person_id.cmp(&b.person_id))
+            .then(a.entity_id.cmp(&b.entity_id))
     });
     dedupe_unresolved(&mut unresolved);
-
     Ok(AuthoredOutput { rows, unresolved })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn ingest_authors(
-    resolver: &Resolver,
+    actor_resolver: &ActorResolver,
     authors_csv: &str,
     target_type: &str,
     target_id: &str,
@@ -123,14 +125,16 @@ fn ingest_authors(
         if is_government_author(&name) {
             continue;
         }
-        let detail = resolver.resolve_detail(&name, Bucket::Author);
+        let detail = actor_resolver.resolve_actor_detail(&name, Bucket::Author);
         match detail.resolution {
-            Resolution::Resolved(person_id) => {
+            ActorResolution::Person(person_id) => {
                 let key = (person_id.clone(), target_type.to_string(), target_id.to_string());
                 if seen.insert(key) {
                     rows.push(AuthoredRow {
                         authored_id: format!("{person_id}_{target_type}_{target_id}"),
-                        person_id,
+                        person_id: person_id.clone(),
+                        entity_type: "Person".to_string(),
+                        entity_id: person_id,
                         target_type: target_type.to_string(),
                         target_id: target_id.to_string(),
                         session_id: session_id.to_string(),
@@ -141,7 +145,25 @@ fn ingest_authors(
                     });
                 }
             }
-            Resolution::Unresolved(reason) => {
+            ActorResolution::ExternalPerson(ext_id) => {
+                let key = (ext_id.clone(), target_type.to_string(), target_id.to_string());
+                if seen.insert(key) {
+                    rows.push(AuthoredRow {
+                        authored_id: format!("{ext_id}_{target_type}_{target_id}"),
+                        person_id: String::new(),
+                        entity_type: "ExternalPerson".to_string(),
+                        entity_id: ext_id,
+                        target_type: target_type.to_string(),
+                        target_id: target_id.to_string(),
+                        session_id: session_id.to_string(),
+                        raw_name: name.clone(),
+                        source_url: source_url.to_string(),
+                        cache_path: cache_path.to_string(),
+                        confidence: "exact".to_string(),
+                    });
+                }
+            }
+            ActorResolution::Unresolved(reason) => {
                 unresolved.push(UnresolvedRow {
                     raw_name: detail.raw_name,
                     typo_corrected: detail.typo_corrected,
@@ -165,6 +187,8 @@ pub fn write_authored(path: &Path, rows: &[AuthoredRow]) -> Result<(), Box<dyn E
     let schema = Schema::new(vec![
         utf8_field("authored_id", false),
         utf8_field("person_id", false),
+        utf8_field("entity_type", false),
+        utf8_field("entity_id", false),
         utf8_field("target_type", false),
         utf8_field("target_id", false),
         utf8_field("session_id", false),
@@ -186,6 +210,8 @@ pub fn write_authored(path: &Path, rows: &[AuthoredRow]) -> Result<(), Box<dyn E
         vec![
             col!(|r| r.authored_id.clone()),
             col!(|r| r.person_id.clone()),
+            col!(|r| r.entity_type.clone()),
+            col!(|r| r.entity_id.clone()),
             col!(|r| r.target_type.clone()),
             col!(|r| r.target_id.clone()),
             col!(|r| r.session_id.clone()),

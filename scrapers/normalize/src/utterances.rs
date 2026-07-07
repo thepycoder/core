@@ -3,8 +3,9 @@ use crate::common::{
 };
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use identity::actor_resolver::{ActorResolution, ActorResolver};
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
-use identity::resolver::{Bucket, Resolution, Resolver};
+use identity::resolver::Bucket;
 use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ pub struct UtteranceRow {
     pub vote_id: String,
     pub raw_speaker: String,
     pub speaker_role: String,
+    pub speaker_entity_type: String,
+    pub speaker_entity_id: String,
     pub text: String,
     pub language: String,
     pub block_start: String,
@@ -54,7 +57,7 @@ fn skip_speaker(raw: &str, speaker_role: &str) -> bool {
 
 pub fn normalize_utterances(
     data_dir: &Path,
-    resolver: &Resolver,
+    actor_resolver: &ActorResolver,
 ) -> Result<UtteranceOutput, Box<dyn Error>> {
     let mut rows = Vec::new();
     let mut unresolved = Vec::new();
@@ -97,31 +100,44 @@ pub fn normalize_utterances(
             for i in 0..batch.num_rows() {
                 let speaker = raw_speakers[i].trim().to_string();
                 let role = speaker_roles[i].trim().to_string();
-                let (speaker_person_id, confidence) = if skip_speaker(&speaker, &role) {
-                    (String::new(), String::new())
-                } else {
-                    let detail = resolver.resolve_detail(&speaker, Bucket::Speaker);
-                    match detail.resolution {
-                        Resolution::Resolved(person_id) => (person_id, "exact".to_string()),
-                        Resolution::Unresolved(reason) => {
-                            unresolved.push(UnresolvedRow {
-                                raw_name: detail.raw_name,
-                                typo_corrected: detail.typo_corrected,
-                                norm_primary: detail.norm_primary,
-                                norm_reordered: detail.norm_reordered,
-                                reason: reason_label(&reason).to_string(),
-                                source_bucket: "speakers".to_string(),
-                                role: "speaker".to_string(),
-                                context_id: utterance_ids[i].clone(),
-                                context_label: format!("utterance {}", utterance_ids[i]),
-                                raw_field: speaker.clone(),
-                                source_url: source_urls[i].clone(),
-                                cache_path: cache_paths[i].clone(),
-                            });
-                            (String::new(), String::new())
+                let (speaker_person_id, speaker_entity_type, speaker_entity_id, confidence) =
+                    if skip_speaker(&speaker, &role) {
+                        (String::new(), String::new(), String::new(), String::new())
+                    } else {
+                        let detail =
+                            actor_resolver.resolve_actor_detail(&speaker, Bucket::Speaker);
+                        match detail.resolution {
+                            ActorResolution::Person(person_id) => (
+                                person_id.clone(),
+                                "Person".to_string(),
+                                person_id,
+                                "exact".to_string(),
+                            ),
+                            ActorResolution::ExternalPerson(ext_id) => (
+                                String::new(),
+                                "ExternalPerson".to_string(),
+                                ext_id,
+                                "exact".to_string(),
+                            ),
+                            ActorResolution::Unresolved(reason) => {
+                                unresolved.push(UnresolvedRow {
+                                    raw_name: detail.raw_name,
+                                    typo_corrected: detail.typo_corrected,
+                                    norm_primary: detail.norm_primary,
+                                    norm_reordered: detail.norm_reordered,
+                                    reason: reason_label(&reason).to_string(),
+                                    source_bucket: "speakers".to_string(),
+                                    role: "speaker".to_string(),
+                                    context_id: utterance_ids[i].clone(),
+                                    context_label: format!("utterance {}", utterance_ids[i]),
+                                    raw_field: speaker.clone(),
+                                    source_url: source_urls[i].clone(),
+                                    cache_path: cache_paths[i].clone(),
+                                });
+                                (String::new(), String::new(), String::new(), String::new())
+                            }
                         }
-                    }
-                };
+                    };
 
                 rows.push(UtteranceRow {
                     utterance_id: utterance_ids[i].clone(),
@@ -140,6 +156,8 @@ pub fn normalize_utterances(
                     vote_id: vote_ids[i].clone(),
                     raw_speaker: speaker,
                     speaker_role: role,
+                    speaker_entity_type,
+                    speaker_entity_id,
                     text: texts[i].clone(),
                     language: languages[i].clone(),
                     block_start: block_starts[i].clone(),
@@ -162,7 +180,6 @@ pub fn normalize_utterances(
             .then(a.utterance_id.cmp(&b.utterance_id))
     });
     dedupe_unresolved(&mut unresolved);
-
     Ok(UtteranceOutput { rows, unresolved })
 }
 
@@ -184,6 +201,8 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         utf8_field("vote_id", false),
         utf8_field("raw_speaker", false),
         utf8_field("speaker_role", false),
+        utf8_field("speaker_entity_type", false),
+        utf8_field("speaker_entity_id", false),
         utf8_field("text", false),
         utf8_field("language", false),
         utf8_field("block_start", false),
@@ -221,6 +240,8 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
             col!(|r| r.vote_id.clone()),
             col!(|r| r.raw_speaker.clone()),
             col!(|r| r.speaker_role.clone()),
+            col!(|r| r.speaker_entity_type.clone()),
+            col!(|r| r.speaker_entity_id.clone()),
             col!(|r| r.text.clone()),
             col!(|r| r.language.clone()),
             col!(|r| r.block_start.clone()),

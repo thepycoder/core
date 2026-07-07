@@ -450,15 +450,14 @@ async fn check_and_download_dossier_file(
                 let fetched = NaiveDate::parse_from_str(fetched_str, "%Y-%m-%d").ok();
                 let meeting = NaiveDate::parse_from_str(latest_meeting_date, "%Y-%m-%d").ok();
 
-                let within_a_week = match (fetched, meeting) {
-                    (Some(f), Some(m)) => (f - m).num_days().abs() < 7,
-                    _ => false,
-                };
-
                 // Skip if cached file post-dates the meeting AND the meeting
-                // was more than a week ago (dossier unlikely to still change)
-                if fetched_str >= latest_meeting_date && !within_a_week {
-                    return Ok(());
+                // was more than a week ago (dossier unlikely to still change).
+                // FLWB-only discoveries have no plenary meeting date — never skip on that basis.
+                if let (Some(fetched_date), Some(meeting_date)) = (fetched, meeting) {
+                    let within_a_week = (fetched_date - meeting_date).num_days().abs() < 7;
+                    if fetched_date >= meeting_date && !within_a_week {
+                        return Ok(());
+                    }
                 }
             }
             break;

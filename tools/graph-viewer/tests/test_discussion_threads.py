@@ -11,7 +11,7 @@ def conn():
 
 
 def test_question_thread_ordering(conn):
-    rows = fetch_question_thread(conn, "56_plenary_117_0")
+    rows = fetch_question_thread(conn, "56_plenary_91_13")
     if not rows:
         pytest.skip("normalized utterances not available for fixture question")
     seqs = [int(r["seq"]) for r in rows]

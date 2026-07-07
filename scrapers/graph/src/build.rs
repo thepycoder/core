@@ -108,6 +108,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     load_tagged_with_edges(data_dir, &mut add_node, &mut add_edge)?;
     load_authored_edges(data_dir, &mut add_edge)?;
     load_asked_edges(data_dir, &mut add_edge)?;
+    load_answered_edges(data_dir, &mut add_edge)?;
     load_holds_role_edges(data_dir, &mut add_edge)?;
     load_spoke_and_part_of_edges(data_dir, &mut add_edge)?;
 
@@ -177,6 +178,25 @@ fn load_identity_nodes(
         let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
             add_node("Commission", &ids[i], &names[i], &source_urls[i], &cache_paths[i]);
+        }
+    }
+
+    let external_path = identity.join("external_persons.parquet");
+    if external_path.exists() {
+        for batch in read_all_rows(&external_path)? {
+            let ids = read_string_column(&batch, "external_person_id")?;
+            let names = read_string_column(&batch, "display_name")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                add_node(
+                    "ExternalPerson",
+                    &ids[i],
+                    &names[i],
+                    &source_urls[i],
+                    &cache_paths[i],
+                );
+            }
         }
     }
 
@@ -498,12 +518,27 @@ fn load_authored_edges(
     }
     for batch in read_all_rows(&path)? {
         let person_ids = read_string_column(&batch, "person_id")?;
+        let entity_types = read_string_column(&batch, "entity_type")?;
+        let entity_ids = read_string_column(&batch, "entity_id")?;
         let target_types = read_string_column(&batch, "target_type")?;
         let target_ids = read_string_column(&batch, "target_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
         let confidences = read_string_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
+            let from_type = if !entity_types[i].is_empty() {
+                entity_types[i].clone()
+            } else {
+                "Person".to_string()
+            };
+            let from_id = if !entity_ids[i].is_empty() {
+                entity_ids[i].clone()
+            } else {
+                person_ids[i].clone()
+            };
+            if from_id.is_empty() {
+                continue;
+            }
             let to_type = match target_types[i].as_str() {
                 "dossier" => "Dossier",
                 "document" => "Document",
@@ -511,8 +546,8 @@ fn load_authored_edges(
             };
             add_edge(
                 "AUTHORED",
-                "Person",
-                &person_ids[i],
+                &from_type,
+                &from_id,
                 to_type,
                 &target_ids[i],
                 "",
@@ -544,6 +579,41 @@ fn load_asked_edges(
                 "ASKED",
                 "Person",
                 &person_ids[i],
+                "Question",
+                &question_ids[i],
+                "",
+                &source_urls[i],
+                &cache_paths[i],
+                &confidences[i],
+            );
+        }
+    }
+    Ok(())
+}
+
+fn load_answered_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+) -> Result<(), Box<dyn Error>> {
+    let path = data_dir.join("normalized/answered.parquet");
+    if !path.exists() {
+        return Ok(());
+    }
+    for batch in read_all_rows(&path)? {
+        let entity_types = read_string_column(&batch, "entity_type")?;
+        let entity_ids = read_string_column(&batch, "entity_id")?;
+        let question_ids = read_string_column(&batch, "question_id")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let confidences = read_string_column(&batch, "confidence")?;
+        for i in 0..batch.num_rows() {
+            if entity_ids[i].is_empty() {
+                continue;
+            }
+            add_edge(
+                "ANSWERED",
+                &entity_types[i],
+                &entity_ids[i],
                 "Question",
                 &question_ids[i],
                 "",
@@ -603,6 +673,8 @@ fn load_spoke_and_part_of_edges(
         let item_kinds = read_string_column(&batch, "item_kind")?;
         let item_ids = read_string_column(&batch, "item_id")?;
         let speaker_ids = read_string_column(&batch, "speaker_person_id")?;
+        let entity_types = read_string_column(&batch, "speaker_entity_type")?;
+        let entity_ids = read_string_column(&batch, "speaker_entity_id")?;
         let confidences = read_string_column(&batch, "confidence")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
@@ -635,19 +707,27 @@ fn load_spoke_and_part_of_edges(
                     "exact",
                 );
             }
-            if !speaker_ids[i].is_empty() {
-                add_edge(
-                    "SPOKE",
-                    "Person",
-                    &speaker_ids[i],
-                    "Utterance",
-                    &utterance_ids[i],
-                    "",
-                    &source_urls[i],
-                    &cache_paths[i],
-                    &confidences[i],
-                );
+            let (from_type, from_id) = if !entity_ids[i].is_empty() {
+                (entity_types[i].as_str(), entity_ids[i].as_str())
+            } else if !speaker_ids[i].is_empty() {
+                ("Person", speaker_ids[i].as_str())
+            } else {
+                continue;
+            };
+            if from_id.is_empty() {
+                continue;
             }
+            add_edge(
+                "SPOKE",
+                from_type,
+                from_id,
+                "Utterance",
+                &utterance_ids[i],
+                "",
+                &source_urls[i],
+                &cache_paths[i],
+                &confidences[i],
+            );
         }
     }
     Ok(())

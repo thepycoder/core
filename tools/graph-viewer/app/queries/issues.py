@@ -210,8 +210,71 @@ def fetch_issues(conn) -> IssuesResponse:
                 id="unresolved_summary",
                 severity="info",
                 count=unresolved_rows,
-                summary="Unresolved person names from normalization (grouped by bucket/reason)",
+                summary="Unresolved actor names (neither Person nor ExternalPerson)",
                 samples=samples,
+            )
+        )
+
+    external_on_mp_edges = conn.execute(
+        """
+        SELECT count(*) FROM edges
+        WHERE from_type = 'ExternalPerson'
+          AND edge_type IN ('MEMBER_OF', 'CAST', 'ASKED', 'HOLDS_ROLE')
+        """
+    ).fetchone()[0]
+    if external_on_mp_edges:
+        issues.append(
+            Issue(
+                id="external_on_mp_only_edges",
+                severity="error",
+                count=external_on_mp_edges,
+                summary="ExternalPerson appears on edges reserved for Chamber MPs",
+                samples=_rows_to_samples(
+                    conn.execute(
+                        """
+                        SELECT edge_type, from_id, to_type, to_id
+                        FROM edges
+                        WHERE from_type = 'ExternalPerson'
+                          AND edge_type IN ('MEMBER_OF', 'CAST', 'ASKED', 'HOLDS_ROLE')
+                        LIMIT 5
+                        """
+                    )
+                ),
+            )
+        )
+
+    orphan_external_from = conn.execute(
+        """
+        SELECT count(*)
+        FROM edges e
+        WHERE e.from_type = 'ExternalPerson'
+          AND NOT EXISTS (
+              SELECT 1 FROM nodes n
+              WHERE n.node_type = 'ExternalPerson' AND n.node_id = e.from_id
+          )
+        """
+    ).fetchone()[0]
+    if orphan_external_from:
+        issues.append(
+            Issue(
+                id="orphan_external_person",
+                severity="error",
+                count=orphan_external_from,
+                summary="Edges reference ExternalPerson ids missing from nodes",
+                samples=_rows_to_samples(
+                    conn.execute(
+                        """
+                        SELECT edge_type, from_id, to_id
+                        FROM edges e
+                        WHERE e.from_type = 'ExternalPerson'
+                          AND NOT EXISTS (
+                              SELECT 1 FROM nodes n
+                              WHERE n.node_type = 'ExternalPerson' AND n.node_id = e.from_id
+                          )
+                        LIMIT 5
+                        """
+                    )
+                ),
             )
         )
 
