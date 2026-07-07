@@ -70,11 +70,15 @@ pub fn is_institutional_label(raw: &str) -> bool {
         || lower.starts_with("commissions/commissies")
         || lower.starts_with("sénat/senaat")
         || lower.starts_with("senat/senaat")
+        || lower.contains("medewerker van de minister")
+        || lower.contains("medewerkster van de minister")
 }
 
 pub fn is_procedural_role(raw: &str) -> bool {
-    let lower = raw.trim().to_lowercase();
-    lower == "voorzitter" || lower == "le president" || lower == "la presidente"
+    matches!(
+        normalize_name(raw).as_str(),
+        "voorzitter" | "le president" | "la presidente"
+    )
 }
 
 pub fn institutional_external_id(raw: &str) -> Option<(&'static str, &'static str)> {
@@ -97,6 +101,9 @@ pub fn institutional_external_id(raw: &str) -> Option<(&'static str, &'static st
     if lower == "(auteur)" || lower.ends_with("(auteur)") {
         return Some(("ext:org:auteur", "(AUTEUR)"));
     }
+    if lower.contains("medewerker van de minister") || lower.contains("medewerkster van de minister") {
+        return Some(("ext:org:minister-staff", "Minister staff"));
+    }
     None
 }
 
@@ -110,9 +117,15 @@ pub fn procedural_external_id(raw: &str) -> Option<(&'static str, &'static str)>
 
 /// Strip trailing party suffix from author strings like "Johan Deckmyn VB".
 pub fn strip_party_suffix(raw: &str) -> String {
-    let parts: Vec<&str> = raw.trim().split_whitespace().collect();
+    let trimmed = raw.trim();
+    let without_broken_paren = regex::Regex::new(r"\s*\([^)]*$")
+        .unwrap()
+        .replace(trimmed, "")
+        .trim()
+        .to_string();
+    let parts: Vec<&str> = without_broken_paren.split_whitespace().collect();
     if parts.len() < 3 {
-        return raw.trim().to_string();
+        return without_broken_paren;
     }
     let last = parts[parts.len() - 1].to_lowercase();
     let last_two = format!("{} {}", parts[parts.len() - 2], parts[parts.len() - 1]).to_lowercase();
@@ -123,7 +136,7 @@ pub fn strip_party_suffix(raw: &str) -> String {
     if party_tokens.contains(&last.as_str()) || last_two == "open vld" || last_two == "les engagés" {
         return parts[..parts.len() - 1].join(" ");
     }
-    raw.trim().to_string()
+    without_broken_paren
 }
 
 pub fn slugify_name(name: &str) -> String {
@@ -186,4 +199,32 @@ pub fn alias_norms_for(raw: &str) -> Vec<String> {
         norms.push(reordered);
     }
     norms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn procedural_role_matches_accented_chair() {
+        assert!(is_procedural_role("Le président"));
+        assert!(is_procedural_role("La présidente"));
+        assert!(is_procedural_role("Voorzitter"));
+        assert!(!is_procedural_role("Jan Jambon"));
+    }
+
+    #[test]
+    fn institutional_label_matches_minister_staff() {
+        assert!(is_institutional_label("Medewerker van de minister"));
+        assert!(is_institutional_label("Medewerkster van de minister"));
+        assert!(!is_institutional_label("Jan Jambon"));
+    }
+
+    #[test]
+    fn strip_party_suffix_drops_broken_paren() {
+        assert_eq!(
+            strip_party_suffix("Stefaan Van Hecke  (Ecolo-Groen"),
+            "Stefaan Van Hecke"
+        );
+    }
 }

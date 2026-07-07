@@ -760,7 +760,9 @@ fn extract_question_data(question_text: &str) -> Result<QuestionData, Box<dyn Er
     let mut internal_ids = Vec::new();
 
     for capture in question_regex().captures_iter(question_text) {
-        let questioner = capture[1].trim().replace("- ", "").replace("de heer ", "");
+        let Some(questioner) = normalize_questioner_name(&capture[1]) else {
+            continue;
+        };
         let respondent = capture
             .get(2)
             .map(|m| m.as_str().trim().to_string())
@@ -782,6 +784,31 @@ fn extract_question_data(question_text: &str) -> Result<QuestionData, Box<dyn Er
         topics,
         internal_ids,
     })
+}
+
+/// Strip scrape artefacts from a captured questioner field.
+fn normalize_questioner_name(raw: &str) -> Option<String> {
+    let mut name = raw.trim().trim_start_matches('-').trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    static QUESTION_PREFIX: OnceLock<Regex> = OnceLock::new();
+    let prefix = QUESTION_PREFIX.get_or_init(|| {
+        Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap()
+    });
+    name = prefix.replace(&name, "").trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    name = name.replace("- ", "").replace("de heer ", "");
+    name = name.trim().trim_end_matches('-').trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    Some(name)
 }
 
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
@@ -944,5 +971,29 @@ mod tests {
         let (last, missing) = discover_last_from_probes(66, 2, exists);
         assert_eq!(last, 68);
         assert_eq!(missing, vec![67, 69, 70]);
+    }
+
+    #[test]
+    fn normalize_questioner_strips_subquestion_header() {
+        assert_eq!(
+            normalize_questioner_name("-Vraag van Xavier Dubois"),
+            Some("Xavier Dubois".to_string())
+        );
+        assert_eq!(
+            normalize_questioner_name("-Natalie Eggermont"),
+            Some("Natalie Eggermont".to_string())
+        );
+        assert_eq!(
+            normalize_questioner_name("Question de François De Smet"),
+            Some("François De Smet".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_question_data_parses_merged_subquestion_block() {
+        let text = "-Vraag van Xavier Dubois aan Bernard Quintin (Veiligheid) over \"test topic\" (56001234C)";
+        let data = extract_question_data(text).unwrap();
+        assert_eq!(data.questioners, vec!["Xavier Dubois".to_string()]);
+        assert_eq!(data.respondents, vec!["Bernard Quintin".to_string()]);
     }
 }

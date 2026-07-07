@@ -4,12 +4,57 @@ use std::sync::LazyLock;
 
 static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
+static LEADING_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:[\d•·\u2022]+\s*|[\-–\u2013]\s*)").unwrap()
+});
+
+static LEADING_TURN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\d{2}\.\d{2}\d?\s+").unwrap()
+});
+
+static COMMA_ROLE_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i),\s*(?:premier\s+ministre|prime\s+minister|ministre(?:\s+président)?|minister|staatssecretaris|secrétaire(?:\s+d[''']?[eé]tat)?|state\s+secretary).*$",
+    )
+    .unwrap()
+});
+
+static BROKEN_PARTY_PAREN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\([^)]*$").unwrap());
+
 static TITLE_PREFIX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)^(?:e\s+)?(?:e\s*)?erste\s+minister|(?:eerste\s+minister|ministre(?:\s+président)?|minister|staatssecretaris|de\s+heer|mevrouw|le\s+ministre|la\s+ministre|monsieur|madame)\s+",
     )
     .unwrap()
 });
+
+fn strip_leading_markers(raw: &str) -> String {
+    let mut out = raw.to_string();
+    loop {
+        let next = LEADING_MARKERS.replace(&out, "");
+        if next.len() == out.len() {
+            break;
+        }
+        out = next.into_owned();
+    }
+    out.trim().to_string()
+}
+
+fn normalize_apostrophes(raw: &str) -> String {
+    raw.replace('\u{2019}', "'").replace('\u{2018}', "'")
+}
+
+fn strip_leading_turn(raw: &str) -> String {
+    let mut out = raw.to_string();
+    loop {
+        let next = LEADING_TURN.replace(&out, "");
+        if next.len() == out.len() {
+            break;
+        }
+        out = next.into_owned();
+    }
+    out.trim().to_string()
+}
 
 /// Known misspellings scraped from plenary question headers (wrong -> correct).
 pub fn typo_corrections() -> HashMap<String, String> {
@@ -34,8 +79,19 @@ pub fn clean_raw_name(raw: &str) -> String {
     let collapsed = WHITESPACE
         .replace_all(raw.trim(), " ")
         .into_owned();
+    let apostrophe = normalize_apostrophes(&collapsed);
+    let no_turn = strip_leading_turn(&apostrophe);
+    let stripped = strip_leading_markers(&no_turn);
+    let no_comma_role = COMMA_ROLE_SUFFIX
+        .replace(&stripped, "")
+        .trim()
+        .to_string();
+    let no_broken_paren = BROKEN_PARTY_PAREN
+        .replace(&no_comma_role, "")
+        .trim()
+        .to_string();
     TITLE_PREFIX
-        .replace(&collapsed, "")
+        .replace(&no_broken_paren, "")
         .trim()
         .to_string()
 }
@@ -147,6 +203,56 @@ mod tests {
         );
         assert_eq!(clean_raw_name("De heer Jan Jambon"), "Jan Jambon");
         assert_eq!(clean_raw_name("Minister Georges Gilkinet"), "Georges Gilkinet");
+    }
+
+    #[test]
+    fn clean_raw_name_strips_leading_markers() {
+        assert_eq!(clean_raw_name("0     Steven Vandeput"), "Steven Vandeput");
+        assert_eq!(clean_raw_name("4  Minister  Jan Jambon"), "Jan Jambon");
+        assert_eq!(clean_raw_name("-Bert Wollants"), "Bert Wollants");
+        assert_eq!(clean_raw_name("- Bert Wollants"), "Bert Wollants");
+        assert_eq!(clean_raw_name("'t Hooft"), "'t Hooft");
+    }
+
+    #[test]
+    fn clean_raw_name_strips_comma_role_suffixes() {
+        assert_eq!(
+            clean_raw_name("Bart De Wever , premier ministre"),
+            "Bart De Wever"
+        );
+        assert_eq!(
+            clean_raw_name("Alexia Bertrand , secrétaire d'État"),
+            "Alexia Bertrand"
+        );
+        assert_eq!(
+            clean_raw_name("Nicole de Moor , secrétaire d'État"),
+            "Nicole de Moor"
+        );
+    }
+
+    #[test]
+    fn clean_raw_name_strips_turn_and_minister_prefix() {
+        assert_eq!(
+            clean_raw_name("01.03     Minister  Vanessa Matz"),
+            "Vanessa Matz"
+        );
+        assert_eq!(
+            clean_raw_name("07.05     Minister  Bernard Quintin"),
+            "Bernard Quintin"
+        );
+    }
+
+    #[test]
+    fn clean_raw_name_fixes_broken_party_and_apostrophe() {
+        assert_eq!(
+            clean_raw_name("Stefaan Van Hecke  (Ecolo-Groen"),
+            "Stefaan Van Hecke"
+        );
+        assert_eq!(clean_raw_name("Jan  Jambon"), "Jan Jambon");
+        assert_eq!(
+            clean_raw_name("Roberto D\u{2019}Amico"),
+            "Roberto D'Amico"
+        );
     }
 
     #[test]

@@ -53,7 +53,7 @@ fn turn_start_regex() -> &'static Regex {
     TURN_START.get_or_init(|| {
         Regex::new(
             r"(?xi)^\s*
-            (?P<turn>\d{2}\.\d{2})
+            (?P<turn>\d{2}\.\d{2}\d?)
             [\s\u00A0\u202F\u00AD]*
             (?P<label>[^:]+?)
             \s*:\s*
@@ -243,5 +243,118 @@ mod tests {
         let p = "Denis Ducarme, voorzitter: Collega's";
         let (start, _) = detect_turn_start(p).unwrap();
         assert!(matches!(start, TurnStart::NamedChair { .. }));
+    }
+
+    #[test]
+    fn intervention_turn_captures_full_marker() {
+        let p = "02.150 Steven Coenegrachts (Open Vld): Mijnheer de voorzitter";
+        let (start, _) = detect_turn_start(p).unwrap();
+        match start {
+            TurnStart::Numbered {
+                turn_number,
+                raw_label,
+            } => {
+                assert_eq!(turn_number, "02.150");
+                let parsed = parse_speaker_label(&raw_label, "general_debate");
+                assert_eq!(parsed.raw_speaker, "Steven Coenegrachts");
+            }
+            _ => panic!("expected numbered turn"),
+        }
+    }
+
+    #[test]
+    fn main_turn_without_intervention_digit() {
+        let p = "02.15 Stefaan Van Hecke (Groen): Mijnheer de voorzitter";
+        let (start, _) = detect_turn_start(p).unwrap();
+        match start {
+            TurnStart::Numbered {
+                turn_number,
+                raw_label,
+            } => {
+                assert_eq!(turn_number, "02.15");
+                let parsed = parse_speaker_label(&raw_label, "general_debate");
+                assert_eq!(parsed.raw_speaker, "Stefaan Van Hecke");
+            }
+            _ => panic!("expected numbered turn"),
+        }
+    }
+
+    #[test]
+    fn intervention_turn_02_110_not_digit_speaker() {
+        let p = "02.110 Steven Vandeput (N-VA): Mijnheer de voorzitter";
+        let (start, _) = detect_turn_start(p).unwrap();
+        match start {
+            TurnStart::Numbered {
+                turn_number,
+                raw_label,
+            } => {
+                assert_eq!(turn_number, "02.110");
+                let parsed = parse_speaker_label(&raw_label, "general_debate");
+                assert!(!parsed.raw_speaker.starts_with('0'));
+                assert_eq!(parsed.raw_speaker, "Steven Vandeput");
+            }
+            _ => panic!("expected numbered turn"),
+        }
+    }
+
+    #[test]
+    fn plenary_48_intervention_turns_fixture() {
+        use crate::meeting_report::extract_utterances_from_document;
+        use crate::report_blocks::read_report_html;
+        use scraper::Html;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/plenary/56-48.html");
+        if !path.exists() {
+            return;
+        }
+
+        let html = read_report_html(&path).unwrap();
+        let document = Html::parse_document(&html);
+        let utterances = extract_utterances_from_document(
+            &document,
+            crate::agenda_timeline::MeetingKind::Plenary,
+            56,
+            48,
+            "fixture",
+            path.to_string_lossy().as_ref(),
+        );
+
+        let coenegrachts: Vec<_> = utterances
+            .iter()
+            .filter(|u| u.raw_speaker.contains("Coenegrachts"))
+            .collect();
+        assert!(
+            coenegrachts
+                .iter()
+                .all(|u| !u.raw_speaker.chars().next().is_some_and(|c| c.is_ascii_digit())),
+            "Coenegrachts speakers should not have digit prefix: {:?}",
+            coenegrachts
+                .iter()
+                .map(|u| &u.raw_speaker)
+                .collect::<Vec<_>>()
+        );
+
+        let turn_02_15 = utterances
+            .iter()
+            .find(|u| u.turn_number == "02.15")
+            .map(|u| u.utterance_id.clone());
+        let turn_02_150 = utterances
+            .iter()
+            .find(|u| u.turn_number == "02.150")
+            .map(|u| u.utterance_id.clone());
+        if let (Some(id_15), Some(id_150)) = (turn_02_15, turn_02_150) {
+            assert_ne!(
+                id_15, id_150,
+                "intervention turn 02.150 must have distinct utterance_id from main turn 02.15"
+            );
+        }
+
+        let vandeput_110 = utterances
+            .iter()
+            .find(|u| u.turn_number == "02.110" && u.raw_speaker.contains("Vandeput"));
+        if let Some(u) = vandeput_110 {
+            assert_eq!(u.raw_speaker, "Steven Vandeput");
+        }
     }
 }

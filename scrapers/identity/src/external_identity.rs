@@ -6,6 +6,7 @@ use identity::external::{
     is_procedural_role, person_external_id, procedural_external_id, ExternalAliasRecord,
     ExternalContextRecord, ExternalKind, ExternalPersonRecord,
 };
+use identity::normalize::clean_raw_name;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::resolver::{Bucket, Resolution, Resolver};
 use std::collections::{HashMap, HashSet};
@@ -42,6 +43,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut candidates = Vec::new();
     seed_institutional_and_roles(&mut candidates);
     collect_from_questions(&root, &person_resolver, &mut candidates)?;
+    collect_from_utterances(&root, &person_resolver, &mut candidates)?;
     collect_from_dossiers(&root, &person_resolver, &mut candidates)?;
 
     let mut persons: HashMap<String, ExternalPersonRecord> = HashMap::new();
@@ -116,6 +118,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn seed_institutional_and_roles(candidates: &mut Vec<Candidate>) {
     let seeds = [
         ("Voorzitter", "speakers", "ext:role:voorzitter"),
+        ("Le président", "speakers", "ext:role:le-president"),
+        ("La présidente", "speakers", "ext:role:la-presidente"),
+        (
+            "Medewerker van de minister",
+            "speakers",
+            "ext:org:minister-staff",
+        ),
+        (
+            "Medewerkster van de minister",
+            "speakers",
+            "ext:org:minister-staff",
+        ),
         ("Greffe/Griffie (AUTEUR)", "authors", "ext:org:greffe-griffie"),
         ("Chambre/Kamer (AUTEUR)", "authors", "ext:org:chambre-kamer"),
         ("Commission/Commissie (AUTEUR)", "authors", "ext:org:commission-commissie"),
@@ -163,7 +177,7 @@ fn collect_from_questions(
             let respondents = read_string_column(&batch, "respondents")?;
             let topics_nl = read_string_column(&batch, "topics_nl")?;
             let topics_fr = read_string_column(&batch, "topics_fr")?;
-            let discussions = read_string_column(&batch, "discussion")?;
+            let questioners = read_string_column(&batch, "questioners")?;
             let source_urls = read_string_column(&batch, "source_url")?;
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
@@ -192,42 +206,84 @@ fn collect_from_questions(
                     }
                 }
 
-                if !discussions[i].trim().is_empty() {
-                    if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&discussions[i])
-                    {
-                        for entry in entries {
-                            let speaker = entry
-                                .get("speaker")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
-                            let text = entry
-                                .get("text")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            if should_add_external(resolver, &speaker, Bucket::Speaker) {
-                                let key = (speaker.clone(), "speakers".to_string());
-                                if seen.insert(key) {
-                                    candidates.push(Candidate {
-                                        raw_name: speaker,
-                                        bucket: "speakers".to_string(),
-                                        context_id: qid.clone(),
-                                        context_label: format!("question {qid}"),
-                                        meeting_id: meeting_ids[i].clone(),
-                                        meeting_kind: meeting_kind.to_string(),
-                                        meeting_date: String::new(),
-                                        question_id: qid.clone(),
-                                        topics_nl: topics_nl[i].clone(),
-                                        topics_fr: topics_fr[i].clone(),
-                                        utterance_excerpt: clip(&text, 500),
-                                        source_url: source_urls[i].clone(),
-                                        cache_path: cache_paths[i].clone(),
-                                    });
-                                }
-                            }
+                for name in split_csv(&questioners[i]) {
+                    let cleaned = clean_raw_name(&name);
+                    if cleaned.is_empty() {
+                        continue;
+                    }
+                    if should_add_external(resolver, &cleaned, Bucket::Questioner) {
+                        let key = (cleaned.clone(), "questioners".to_string());
+                        if seen.insert(key) {
+                            candidates.push(Candidate {
+                                raw_name: cleaned,
+                                bucket: "questioners".to_string(),
+                                context_id: qid.clone(),
+                                context_label: format!("question {qid}"),
+                                meeting_id: meeting_ids[i].clone(),
+                                meeting_kind: meeting_kind.to_string(),
+                                meeting_date: String::new(),
+                                question_id: qid.clone(),
+                                topics_nl: topics_nl[i].clone(),
+                                topics_fr: topics_fr[i].clone(),
+                                utterance_excerpt: String::new(),
+                                source_url: source_urls[i].clone(),
+                                cache_path: cache_paths[i].clone(),
+                            });
                         }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_from_utterances(
+    root: &Path,
+    resolver: &Resolver,
+    candidates: &mut Vec<Candidate>,
+) -> Result<(), Box<dyn Error>> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+
+    for (meeting_kind, rel) in [
+        ("plenary", "plenary/utterances.parquet"),
+        ("commission", "commission/utterances.parquet"),
+    ] {
+        let path = root.join(format!("sessions/{SESSION_ID}/{rel}"));
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let utterance_ids = read_string_column(&batch, "utterance_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let raw_speakers = read_string_column(&batch, "raw_speaker")?;
+            let texts = read_string_column(&batch, "text")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+
+            for i in 0..batch.num_rows() {
+                let speaker = clean_raw_name(&raw_speakers[i]);
+                if speaker.is_empty() {
+                    continue;
+                }
+                if should_add_external(resolver, &speaker, Bucket::Speaker) {
+                    let key = (speaker.clone(), "speakers".to_string());
+                    if seen.insert(key) {
+                        candidates.push(Candidate {
+                            raw_name: speaker,
+                            bucket: "speakers".to_string(),
+                            context_id: utterance_ids[i].clone(),
+                            context_label: format!("utterance {}", utterance_ids[i]),
+                            meeting_id: meeting_ids[i].clone(),
+                            meeting_kind: meeting_kind.to_string(),
+                            meeting_date: String::new(),
+                            question_id: String::new(),
+                            topics_nl: String::new(),
+                            topics_fr: String::new(),
+                            utterance_excerpt: clip(&texts[i], 500),
+                            source_url: source_urls[i].clone(),
+                            cache_path: cache_paths[i].clone(),
+                        });
                     }
                 }
             }
@@ -340,13 +396,14 @@ fn is_government_author(name: &str) -> bool {
 }
 
 fn should_add_external(resolver: &Resolver, raw: &str, bucket: Bucket) -> bool {
-    if raw.trim().is_empty() || raw.trim() == "N ." {
+    let trimmed = clean_raw_name(raw);
+    if trimmed.is_empty() || trimmed == "N ." {
         return false;
     }
-    if is_institutional_label(raw) || is_procedural_role(raw) {
+    if is_institutional_label(&trimmed) || is_procedural_role(&trimmed) {
         return true;
     }
-    !matches!(resolver.resolve_person(raw, bucket), Resolution::Resolved(_))
+    !matches!(resolver.resolve_person(&trimmed, bucket), Resolution::Resolved(_))
 }
 
 fn classify_and_id(raw: &str, bucket: &str) -> String {

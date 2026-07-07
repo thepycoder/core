@@ -3,6 +3,7 @@ pub mod authored;
 pub mod common;
 pub mod questions;
 pub mod roles;
+pub mod speaker_qa;
 pub mod utterances;
 pub mod vote_casts;
 

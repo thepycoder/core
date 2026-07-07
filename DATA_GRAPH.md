@@ -2,6 +2,8 @@
 
 Canonical model for Belgian Chamber (dekamer.be) data. Staging may stay Parquet/JSONL; this is the target graph.
 
+Interactive overview (Cursor Canvas): [`canvases/data-graph-overview.canvas.tsx`](canvases/data-graph-overview.canvas.tsx) — open beside the chat to explore nodes, edges, and implementation status.
+
 ## Data stack
 
 Decisions for anyone (human or LLM) extending this repo:
