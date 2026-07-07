@@ -44,7 +44,7 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 | `interests` | Declared interests |
 | `url` | Org URL from register |
 | `source_url` | Empty until live download is wired |
-| `cache_path` | e.g. `lobby/lobbyregister.html` |
+| `cache_path` | e.g. `lobby/lobbyregister.pdf` |
 
 ### `data/remunerations.parquet`
 
