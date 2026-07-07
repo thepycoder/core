@@ -53,7 +53,8 @@ def _fetch_utterances(conn, node_type: str, node_id: str) -> list[dict]:
         return []
     rows = conn.execute(
         """
-        SELECT utterance_id, seq, raw_speaker, speaker_person_id, text, confidence
+        SELECT utterance_id, seq, raw_speaker, speaker_person_id,
+               speaker_entity_type, speaker_entity_id, text, confidence
         FROM utterances
         WHERE question_id = ?
         ORDER BY cast(seq as integer), utterance_id
@@ -67,8 +68,10 @@ def _fetch_utterances(conn, node_type: str, node_id: str) -> list[dict]:
             "seq": row[1],
             "raw_speaker": row[2],
             "speaker_person_id": row[3],
-            "text": row[4],
-            "confidence": row[5],
+            "speaker_entity_type": row[4],
+            "speaker_entity_id": row[5],
+            "text": row[6],
+            "confidence": row[7],
         }
         for row in rows
     ]

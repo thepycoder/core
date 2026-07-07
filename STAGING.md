@@ -145,6 +145,18 @@ Written by summarizer binaries; schemas unchanged by Stage 0.
 
 **dossier-summarizer outputs:** `summary_hash`, `summary` or `arguments`, `model`, `dossier_id`, `source`, `created_at`
 
+## Identity (`data/identity/`)
+
+**persons.parquet:** `person_id`, `first_name`, `last_name`, `date_of_birth`, `place_of_birth`, `language`, `source_url`, `cache_path` — Chamber MPs only (cvview keys).
+
+**external_persons.parquet:** `external_person_id`, `display_name`, `kind`, `source`, `first_seen_bucket`, `source_url`, `cache_path` — non-MP actors (ministers, experts, Voorzitter, institutional authors).
+
+**external_person_aliases.parquet:** `alias_norm`, `external_person_id`, `source`, `confidence`
+
+**external_person_contexts.parquet:** `context_id`, `external_person_id`, `meeting_id`, `meeting_kind`, `meeting_date`, `question_id`, `question_topics_nl`, `question_topics_fr`, `utterance_excerpt`, `source_url`, `cache_path`, `raw_field` — LLM enrichment input.
+
+**external_person_bios.parquet:** `external_person_id`, `input_hash`, `bio_nl`, `bio_json`, `model`, `search_queries`, `created_at` — LLM output from `enrich-external-persons`.
+
 ## Sidecar files (not parquet)
 
 - `data/current_plenary_id.txt` — last known plenary meeting id (discovery only)

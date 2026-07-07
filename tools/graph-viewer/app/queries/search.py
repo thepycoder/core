@@ -36,6 +36,8 @@ def fetch_search(conn, q: str, node_type: str | None, limit: int) -> SearchRespo
         if node_type == "Person":
             results.extend(_search_unresolved(conn, tokens, limit))
             results.extend(_search_speakers(conn, tokens, limit))
+        if node_type == "ExternalPerson":
+            results.extend(_search_external_persons(conn, tokens, limit))
         results.extend(_search_content(conn, tokens, node_type, limit))
     else:
         results.extend(_search_nodes(conn, tokens, None, limit * 3))
@@ -193,6 +195,7 @@ def _search_speakers(conn, tokens: list[str], fetch_limit: int) -> list[SearchRe
         SELECT raw_speaker, count(*) AS mentions, min(question_id) AS sample_question_id
         FROM utterances
         WHERE speaker_person_id = ''
+          AND (speaker_entity_id IS NULL OR speaker_entity_id = '')
           AND {" AND ".join(where_parts)}
         GROUP BY raw_speaker
         ORDER BY mentions DESC, raw_speaker
@@ -219,6 +222,56 @@ def _search_speakers(conn, tokens: list[str], fetch_limit: int) -> list[SearchRe
                 context_type="Question",
                 context_id=row[2] or None,
                 context_label=f"question {row[2]}" if row[2] else None,
+            )
+        )
+    return results
+
+
+def _search_external_persons(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
+    try:
+        where_parts = []
+        params: list = []
+        for token in tokens:
+            where_parts.append("(display_name ILIKE ? OR external_person_id ILIKE ?)")
+            pattern = f"%{token}%"
+            params.extend([pattern, pattern])
+
+        rows = conn.execute(
+            f"""
+            SELECT external_person_id, display_name, kind
+            FROM external_persons
+            WHERE {" AND ".join(where_parts)}
+            LIMIT ?
+            """,
+            [*params, fetch_limit],
+        ).fetchall()
+    except Exception:
+        return []
+
+    results: list[SearchResult] = []
+    for row in rows:
+        score = _match_score(row[1] or "", row[0], tokens)
+        if score < 0:
+            continue
+        degree_out = conn.execute(
+            """
+            SELECT count(*) FROM edges
+            WHERE from_type = 'ExternalPerson' AND from_id = ?
+            """,
+            [row[0]],
+        ).fetchone()[0]
+        results.append(
+            SearchResult(
+                id=row[0],
+                type="ExternalPerson",
+                label=row[1] or row[0],
+                degree_in=0,
+                degree_out=degree_out,
+                source="external_person",
+                score=score + degree_out,
+                subtitle=row[2] or "external",
             )
         )
     return results

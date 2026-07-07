@@ -413,8 +413,10 @@ function renderUtterances(utterances) {
     const block = document.createElement("div");
     block.className = "utterance-block";
     const speaker = u.speaker_person_id
-      ? `${u.raw_speaker} → ${u.speaker_person_id}`
-      : u.raw_speaker;
+      ? `${u.raw_speaker} → Person ${u.speaker_person_id}`
+      : u.speaker_entity_id
+        ? `${u.raw_speaker} → ${u.speaker_entity_type} ${u.speaker_entity_id}`
+        : u.raw_speaker;
     block.innerHTML = `
       <div class="speaker">${escapeHtml(speaker)}</div>
       <div class="text">${escapeHtml(truncate(u.text, 1500))}</div>
@@ -431,13 +433,21 @@ function renderUtterances(utterances) {
       });
       block.appendChild(btn);
     }
-    if (!u.speaker_person_id && u.raw_speaker) {
+    if (!u.speaker_person_id && !u.speaker_entity_id && u.raw_speaker) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "link-action-btn";
       btn.textContent = "Trace speaker";
       btn.style.marginTop = "0.35rem";
       btn.addEventListener("click", () => showUnresolved(u.raw_speaker));
+      block.appendChild(btn);
+    } else if (u.speaker_entity_id && u.speaker_entity_type) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "link-action-btn";
+      btn.textContent = `Open ${u.speaker_entity_type}`;
+      btn.style.marginTop = "0.35rem";
+      btn.addEventListener("click", () => drillTo(u.speaker_entity_type, u.speaker_entity_id));
       block.appendChild(btn);
     }
     section.appendChild(block);

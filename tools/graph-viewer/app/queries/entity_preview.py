@@ -22,6 +22,7 @@ def fetch_entity_preview(
         "Dossier": _preview_dossier,
         "Vote": _preview_vote,
         "Person": _preview_person,
+        "ExternalPerson": _preview_external_person,
         "Meeting": _preview_meeting,
         "Topic": _preview_topic,
         "Party": _preview_party,
@@ -61,7 +62,8 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
     row = conn.execute(
         """
         SELECT question_id, session_id, meeting_id, meeting_kind, seq,
-               raw_speaker, speaker_person_id, text, confidence
+               raw_speaker, speaker_person_id, speaker_entity_type, speaker_entity_id,
+               text, confidence
         FROM utterances
         WHERE utterance_id = ?
         LIMIT 1
@@ -76,19 +78,23 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         _field("Question", row[0]),
         _field("Meeting", f"{row[3] or 'unknown'} {row[2]} (session {row[1]})"),
         _field("Sequence", row[4]),
-        _field("Confidence", row[8]),
+        _field("Confidence", row[10]),
     ]
     if row[6]:
         fields.append(_field("Person id", row[6]))
+    if row[8]:
+        fields.append(_field("Entity", f"{row[7]} → {row[8]}"))
 
     related: list[PreviewRelated] = []
     if row[0]:
         related.append(_related("Question", row[0], f"Question {row[0]}"))
+    if row[8] and row[7]:
+        related.append(_related(row[7], row[8], row[5] or row[8]))
 
     return EntityPreview(
         title=row[5] or node_id,
         fields=fields,
-        content=_clip(row[7], 5000),
+        content=_clip(row[9], 5000),
         content_label="Utterance text",
         related=related,
     )
@@ -461,6 +467,84 @@ def _preview_person(conn, node_id: str, settings: Settings) -> EntityPreview | N
 
     name = f"{first} {last}".strip() or node_id
     return EntityPreview(title=name, fields=fields)
+
+
+def _preview_external_person(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    ext_path = _pq(settings, "identity/external_persons.parquet")
+    if not ext_path:
+        return None
+
+    row = conn.execute(
+        f"""
+        SELECT display_name, kind, source, first_seen_bucket, source_url
+        FROM read_parquet('{ext_path}')
+        WHERE external_person_id = ?
+        LIMIT 1
+        """,
+        [node_id],
+    ).fetchone()
+    if not row:
+        return None
+
+    fields = [
+        _field("Kind", row[1]),
+        _field("Source", row[2]),
+        _field("First seen in", row[3]),
+    ]
+    if row[4]:
+        fields.append(_field("Source URL", row[4], link=row[4]))
+
+    alias_path = _pq(settings, "identity/external_person_aliases.parquet")
+    if alias_path:
+        aliases = conn.execute(
+            f"""
+            SELECT alias_norm FROM read_parquet('{alias_path}')
+            WHERE external_person_id = ?
+            LIMIT 10
+            """,
+            [node_id],
+        ).fetchall()
+        if aliases:
+            fields.append(_field("Aliases", ", ".join(a[0] for a in aliases)))
+
+    bio_content = None
+    bio_label = None
+    try:
+        bio_row = conn.execute(
+            """
+            SELECT bio_nl, bio_json, model, created_at
+            FROM external_person_bios
+            WHERE external_person_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            [node_id],
+        ).fetchone()
+        if bio_row:
+            bio_content = bio_row[0]
+            bio_label = f"Bio ({bio_row[2]}, {bio_row[3]})"
+            if bio_row[1]:
+                try:
+                    parsed = json.loads(bio_row[1])
+                    if parsed.get("holder_name"):
+                        fields.append(_field("Holder", parsed["holder_name"]))
+                    if parsed.get("role"):
+                        fields.append(_field("Role", parsed["role"]))
+                    if parsed.get("affiliation"):
+                        fields.append(_field("Affiliation", parsed["affiliation"]))
+                    if parsed.get("confidence"):
+                        fields.append(_field("Bio confidence", parsed["confidence"]))
+                except json.JSONDecodeError:
+                    pass
+    except Exception:
+        pass
+
+    return EntityPreview(
+        title=row[0] or node_id,
+        fields=fields,
+        content=bio_content,
+        content_label=bio_label,
+    )
 
 
 def _preview_meeting(conn, node_id: str, settings: Settings) -> EntityPreview | None:
