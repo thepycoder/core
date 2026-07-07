@@ -597,23 +597,44 @@ fn load_spoke_and_part_of_edges(
     }
     for batch in read_all_rows(&path)? {
         let utterance_ids = read_string_column(&batch, "utterance_id")?;
-        let question_ids = read_string_column(&batch, "question_id")?;
+        let session_ids = read_string_column(&batch, "session_id")?;
+        let meeting_ids = read_string_column(&batch, "meeting_id")?;
+        let meeting_kinds = read_string_column(&batch, "meeting_kind")?;
+        let item_kinds = read_string_column(&batch, "item_kind")?;
+        let item_ids = read_string_column(&batch, "item_id")?;
         let speaker_ids = read_string_column(&batch, "speaker_person_id")?;
         let confidences = read_string_column(&batch, "confidence")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
+            let meeting_node_id = format!(
+                "{}_{}_{}",
+                meeting_kinds[i], session_ids[i], meeting_ids[i]
+            );
             add_edge(
                 "PART_OF",
                 "Utterance",
                 &utterance_ids[i],
-                "Question",
-                &question_ids[i],
+                "Meeting",
+                &meeting_node_id,
                 "",
                 &source_urls[i],
                 &cache_paths[i],
                 "exact",
             );
+            if item_kinds[i] == "question" && !item_ids[i].is_empty() {
+                add_edge(
+                    "PART_OF",
+                    "Utterance",
+                    &utterance_ids[i],
+                    "Question",
+                    &item_ids[i],
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    "exact",
+                );
+            }
             if !speaker_ids[i].is_empty() {
                 add_edge(
                     "SPOKE",

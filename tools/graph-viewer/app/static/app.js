@@ -240,7 +240,7 @@ function renderNodeDetail(detail) {
   }
 
   if (detail.utterances?.length) {
-    el.appendChild(renderUtterances(detail.utterances));
+    el.appendChild(renderUtterances(detail.utterances, detail.utterance_section_title));
   }
 
   appendLinkSection(el, "Outgoing links", "out", detail.out_edges);
@@ -405,18 +405,21 @@ function renderVoteReconciliation(v) {
   return section;
 }
 
-function renderUtterances(utterances) {
+function renderUtterances(utterances, sectionTitle) {
   const section = document.createElement("div");
   section.className = "detail-section";
-  section.innerHTML = `<h3>Discussion (${utterances.length} utterances)</h3>`;
+  const title = sectionTitle || "Discussion";
+  section.innerHTML = `<h3>${escapeHtml(title)} (${utterances.length} utterances)</h3>`;
   for (const u of utterances) {
     const block = document.createElement("div");
     block.className = "utterance-block";
+    const turnPrefix = u.turn_number ? `${u.turn_number} · ` : "";
+    const roleSuffix = u.speaker_role ? ` (${u.speaker_role})` : "";
     const speaker = u.speaker_person_id
-      ? `${u.raw_speaker} → ${u.speaker_person_id}`
-      : u.raw_speaker;
+      ? `${u.raw_speaker}${roleSuffix} → ${u.speaker_person_id}`
+      : `${u.raw_speaker || "?"}${roleSuffix}`;
     block.innerHTML = `
-      <div class="speaker">${escapeHtml(speaker)}</div>
+      <div class="speaker">${escapeHtml(turnPrefix + speaker)}</div>
       <div class="text">${escapeHtml(truncate(u.text, 1500))}</div>
     `;
     if (u.text && u.text.length > 1500) {
@@ -480,7 +483,13 @@ function createLinkGroup(direction, group) {
   const search = document.createElement("input");
   search.type = "search";
   search.className = "link-search";
-  search.placeholder = `Filter by title, id, edge type…`;
+  const isSpokenFilter =
+    inspectorNode &&
+    (inspectorNode.type === "Person" || inspectorNode.type === "ExternalPerson") &&
+    group.edge_type === "SPOKE";
+  search.placeholder = isSpokenFilter
+    ? "Filter by id, speaker, or utterance text…"
+    : "Filter by title, id, edge type…";
   search.addEventListener("input", () => {
     clearTimeout(linkSearchTimers.get(listId));
     linkSearchTimers.set(

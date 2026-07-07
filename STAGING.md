@@ -85,7 +85,9 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 
 **meetings.parquet:** `session_id`, `meeting_id`, `date`, `time_of_day`, `start_time`, `end_time`, `source_url`, `cache_path`
 
-**questions.parquet:** `question_id`, `session_id`, `meeting_id`, `questioners`, `respondents`, `topics_nl`, `topics_fr`, `discussion` (JSON), `internal_ids`, `source_url`, `cache_path`
+**questions.parquet:** `question_id`, `session_id`, `meeting_id`, `questioners`, `respondents`, `topics_nl`, `topics_fr`, `internal_ids`, `source_url`, `cache_path`
+
+**utterances.parquet:** `utterance_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `turn_number`, `seq`, `item_kind`, `item_id`, `question_ids`, `dossier_id`, `document_id`, `motion_id`, `vote_id`, `raw_speaker`, `speaker_role`, `text`, `language`, `block_start`, `block_end`, `source_section`, `source_url`, `cache_path`
 
 **votes.parquet:** `vote_id`, `session_id`, `meeting_id`, `date`, `title_nl`, `title_fr`, `yes`, `no`, `abstain`, `members_yes`, `members_no`, `members_abstain`, `dossier_id`, `document_id`, `motion_id`, `source_url`, `cache_path`
 
@@ -100,6 +102,10 @@ Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{m
 **meetings.parquet:** `session_id`, `meeting_id`, `date`, `time_of_day`, `start_time`, `end_time`, `commission`, `chair`, `source_url`, `cache_path`
 
 **questions.parquet:** same columns as plenary questions (`internal_ids`, not `dossier_ids`)
+
+**utterances.parquet:** same columns as plenary utterances
+
+**meeting_gaps.parquet:** `meeting_id`, `reason` (`not_found` | `parse_failed`), `detail` — ids in `1..=last_meeting_id` with no scraped row; verify against dekamer.be
 
 Commission report URL pattern: `https://www.dekamer.be/doc/CCRI/html/{session}/ic{meeting:03}x.html`
 

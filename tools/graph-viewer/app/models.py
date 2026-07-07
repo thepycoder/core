@@ -158,6 +158,7 @@ class NodeDetailResponse(BaseModel):
     out_edges: list[EdgeGroup]
     preview: EntityPreview | None = None
     utterances: list[dict[str, Any]] = Field(default_factory=list)
+    utterance_section_title: str | None = None
     vote_reconciliation: dict[str, Any] | None = None
     vote_breakdown: VoteBreakdown | None = None
 

@@ -130,11 +130,27 @@ pub fn verify_staging(data_dir: &Path) -> Result<(), Box<dyn Error>> {
     if cols.contains("dossier_ids") {
         return Err("commission questions still has dossier_ids column; regenerate staging".into());
     }
+    if cols.contains("discussion") {
+        return Err("questions still has discussion column; regenerate staging".into());
+    }
     if !cols.contains("internal_ids") {
         return Err("commission questions missing internal_ids column".into());
     }
 
-    println!("[normalize] staging check: commission questions uses internal_ids (not dossier_ids)");
+    for (_kind, rel) in [
+        ("plenary", format!("sessions/{SESSION_ID}/plenary/utterances.parquet")),
+        (
+            "commission",
+            format!("sessions/{SESSION_ID}/commission/utterances.parquet"),
+        ),
+    ] {
+        let path = data_dir.join(rel);
+        if !path.exists() {
+            return Err(format!("missing staging utterances parquet: {}", path.display()).into());
+        }
+    }
+
+    println!("[normalize] staging check: questions without discussion; utterances.parquet present");
     Ok(())
 }
 

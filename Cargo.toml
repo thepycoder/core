@@ -2,6 +2,7 @@
 resolver = "2"
 
 members = [
+    "scrapers/crawl",
     "scrapers/sessions",
     "scrapers/members",
     "scrapers/lobby",

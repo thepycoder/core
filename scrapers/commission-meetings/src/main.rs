@@ -3,16 +3,19 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, relative_cache_path};
+use crawl::{
+    extract_utterances_from_document, read_report_html, write_utterances_parquet, MeetingKind,
+    UtteranceDraft,
+};
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{Html, Selector};
-use serde_json::json;
 use std::error::Error;
 use std::fmt;
-use std::fs::{File, read_to_string};
+use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use tokio::fs;
@@ -21,9 +24,6 @@ use tokio::fs;
 static QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
-static SPEAKER_REGEX: OnceLock<Regex> = OnceLock::new();
-static SPEAKER_NAME_REGEX: OnceLock<Regex> = OnceLock::new();
-static TITLES_REGEX: OnceLock<Regex> = OnceLock::new();
 static CHAIR_TITLES_REGEX: OnceLock<Regex> = OnceLock::new();
 static CHAIR_REGEX: OnceLock<Regex> = OnceLock::new();
 
@@ -42,18 +42,6 @@ fn time_regex() -> &'static Regex {
 
 fn date_regex() -> &'static Regex {
     DATE_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})").unwrap())
-}
-
-fn speaker_regex() -> &'static Regex {
-    SPEAKER_REGEX.get_or_init(|| Regex::new(r"(?m)(?:^|(?:NEWPARAGRAPH))[\n\r\s ]*(\d{2}\.\d{2})[\n\r\s ]+([^:]+):|(?:Le  président|De  voorzitter)\s*:").unwrap())
-}
-
-fn speaker_name_regex() -> &'static Regex {
-    SPEAKER_NAME_REGEX.get_or_init(|| Regex::new(r"^[^(,:\n\r]+").unwrap())
-}
-
-fn titles_regex() -> &'static Regex {
-    TITLES_REGEX.get_or_init(|| Regex::new(r"^(Minister|De heer|Mevrouw|Le ministre|La ministre|Monsieur|Madame|Eerste minister|Staatssecretaris)\s+").unwrap())
 }
 
 fn chair_titles_regex() -> &'static Regex {
@@ -106,7 +94,6 @@ struct ScrapedQuestion {
     respondents: String,
     topics_nl: String,
     topics_fr: String,
-    discussion: String,
     internal_ids: String,
     source_url: String,
     cache_path: String,
@@ -115,13 +102,51 @@ struct ScrapedQuestion {
 struct MeetingOutput {
     meeting: ScrapedMeeting,
     questions: Vec<ScrapedQuestion>,
+    utterances: Vec<UtteranceDraft>,
+}
+
+#[derive(Debug, Clone)]
+struct MeetingGap {
+    meeting_id: u32,
+    reason: String,
+    detail: String,
+}
+
+fn record_gap(gaps: &mut std::collections::BTreeMap<u32, MeetingGap>, gap: MeetingGap) {
+    gaps.entry(gap.meeting_id)
+        .or_insert(gap);
+}
+
+/// Scan forward from `start_id`, treating `exists(probe_id)` as whether the report is online.
+/// Stops after `max_consecutive_misses` consecutive missing ids.
+fn discover_last_from_probes(
+    start_id: u32,
+    max_consecutive_misses: u32,
+    mut exists: impl FnMut(u32) -> bool,
+) -> (u32, Vec<u32>) {
+    let mut last = start_id;
+    let mut consecutive_misses = 0u32;
+    let mut probe = start_id + 1;
+    let mut missing = Vec::new();
+
+    while consecutive_misses < max_consecutive_misses {
+        if exists(probe) {
+            last = probe;
+            consecutive_misses = 0;
+        } else {
+            missing.push(probe);
+            consecutive_misses += 1;
+        }
+        probe += 1;
+    }
+
+    (last, missing)
 }
 
 struct QuestionData {
     questioners: Vec<String>,
     respondents: Vec<String>,
     topics: Vec<String>,
-    discussion: String,
     internal_ids: Vec<String>,
 }
 
@@ -266,7 +291,6 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("respondents", DataType::Utf8, false),
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
-        Field::new("discussion", DataType::Utf8, false),
         Field::new("internal_ids", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
@@ -282,10 +306,26 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.respondents.clone()),
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
-            col!(rows, |q| q.discussion.clone()),
             col!(rows, |q| q.internal_ids.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
+        ],
+    )
+}
+
+fn write_gaps(path: &Path, gaps: &[MeetingGap]) -> Result<(), Box<dyn Error>> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("meeting_id", DataType::Utf8, false),
+        Field::new("reason", DataType::Utf8, false),
+        Field::new("detail", DataType::Utf8, false),
+    ]));
+    write_parquet(
+        path,
+        schema,
+        vec![
+            col!(gaps, |g| g.meeting_id.to_string()),
+            col!(gaps, |g| g.reason.clone()),
+            col!(gaps, |g| g.detail.clone()),
         ],
     )
 }
@@ -307,11 +347,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let current_meeting_id: u32 = std::fs::read_to_string(&meeting_id_path)?.trim().parse()?;
 
     let mut web_request_count = 0u32;
-    let last_meeting_id = discover_last_meeting_id(
+    let mut gaps = std::collections::BTreeMap::new();
+
+    eprintln!(
+        "[meetings-commission] fetching new reports after meeting {current_meeting_id}…"
+    );
+    let last_meeting_id = fetch_new_meetings(
         &client,
         session_id,
         current_meeting_id,
         &mut web_request_count,
+        &mut gaps,
     )
     .await?;
 
@@ -319,13 +365,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("[meetings-commission] no new meeting available to download");
     } else {
         println!(
-            "[meetings-commission] found new meetings up to {}",
+            "[meetings-commission] fetched new meetings up to {}",
             last_meeting_id
         );
     }
 
     let mut all_meetings = Vec::new();
     let mut all_questions = Vec::new();
+    let mut all_utterances = Vec::new();
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -336,26 +383,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );
 
-    meetings_pb.set_message(web_request_count.to_string());
+    meetings_pb.set_message("parsing".to_string());
 
     for meeting_id in 1..=last_meeting_id {
-        meetings_pb.set_message(format!("reqs={} meeting={}", web_request_count, meeting_id));
+        if gaps
+            .get(&meeting_id)
+            .is_some_and(|g| g.reason == "not_found")
+        {
+            meetings_pb.inc(1);
+            continue;
+        }
 
-        match scrape_meeting(&client, session_id, meeting_id, &mut web_request_count).await {
+        match parse_meeting(session_id, meeting_id) {
             Ok(output) => {
                 all_meetings.push(output.meeting);
                 all_questions.extend(output.questions);
+                all_utterances.extend(output.utterances);
             }
-            Err(_err) => {
-                // NOTE: Some meetings are empty and so fail to scrape.
-                // eprintln!(
-                //     "[meetings-commission] failed meeting {}: {}",
-                //     meeting_id, err
-                // );
+            Err(err) => {
+                record_gap(
+                    &mut gaps,
+                    MeetingGap {
+                        meeting_id,
+                        reason: "parse_failed".to_string(),
+                        detail: err.to_string(),
+                    },
+                );
             }
         }
 
-        meetings_pb.set_message(web_request_count.to_string());
         meetings_pb.inc(1);
     }
 
@@ -365,51 +421,119 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     write_meetings(&session_dir.join("meetings.parquet"), &all_meetings)?;
     write_questions(&session_dir.join("questions.parquet"), &all_questions)?;
+    write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
+
+    let gap_rows: Vec<MeetingGap> = gaps.into_values().collect();
+    write_gaps(&session_dir.join("meeting_gaps.parquet"), &gap_rows)?;
 
     println!(
-        "[meetings-commission] scraped {} meetings using {} web requests",
+        "[meetings-commission] scraped {} meetings using {} web requests ({} gaps recorded)",
         all_meetings.len(),
-        web_request_count
+        web_request_count,
+        gap_rows.len(),
     );
+    if !gap_rows.is_empty() {
+        let preview: Vec<String> = gap_rows
+            .iter()
+            .take(10)
+            .map(|g| format!("{} ({})", g.meeting_id, g.reason))
+            .collect();
+        println!(
+            "[meetings-commission] gaps: {}{}",
+            preview.join(", "),
+            if gap_rows.len() > 10 {
+                format!(" … +{} more", gap_rows.len() - 10)
+            } else {
+                String::new()
+            }
+        );
+    }
     Ok(())
 }
 
-async fn discover_last_meeting_id(
+async fn fetch_new_meetings(
     client: &ScrapingClient,
     session_id: u32,
     current_id: u32,
     web_request_count: &mut u32,
+    gaps: &mut std::collections::BTreeMap<u32, MeetingGap>,
 ) -> Result<u32, Box<dyn Error>> {
     let mut last = current_id;
-    let mut misses = 0;
-    loop {
-        let probe = last + 1;
-        let url = format!(
-            "https://www.dekamer.be/doc/CCRI/html/{}/ic{:03}x.html",
-            session_id, probe
-        );
-        let resp = client.get(&url).await?;
-        *web_request_count += 1;
-        if resp.status() == StatusCode::NOT_FOUND {
-            misses += 1;
-            // Allow up to 2 missing reports before giving up (commission IDs can have gaps).
-            if misses >= 2 {
-                break;
+    let mut consecutive_misses = 0u32;
+    let mut probe = current_id + 1;
+
+    while consecutive_misses < 2 {
+        match download_meeting(client, session_id, probe, web_request_count).await? {
+            DownloadOutcome::Saved => {
+                last = probe;
+                consecutive_misses = 0;
+                eprintln!("[meetings-commission] ic{probe:03} → downloaded (last={last})");
             }
-        } else {
-            last = probe;
-            misses = 0;
+            DownloadOutcome::AlreadyCached => {
+                last = probe;
+                consecutive_misses = 0;
+                eprintln!("[meetings-commission] ic{probe:03} → cached (last={last})");
+            }
+            DownloadOutcome::NotFound => {
+                record_gap(
+                    gaps,
+                    MeetingGap {
+                        meeting_id: probe,
+                        reason: "not_found".to_string(),
+                        detail: "HTTP 404".to_string(),
+                    },
+                );
+                consecutive_misses += 1;
+                eprintln!(
+                    "[meetings-commission] ic{probe:03} → 404 ({consecutive_misses}/2 consecutive misses)"
+                );
+            }
         }
+        probe += 1;
     }
+
     Ok(last)
 }
 
-async fn scrape_meeting(
+enum DownloadOutcome {
+    Saved,
+    AlreadyCached,
+    NotFound,
+}
+
+async fn download_meeting(
     client: &ScrapingClient,
     session_id: u32,
     meeting_id: u32,
     web_request_count: &mut u32,
-) -> Result<MeetingOutput, Box<dyn Error>> {
+) -> Result<DownloadOutcome, Box<dyn Error>> {
+    let filepath = cache_dir().join(format!(
+        "sessions/{}/meetings/commission/{}-{}.html",
+        session_id, session_id, meeting_id
+    ));
+    if filepath.exists() {
+        return Ok(DownloadOutcome::AlreadyCached);
+    }
+
+    let url = format!(
+        "https://www.dekamer.be/doc/CCRI/html/{}/ic{:03}x.html",
+        session_id, meeting_id
+    );
+    let response = client.get(&url).await?;
+    *web_request_count += 1;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(DownloadOutcome::NotFound);
+    }
+    let raw_bytes = response.bytes().await?;
+    let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
+    if let Some(parent) = filepath.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&filepath, decoded_str.as_ref())?;
+    Ok(DownloadOutcome::Saved)
+}
+
+fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<dyn Error>> {
     let filepath = cache_dir().join(format!(
         "sessions/{}/meetings/commission/{}-{}.html",
         session_id, session_id, meeting_id
@@ -420,18 +544,11 @@ async fn scrape_meeting(
     );
 
     if !filepath.exists() {
-        let response = client.get(&url).await?;
-        *web_request_count += 1;
-        let raw_bytes = response.bytes().await?;
-        let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
-        if let Some(parent) = filepath.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&filepath, decoded_str.as_ref())?;
+        return Err(format!("meeting {meeting_id} cache missing").into());
     }
 
     let cache_path = relative_cache_path(&filepath, &cache_dir());
-    let content = read_to_string(&filepath)?;
+    let content = read_report_html(&filepath)?;
     let document = Html::parse_document(&content);
 
     let date = extract_date_from_document(&document)?;
@@ -449,6 +566,15 @@ async fn scrape_meeting(
         &cache_path,
     )?;
 
+    let utterances = extract_utterances_from_document(
+        &document,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -463,6 +589,7 @@ async fn scrape_meeting(
             cache_path,
         },
         questions,
+        utterances,
     })
 }
 
@@ -476,23 +603,18 @@ fn extract_questions(
     let mut questions = Vec::new();
     let mut previous_nl = String::new();
     let mut previous_fr = String::new();
-    let mut previous_discussion = String::new();
     let mut question_seq: i32 = 0;
 
     // Commission reports always contain questions from the start; no section header needed.
     let french_indicators = ["questions jointes", "question de"];
     let dutch_indicators = ["samengevoegde vragen", "toegevoegde vragen", "vraag van"];
 
-    let flush = |seq: i32,
-                 nl: &str,
-                 fr: &str,
-                 discussion: &str|
-     -> Result<Option<ScrapedQuestion>, Box<dyn Error>> {
+    let flush = |seq: i32, nl: &str, fr: &str| -> Result<Option<ScrapedQuestion>, Box<dyn Error>> {
         if nl.is_empty() && fr.is_empty() {
             return Ok(None);
         }
-        let data_nl = extract_question_data(nl, discussion)?;
-        let data_fr = extract_question_data(fr, discussion)?;
+        let data_nl = extract_question_data(nl)?;
+        let data_fr = extract_question_data(fr)?;
         Ok(Some(ScrapedQuestion {
             question_id: composite_scoped_id(session_id, "commission", meeting_id, seq),
             session_id,
@@ -501,7 +623,6 @@ fn extract_questions(
             respondents: data_nl.respondents.join(","),
             topics_nl: data_nl.topics.join(";"),
             topics_fr: data_fr.topics.join(";"),
-            discussion: data_nl.discussion,
             internal_ids: data_nl.internal_ids.join(","),
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
@@ -562,19 +683,13 @@ fn extract_questions(
                 // Flush any pending question that came before this hearing,
                 // then reset state so the hearing's discussion doesn't bleed in.
                 if !previous_nl.is_empty() && !previous_fr.is_empty() {
-                    if let Some(q) = flush(
-                        question_seq,
-                        &previous_nl,
-                        &previous_fr,
-                        &previous_discussion,
-                    )? {
+                    if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
                         questions.push(q);
                         question_seq += 1;
                     }
                 }
                 previous_nl.clear();
                 previous_fr.clear();
-                previous_discussion.clear();
                 continue;
             }
 
@@ -593,16 +708,10 @@ fn extract_questions(
 
             if is_group_start || is_single {
                 if !previous_nl.is_empty() && !previous_fr.is_empty() {
-                    if let Some(q) = flush(
-                        question_seq,
-                        &previous_nl,
-                        &previous_fr,
-                        &previous_discussion,
-                    )? {
+                    if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
                         questions.push(q);
                         question_seq += 1;
                     }
-                    previous_discussion.clear();
                     previous_nl.clear();
                     previous_fr.clear();
                 }
@@ -625,27 +734,18 @@ fn extract_questions(
         }
 
         if tag == "p" {
-            let text = element
+            let _text = element
                 .text()
                 .collect::<Vec<_>>()
                 .join(" ")
                 .trim()
                 .to_string();
-            if !text.is_empty() {
-                previous_discussion.push_str(&clean_text(&text));
-                previous_discussion.push_str("NEWPARAGRAPH");
-            }
         }
     }
 
     // Flush the last question.
     if !previous_nl.is_empty() && !previous_fr.is_empty() {
-        if let Some(q) = flush(
-            question_seq,
-            &previous_nl,
-            &previous_fr,
-            &previous_discussion,
-        )? {
+        if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
             questions.push(q);
         }
     }
@@ -653,10 +753,7 @@ fn extract_questions(
     Ok(questions)
 }
 
-fn extract_question_data(
-    question_text: &str,
-    discussion_text: &str,
-) -> Result<QuestionData, Box<dyn Error>> {
+fn extract_question_data(question_text: &str) -> Result<QuestionData, Box<dyn Error>> {
     let mut questioners = Vec::new();
     let mut topics = Vec::new();
     let mut respondents = Vec::new();
@@ -683,64 +780,8 @@ fn extract_question_data(
         questioners,
         respondents,
         topics,
-        discussion: get_discussion_json(discussion_text),
         internal_ids,
     })
-}
-
-fn get_discussion_json(input: &str) -> String {
-    let cleaned_input = clean_text(input);
-    // NOTE: The timestamp regex anchors on NEWPARAGRAPH / line-start to avoid false-positives
-    // on times that appear mid-sentence (e.g. "na 20.00 uur").
-
-    let mut discussion = Vec::new();
-    let mut current_speaker = String::new();
-    let mut last_end = 0;
-
-    for cap in speaker_regex().captures_iter(&cleaned_input) {
-        let match_start = cap.get(0).unwrap().start();
-        let text_segment = cleaned_input[last_end..match_start].trim();
-
-        if !current_speaker.is_empty() && !text_segment.is_empty() {
-            let clean_segment = text_segment
-                .replace("Het incident is gesloten.", "")
-                .replace("L'incident est clos.", "")
-                .trim()
-                .to_string();
-            if !clean_segment.is_empty() {
-                discussion
-                    .push(json!({ "speaker": current_speaker.trim(), "text": clean_segment }));
-            }
-        }
-
-        current_speaker = if let Some(full_speaker) = cap.get(2) {
-            let stripped = titles_regex()
-                .replace(full_speaker.as_str().trim(), "")
-                .to_string();
-            speaker_name_regex()
-                .captures(&stripped)
-                .and_then(|c| c.get(0))
-                .map_or("Onbekend".to_string(), |m| m.as_str().to_string())
-        } else {
-            "Voorzitter".to_string()
-        };
-
-        last_end = cap.get(0).unwrap().end();
-    }
-
-    if !current_speaker.is_empty() && last_end < cleaned_input.len() {
-        let clean_segment = cleaned_input[last_end..]
-            .replace("Het incident is gesloten.", "")
-            .replace("L'incident est clos.", "")
-            .replace("NEWPARAGRAPH", "\n")
-            .trim()
-            .to_string();
-        if !clean_segment.is_empty() {
-            discussion.push(json!({ "speaker": current_speaker.trim(), "text": clean_segment }));
-        }
-    }
-
-    serde_json::to_string_pretty(&discussion).unwrap()
 }
 
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
@@ -883,4 +924,25 @@ fn extract_commission_from_document(document: &Html) -> Result<String, Box<dyn E
         .join(" ");
 
     Ok(parse_commission_type(&raw).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discover_skips_gap_and_continues() {
+        let exists = |id: u32| id != 67 && id <= 70;
+        let (last, missing) = discover_last_from_probes(66, 2, exists);
+        assert_eq!(last, 70);
+        assert_eq!(missing, vec![67, 71, 72]);
+    }
+
+    #[test]
+    fn discover_stops_after_two_consecutive_misses() {
+        let exists = |id: u32| id == 68;
+        let (last, missing) = discover_last_from_probes(66, 2, exists);
+        assert_eq!(last, 68);
+        assert_eq!(missing, vec![67, 69, 70]);
+    }
 }

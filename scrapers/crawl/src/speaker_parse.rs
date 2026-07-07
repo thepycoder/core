@@ -1,0 +1,247 @@
+use regex::Regex;
+use std::sync::OnceLock;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpeakerRole {
+    Mp,
+    Minister,
+    Chair,
+    External,
+    Unknown,
+}
+
+impl SpeakerRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SpeakerRole::Mp => "mp",
+            SpeakerRole::Minister => "minister",
+            SpeakerRole::Chair => "chair",
+            SpeakerRole::External => "external",
+            SpeakerRole::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TurnStart {
+    Numbered {
+        turn_number: String,
+        raw_label: String,
+    },
+    GenericChair,
+    NamedChair {
+        raw_name: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedSpeaker {
+    pub raw_speaker: String,
+    pub speaker_role: SpeakerRole,
+    pub party: Option<String>,
+}
+
+static TURN_START: OnceLock<Regex> = OnceLock::new();
+static CHAIR_GENERIC: OnceLock<Regex> = OnceLock::new();
+static CHAIR_NAMED: OnceLock<Regex> = OnceLock::new();
+static TITLES_PREFIX: OnceLock<Regex> = OnceLock::new();
+static ROLE_SUFFIX: OnceLock<Regex> = OnceLock::new();
+static PARTY_SUFFIX: OnceLock<Regex> = OnceLock::new();
+static ARTICLE_FP: OnceLock<Regex> = OnceLock::new();
+
+fn turn_start_regex() -> &'static Regex {
+    TURN_START.get_or_init(|| {
+        Regex::new(
+            r"(?xi)^\s*
+            (?P<turn>\d{2}\.\d{2})
+            [\s\u00A0\u202F\u00AD]*
+            (?P<label>[^:]+?)
+            \s*:\s*
+            ",
+        )
+        .unwrap()
+    })
+}
+
+fn chair_generic_regex() -> &'static Regex {
+    CHAIR_GENERIC.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(?:De\s+voorzitter|Le\s+président)\s*:\s*").unwrap()
+    })
+}
+
+fn chair_named_regex() -> &'static Regex {
+    CHAIR_NAMED.get_or_init(|| {
+        Regex::new(
+            r"(?i)^\s*(?P<name>[^:\n]{3,80}),\s*(?:voorzitter|président|president)\s*:\s*",
+        )
+        .unwrap()
+    })
+}
+
+fn titles_prefix_regex() -> &'static Regex {
+    TITLES_PREFIX.get_or_init(|| {
+        Regex::new(
+            r"(?i)^(Minister|De heer|Mevrouw|Le ministre|La ministre|Monsieur|Madame|Eerste minister|Staatssecretaris)\s+",
+        )
+        .unwrap()
+    })
+}
+
+fn role_suffix_regex() -> &'static Regex {
+    ROLE_SUFFIX.get_or_init(|| {
+        Regex::new(
+            r"(?i),\s*(?:ministre|minister|staatssecretaris|rapporteur)(?:\s+[^,]+)?$",
+        )
+        .unwrap()
+    })
+}
+
+fn party_suffix_regex() -> &'static Regex {
+    PARTY_SUFFIX.get_or_init(|| Regex::new(r"\(([^)]+)\)\s*$").unwrap())
+}
+
+fn article_fp_regex() -> &'static Regex {
+    ARTICLE_FP.get_or_init(|| Regex::new(r"(?i)(?:artikel|article|articles|artikelen)").unwrap())
+}
+
+pub fn detect_turn_start(paragraph: &str) -> Option<(TurnStart, usize)> {
+    let trimmed = paragraph.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let prefix: String = trimmed.chars().take(120).collect();
+    if article_fp_regex().is_match(&prefix) {
+        if turn_start_regex().find(trimmed).is_none() {
+            return None;
+        }
+    }
+
+    if let Some(cap) = turn_start_regex().captures(trimmed) {
+        let full = cap.get(0).unwrap();
+        return Some((
+            TurnStart::Numbered {
+                turn_number: cap["turn"].to_string(),
+                raw_label: cap["label"].trim().to_string(),
+            },
+            full.end(),
+        ));
+    }
+
+    if let Some(cap) = chair_generic_regex().find(trimmed) {
+        return Some((TurnStart::GenericChair, cap.end()));
+    }
+
+    if let Some(cap) = chair_named_regex().captures(trimmed) {
+        let full = cap.get(0).unwrap();
+        return Some((
+            TurnStart::NamedChair {
+                raw_name: cap["name"].trim().to_string(),
+            },
+            full.end(),
+        ));
+    }
+
+    None
+}
+
+pub fn parse_speaker_label(raw_label: &str, item_kind: &str) -> ParsedSpeaker {
+    let mut label = raw_label.trim().to_string();
+    label = titles_prefix_regex().replace(&label, "").trim().to_string();
+
+    let party = party_suffix_regex()
+        .captures(&label)
+        .map(|c| c[1].trim().to_string());
+    if party.is_some() {
+        label = party_suffix_regex().replace(&label, "").trim().to_string();
+    }
+
+    let role_from_suffix = role_suffix_regex().is_match(&label);
+    label = role_suffix_regex().replace(&label, "").trim().to_string();
+
+    let speaker_role = if role_from_suffix
+        || label.to_lowercase().contains("minist")
+        || label.to_lowercase().contains("staatssecretaris")
+    {
+        SpeakerRole::Minister
+    } else if party.is_some() {
+        SpeakerRole::Mp
+    } else if item_kind == "hearing" {
+        SpeakerRole::External
+    } else {
+        SpeakerRole::Unknown
+    };
+
+    ParsedSpeaker {
+        raw_speaker: if label.is_empty() {
+            raw_label.trim().to_string()
+        } else {
+            label
+        },
+        speaker_role,
+        party,
+    }
+}
+
+pub fn parse_turn_start(start: &TurnStart, item_kind: &str) -> (String, SpeakerRole) {
+    match start {
+        TurnStart::Numbered { raw_label, .. } => {
+            let parsed = parse_speaker_label(raw_label, item_kind);
+            (parsed.raw_speaker, parsed.speaker_role)
+        }
+        TurnStart::GenericChair => ("Voorzitter".to_string(), SpeakerRole::Chair),
+        TurnStart::NamedChair { raw_name } => (raw_name.clone(), SpeakerRole::Chair),
+    }
+}
+
+pub fn language_from_class(class: Option<&str>) -> String {
+    match class.unwrap_or("") {
+        c if c.contains("FR") || c == "NormalFR" || c == "italFR" => "FR".to_string(),
+        _ => "NL".to_string(),
+    }
+}
+
+pub fn count_source_markers(blocks: &[crate::report_blocks::ReportBlock]) -> (usize, usize) {
+    use crate::report_blocks::BlockTag;
+
+    let mut turns = 0usize;
+    let mut chairs = 0usize;
+    for block in blocks {
+        if block.tag != BlockTag::P {
+            continue;
+        }
+        let Some((start, _)) = detect_turn_start(&block.text) else {
+            continue;
+        };
+        match start {
+            TurnStart::Numbered { .. } => turns += 1,
+            TurnStart::GenericChair | TurnStart::NamedChair { .. } => chairs += 1,
+        }
+    }
+    (turns, chairs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_nbsp_turn() {
+        let p = "01.01\u{00a0}Annick Ponthier (VB): Mijnheer de voorzitter";
+        let (start, _) = detect_turn_start(p).unwrap();
+        assert!(matches!(start, TurnStart::Numbered { .. }));
+    }
+
+    #[test]
+    fn detects_empty_colon_turn() {
+        let p = "02.44\u{00a0}Greet Daems (PVDA-PTB):";
+        assert!(detect_turn_start(p).is_some());
+    }
+
+    #[test]
+    fn detects_named_chair() {
+        let p = "Denis Ducarme, voorzitter: Collega's";
+        let (start, _) = detect_turn_start(p).unwrap();
+        assert!(matches!(start, TurnStart::NamedChair { .. }));
+    }
+}

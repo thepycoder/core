@@ -3,6 +3,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
+use crawl::{
+    extract_utterances_from_document, write_utterances_parquet, MeetingKind, UtteranceDraft,
+};
 use identity::convert_name;
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -10,7 +13,6 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
-use serde_json::json;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::{File, read_to_string};
@@ -24,9 +26,6 @@ static PARAGRAPH_VOTE_SECTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
-static SPEAKER_REGEX: OnceLock<Regex> = OnceLock::new();
-static SPEAKER_NAME_REGEX: OnceLock<Regex> = OnceLock::new();
-static TITLES_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_TOPIC_REGEX: OnceLock<Regex> = OnceLock::new();
 static VOTE_REGEX_1: OnceLock<Regex> = OnceLock::new();
@@ -56,18 +55,6 @@ fn time_regex() -> &'static Regex {
 
 fn date_regex() -> &'static Regex {
     DATE_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})").unwrap())
-}
-
-fn speaker_regex() -> &'static Regex {
-    SPEAKER_REGEX.get_or_init(|| Regex::new(r"(?m)(?:^|(?:NEWPARAGRAPH))[\n\r\s ]*(\d{2}\.\d{2})[\n\r\s ]+([^:]+):|(?:Le  président|De  voorzitter)\s*:").unwrap())
-}
-
-fn speaker_name_regex() -> &'static Regex {
-    SPEAKER_NAME_REGEX.get_or_init(|| Regex::new(r"^[^(,:\n\r]+").unwrap())
-}
-
-fn titles_regex() -> &'static Regex {
-    TITLES_REGEX.get_or_init(|| Regex::new(r"^(Minister|De heer|Mevrouw|Le ministre|La ministre|Monsieur|Madame|Eerste minister|Staatssecretaris)\s+").unwrap())
 }
 
 fn proposition_regex() -> &'static Regex {
@@ -161,7 +148,6 @@ struct ScrapedQuestion {
     respondents: String,
     topics_nl: String,
     topics_fr: String,
-    discussion: String,
     internal_ids: String,
     source_url: String,
     cache_path: String,
@@ -195,13 +181,13 @@ struct MeetingOutput {
     propositions: Vec<ScrapedProposition>,
     votes: Vec<ScrapedVote>,
     notices: Vec<ScrapedNotice>,
+    utterances: Vec<UtteranceDraft>,
 }
 
 struct QuestionData {
     questioners: Vec<String>,
     respondents: Vec<String>,
     topics: Vec<String>,
-    discussion: String,
     internal_ids: Vec<String>,
 }
 
@@ -211,7 +197,6 @@ impl Default for QuestionData {
             questioners: Vec::new(),
             respondents: Vec::new(),
             topics: Vec::new(),
-            discussion: String::new(),
             internal_ids: Vec::new(),
         }
     }
@@ -291,7 +276,6 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("respondents", DataType::Utf8, false),
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
-        Field::new("discussion", DataType::Utf8, false),
         Field::new("internal_ids", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
@@ -307,7 +291,6 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.respondents.clone()),
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
-            col!(rows, |q| q.discussion.clone()),
             col!(rows, |q| q.internal_ids.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
@@ -453,6 +436,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_propositions = Vec::new();
     let mut all_notices = Vec::new();
     let mut all_votes = Vec::new();
+    let mut all_utterances = Vec::new();
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -486,6 +470,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_propositions.extend(output.propositions);
                 all_notices.extend(output.notices);
                 all_votes.extend(output.votes);
+                all_utterances.extend(output.utterances);
             }
             Err(err) => {
                 eprintln!("[meetings-plenary] failed meeting {}: {}", meeting_id, err);
@@ -514,6 +499,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     write_propositions(&session_dir.join("propositions.parquet"), &all_propositions)?;
     write_notices(&session_dir.join("notices.parquet"), &all_notices)?;
     write_votes(&session_dir.join("votes.parquet"), &all_votes)?;
+    write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
 
     println!(
         "[meetings-plenary] scraped {} meetings using {} web requests",
@@ -637,6 +623,15 @@ async fn scrape_meeting(
     )
     .await?;
 
+    let utterances = extract_utterances_from_document(
+        &document,
+        MeetingKind::Plenary,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -652,6 +647,7 @@ async fn scrape_meeting(
         propositions,
         notices,
         votes,
+        utterances,
     })
 }
 
@@ -666,7 +662,6 @@ async fn extract_questions(
     let mut questions = Vec::new();
     let mut previous_nl = String::new();
     let mut previous_fr = String::new();
-    let mut previous_discussion = String::new();
     let mut question_seq: i32 = 0;
     let mut found_questions_section = false;
     let mut processing = false;
@@ -674,14 +669,13 @@ async fn extract_questions(
     let flush_question = |seq: i32,
                           nl: &str,
                           fr: &str,
-                          discussion: &str,
                           typo_map: &HashMap<String, String>|
      -> Result<Option<ScrapedQuestion>, Box<dyn Error>> {
         if nl.is_empty() && fr.is_empty() {
             return Ok(None);
         }
-        let data_nl = extract_question_data(typo_map, nl, discussion)?;
-        let data_fr = extract_question_data(typo_map, fr, discussion)?;
+        let data_nl = extract_question_data(typo_map, nl)?;
+        let data_fr = extract_question_data(typo_map, fr)?;
         Ok(Some(ScrapedQuestion {
             question_id: composite_scoped_id(session_id, "plenary", meeting_id, seq),
             session_id,
@@ -690,7 +684,6 @@ async fn extract_questions(
             respondents: data_nl.respondents.join(","),
             topics_nl: data_nl.topics.join(";"),
             topics_fr: data_fr.topics.join(";"),
-            discussion: data_nl.discussion,
             internal_ids: data_nl.internal_ids.join(","),
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
@@ -729,7 +722,6 @@ async fn extract_questions(
                     question_seq,
                     &previous_nl,
                     &previous_fr,
-                    &previous_discussion,
                     typo_map,
                 )? {
                     questions.push(q);
@@ -765,7 +757,6 @@ async fn extract_questions(
                     question_seq,
                     &previous_nl,
                     &previous_fr,
-                    &previous_discussion,
                     typo_map,
                 )? {
                     questions.push(q);
@@ -779,13 +770,11 @@ async fn extract_questions(
                         question_seq,
                         &previous_nl,
                         &previous_fr,
-                        &previous_discussion,
                         typo_map,
                     )? {
                         questions.push(q);
                         question_seq += 1;
                     }
-                    previous_discussion.clear();
                     previous_nl.clear();
                     previous_fr.clear();
                 }
@@ -820,21 +809,14 @@ async fn extract_questions(
                     question_seq,
                     &previous_nl,
                     &previous_fr,
-                    &previous_discussion,
                     typo_map,
                 )? {
                     questions.push(q);
                     question_seq += 1;
                 }
-                previous_discussion.clear();
                 previous_nl.clear();
                 previous_fr.clear();
                 continue;
-            }
-
-            if !text.is_empty() && (!previous_nl.is_empty() || !previous_fr.is_empty()) {
-                previous_discussion.push_str(&clean_text(&text));
-                previous_discussion.push_str("NEWPARAGRAPH");
             }
         }
     }
@@ -1635,7 +1617,6 @@ fn extract_proposition_data(proposition_text: String) -> Result<PropositionData,
 fn extract_question_data(
     typo_map: &HashMap<String, String>,
     question_text: &str,
-    discussion_text: &str,
 ) -> Result<QuestionData, Box<dyn Error>> {
     let mut questioners = Vec::new();
     let mut topics = Vec::new();
@@ -1674,62 +1655,8 @@ fn extract_question_data(
         questioners,
         respondents,
         topics,
-        discussion: get_discussion_json(discussion_text),
         internal_ids,
     })
-}
-
-fn get_discussion_json(input: &str) -> String {
-    let cleaned_input = clean_text(input);
-
-    let mut discussion = Vec::new();
-    let mut current_speaker = String::new();
-    let mut last_end = 0;
-
-    for cap in speaker_regex().captures_iter(&cleaned_input) {
-        let match_start = cap.get(0).unwrap().start();
-        let text_segment = cleaned_input[last_end..match_start].trim();
-
-        if !current_speaker.is_empty() && !text_segment.is_empty() {
-            let clean_segment = text_segment
-                .replace("Het incident is gesloten.", "")
-                .replace("L'incident est clos.", "")
-                .trim()
-                .to_string();
-            if !clean_segment.is_empty() {
-                discussion
-                    .push(json!({ "speaker": current_speaker.trim(), "text": clean_segment }));
-            }
-        }
-
-        current_speaker = if let Some(full_speaker) = cap.get(2) {
-            let stripped = titles_regex()
-                .replace(full_speaker.as_str().trim(), "")
-                .to_string();
-            speaker_name_regex()
-                .captures(&stripped)
-                .and_then(|c| c.get(0))
-                .map_or("Onbekend".to_string(), |m| m.as_str().to_string())
-        } else {
-            "Voorzitter".to_string()
-        };
-
-        last_end = cap.get(0).unwrap().end();
-    }
-
-    if !current_speaker.is_empty() && last_end < cleaned_input.len() {
-        let clean_segment = cleaned_input[last_end..]
-            .replace("Het incident is gesloten.", "")
-            .replace("L'incident est clos.", "")
-            .replace("NEWPARAGRAPH", "\n")
-            .trim()
-            .to_string();
-        if !clean_segment.is_empty() {
-            discussion.push(json!({ "speaker": current_speaker.trim(), "text": clean_segment }));
-        }
-    }
-
-    serde_json::to_string_pretty(&discussion).unwrap()
 }
 
 /// Extracts a vote record from a table element.

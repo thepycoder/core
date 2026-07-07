@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
 from app.config import Settings, get_settings
 from app.models import EntityPreview, PreviewField, PreviewRelated
+from app.queries.discussion_threads import fetch_question_thread
 
 
 def fetch_entity_preview(
@@ -60,8 +60,8 @@ def _related(node_type: str, node_id: str, label: str) -> PreviewRelated:
 def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview | None:
     row = conn.execute(
         """
-        SELECT question_id, session_id, meeting_id, meeting_kind, seq,
-               raw_speaker, speaker_person_id, text, confidence
+        SELECT session_id, meeting_id, meeting_kind, seq, turn_number,
+               raw_speaker, speaker_person_id, speaker_role, text, confidence, item_id
         FROM utterances
         WHERE utterance_id = ?
         LIMIT 1
@@ -73,22 +73,25 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
 
     fields = [
         _field("Speaker", row[5]),
-        _field("Question", row[0]),
-        _field("Meeting", f"{row[3] or 'unknown'} {row[2]} (session {row[1]})"),
-        _field("Sequence", row[4]),
-        _field("Confidence", row[8]),
+        _field("Role", row[7]),
+        _field("Turn", row[4] or "—"),
+        _field("Meeting", f"{row[2] or 'unknown'} {row[1]} (session {row[0]})"),
+        _field("Sequence", row[3]),
+        _field("Confidence", row[9]),
     ]
     if row[6]:
         fields.append(_field("Person id", row[6]))
+    if row[10]:
+        fields.append(_field("Item", row[10]))
 
     related: list[PreviewRelated] = []
-    if row[0]:
-        related.append(_related("Question", row[0], f"Question {row[0]}"))
+    if row[10]:
+        related.append(_related("Question", row[10], f"Question {row[10]}"))
 
     return EntityPreview(
         title=row[5] or node_id,
         fields=fields,
-        content=_clip(row[7], 5000),
+        content=_clip(row[8], 5000),
         content_label="Utterance text",
         related=related,
     )
@@ -109,18 +112,13 @@ def _preview_question(conn, node_id: str, settings: Settings) -> EntityPreview |
     ]
 
     content_parts: list[str] = []
-    discussion = row.get("discussion") or ""
-    if discussion.strip().startswith("["):
-        try:
-            blocks = json.loads(discussion)
-            for block in blocks[:12]:
-                speaker = block.get("speaker", "?")
-                text = _clip(block.get("text", ""), 800)
-                content_parts.append(f"{speaker}:\n{text}")
-        except json.JSONDecodeError:
-            content_parts.append(_clip(discussion, 4000))
-    elif discussion.strip():
-        content_parts.append(_clip(discussion, 4000))
+    thread = fetch_question_thread(conn, node_id, limit=12)
+    for block in thread:
+        speaker = block.get("raw_speaker") or "?"
+        turn = block.get("turn_number")
+        prefix = f"{turn} {speaker}" if turn else speaker
+        text = _clip(block.get("text", ""), 800)
+        content_parts.append(f"{prefix}:\n{text}")
 
     related: list[PreviewRelated] = []
     for person_name in _split_names(row["questioners"]):
@@ -143,7 +141,7 @@ def _fetch_question_row(conn, question_id: str, settings: Settings) -> dict[str,
         row = conn.execute(
             f"""
             SELECT question_id, meeting_id, questioners, respondents,
-                   topics_nl, topics_fr, discussion, internal_ids
+                   topics_nl, topics_fr, internal_ids
             FROM read_parquet('{path}')
             WHERE question_id = ?
             LIMIT 1
@@ -158,8 +156,7 @@ def _fetch_question_row(conn, question_id: str, settings: Settings) -> dict[str,
                 "respondents": row[3],
                 "topics_nl": row[4],
                 "topics_fr": row[5],
-                "discussion": row[6],
-                "internal_ids": row[7],
+                "internal_ids": row[6],
             }
     return None
 

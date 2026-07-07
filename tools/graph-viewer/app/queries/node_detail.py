@@ -9,7 +9,16 @@ from app.models import (
     VoteCastMember,
     VotePositionGroup,
 )
+from app.queries.discussion_threads import fetch_meeting_thread, fetch_question_thread
 from app.queries.entity_preview import fetch_entity_preview
+
+_SPEAKER_NODE_TYPES = frozenset({"Person", "ExternalPerson"})
+
+
+def _utterance_text_join(direction: str) -> str:
+    if direction == "out":
+        return "LEFT JOIN utterances u ON e.to_type = 'Utterance' AND e.to_id = u.utterance_id"
+    return "LEFT JOIN utterances u ON e.from_type = 'Utterance' AND e.from_id = u.utterance_id"
 
 
 def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
@@ -28,7 +37,7 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
 
     in_edges = _edge_groups(conn, node_type, node_id, "in")
     out_edges = _edge_groups(conn, node_type, node_id, "out")
-    utterances = _fetch_utterances(conn, node_type, node_id)
+    utterances, utterance_section_title = _fetch_utterances(conn, node_type, node_id)
     vote_reconciliation = _fetch_vote_reconciliation(conn, node_type, node_id)
     vote_breakdown = _fetch_vote_breakdown(conn, node_type, node_id)
     preview = fetch_entity_preview(conn, node_type, node_id)
@@ -43,35 +52,24 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
         out_edges=out_edges,
         preview=preview,
         utterances=utterances,
+        utterance_section_title=utterance_section_title,
         vote_reconciliation=vote_reconciliation,
         vote_breakdown=vote_breakdown,
     )
 
 
-def _fetch_utterances(conn, node_type: str, node_id: str) -> list[dict]:
-    if node_type != "Question":
-        return []
-    rows = conn.execute(
-        """
-        SELECT utterance_id, seq, raw_speaker, speaker_person_id, text, confidence
-        FROM utterances
-        WHERE question_id = ?
-        ORDER BY cast(seq as integer), utterance_id
-        LIMIT 50
-        """,
-        [node_id],
-    ).fetchall()
-    return [
-        {
-            "utterance_id": row[0],
-            "seq": row[1],
-            "raw_speaker": row[2],
-            "speaker_person_id": row[3],
-            "text": row[4],
-            "confidence": row[5],
-        }
-        for row in rows
-    ]
+def _fetch_utterances(conn, node_type: str, node_id: str) -> tuple[list[dict], str | None]:
+    if node_type == "Question":
+        rows = fetch_question_thread(conn, node_id)
+        return rows, "Question discussion"
+    if node_type == "Meeting":
+        parts = node_id.split("_", 2)
+        if len(parts) != 3:
+            return [], None
+        meeting_kind, _session_id, meeting_id = parts
+        rows = fetch_meeting_thread(conn, meeting_kind, meeting_id)
+        return rows, "Meeting speech"
+    return [], None
 
 
 def _fetch_vote_reconciliation(conn, node_type: str, node_id: str) -> dict | None:
@@ -344,12 +342,24 @@ def fetch_node_links(
         filters.append("e.edge_type = ?")
         params.append(edge_type)
 
+    utterance_join = ""
+    if (
+        q
+        and q.strip()
+        and node_type in _SPEAKER_NODE_TYPES
+        and edge_type == "SPOKE"
+    ):
+        utterance_join = _utterance_text_join(direction)
+
     if q and q.strip():
         pattern = f"%{q.strip()}%"
+        text_clause = " OR u.text ILIKE ?" if utterance_join else ""
         filters.append(
-            f"({neighbor_label} ILIKE ? OR {neighbor_id} ILIKE ? OR e.edge_type ILIKE ?)"
+            f"({neighbor_label} ILIKE ? OR {neighbor_id} ILIKE ? OR e.edge_type ILIKE ?{text_clause})"
         )
         params.extend([pattern, pattern, pattern])
+        if utterance_join:
+            params.append(pattern)
 
     where = " AND ".join(filters)
 
@@ -358,6 +368,7 @@ def fetch_node_links(
         SELECT count(*)
         FROM edges e
         {join}
+        {utterance_join}
         WHERE {where}
         """,
         params,
@@ -376,6 +387,7 @@ def fetch_node_links(
             e.cache_path
         FROM edges e
         {join}
+        {utterance_join}
         WHERE {where}
         ORDER BY neighbor_label, {neighbor_id}
         LIMIT ? OFFSET ?

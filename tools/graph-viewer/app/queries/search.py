@@ -190,7 +190,10 @@ def _search_speakers(conn, tokens: list[str], fetch_limit: int) -> list[SearchRe
 
     rows = conn.execute(
         f"""
-        SELECT raw_speaker, count(*) AS mentions, min(question_id) AS sample_question_id
+        SELECT
+            raw_speaker,
+            count(*) AS mentions,
+            min(CASE WHEN item_kind = 'question' THEN item_id ELSE NULL END) AS sample_question_id
         FROM utterances
         WHERE speaker_person_id = ''
           AND {" AND ".join(where_parts)}
@@ -318,7 +321,7 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
 
     union = " UNION ALL ".join(
         f"""
-        SELECT question_id, topics_nl, topics_fr, questioners, respondents, discussion
+        SELECT question_id, topics_nl, topics_fr, questioners, respondents
         FROM read_parquet('{p}')
         """
         for p in paths
@@ -329,10 +332,10 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
     for token in tokens:
         where_parts.append(
             "(topics_nl ILIKE ? OR topics_fr ILIKE ? OR questioners ILIKE ? "
-            "OR respondents ILIKE ? OR discussion ILIKE ?)"
+            "OR respondents ILIKE ?)"
         )
         pattern = f"%{token}%"
-        params.extend([pattern] * 5)
+        params.extend([pattern] * 4)
 
     rows = conn.execute(
         f"""
@@ -360,6 +363,49 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
                 subtitle=f"{row[2]} → {row[3]}" if row[2] else "question content match",
             )
         )
+
+    utterance_path = settings.parquet_path("normalized/utterances.parquet")
+    if utterance_path.exists():
+        utterance_where = []
+        utterance_params: list = []
+        for token in tokens:
+            utterance_where.append(
+                "(u.text ILIKE ? OR u.raw_speaker ILIKE ? OR u.item_id ILIKE ?)"
+            )
+            pattern = f"%{token}%"
+            utterance_params.extend([pattern, pattern, pattern])
+        utterance_rows = conn.execute(
+            f"""
+            SELECT u.item_id, q.topics_nl, q.questioners, q.respondents
+            FROM read_parquet('{utterance_path.as_posix()}') u
+            LEFT JOIN ({union}) q ON q.question_id = u.item_id
+            WHERE u.item_kind = 'question'
+              AND {" AND ".join(utterance_where)}
+            LIMIT ?
+            """,
+            [*utterance_params, fetch_limit],
+        ).fetchall()
+        seen = {r.id for r in results}
+        for row in utterance_rows:
+            question_id = row[0]
+            if not question_id or question_id in seen:
+                continue
+            label = row[1] or question_id
+            score = _content_score(label, question_id, f"{label} {row[2]} {row[3]}", tokens)
+            results.append(
+                SearchResult(
+                    id=question_id,
+                    type="Question",
+                    label=label,
+                    degree_in=0,
+                    degree_out=0,
+                    source="content",
+                    score=score,
+                    subtitle="utterance text match",
+                )
+            )
+            seen.add(question_id)
+
     return results
 
 
