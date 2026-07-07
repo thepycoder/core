@@ -42,24 +42,24 @@ type NodeDef = {
 const NODES: NodeDef[] = [
   { id: "Session", label: "Session", domain: "foundation", status: "scraped", idKey: "session_id", note: "Legislative term anchor" },
   { id: "Person", label: "Person", domain: "identity", status: "working", idKey: "person_id", note: "Chamber MPs (cvview-backed)" },
-  { id: "ExternalPerson", label: "ExternalPerson", domain: "identity", status: "working", idKey: "external_person_id", note: "Ministers, experts, procedural roles" },
+  { id: "ExternalPerson", label: "ExternalPerson", domain: "identity", status: "working", idKey: "external_person_id", note: "57 entities; ministers, experts, roles" },
   { id: "Party", label: "Party", domain: "identity", status: "working", idKey: "slug / name", note: "Fraction; time-bounded membership" },
   { id: "Commission", label: "Commission", domain: "identity", status: "working", idKey: "name / enum", note: "Committee; links to meetings & dossiers" },
   { id: "Meeting", label: "Meeting", domain: "proceedings", status: "scraped", idKey: "{session, kind, meeting_id}", note: "Plenary + commission integraal" },
   { id: "AgendaItem", label: "AgendaItem", domain: "proceedings", status: "partial", idKey: "{meeting_id, seq}", note: "Report headings; heuristic boundaries" },
-  { id: "Utterance", label: "Utterance", domain: "proceedings", status: "partial", idKey: "{meeting}_{agenda}_{turn}", note: "Q&A turns normalized; full debate pending" },
+  { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "42,887 full-session rows; 2,576 without SPOKE" },
   { id: "Question", label: "Question", domain: "proceedings", status: "scraped", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Oral scraped; written Q&A not yet" },
   { id: "Answer", label: "Answer", domain: "proceedings", status: "planned", idKey: "linked to Question", note: "Often merged into discussion text" },
   { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{meeting_id, vote_id}", note: "Plenary integraal + appendix" },
   { id: "VoteCast", label: "VoteCast", domain: "proceedings", status: "partial", idKey: "{vote_id, person_id, position}", note: "Graph uses CAST Person→Vote (no node yet)" },
   { id: "Motion", label: "Motion", domain: "proceedings", status: "planned", idKey: "motion id + context", note: "Referenced in vote parsing, not modelled" },
   { id: "Interpellation", label: "Interp./Hearing", domain: "proceedings", status: "planned", idKey: "oral-control id", note: "Commission hearings skipped today" },
-  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "FLWB browse + plenary refs" },
+  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "1,640 nodes; FLWB browse + plenary refs" },
   { id: "Document", label: "Document", domain: "legislative", status: "scraped", idKey: "FLWB doc id", note: "Metadata scraped; body via PDF pipeline" },
   { id: "Amendment", label: "Amendment", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "Subdocument typed AMENDEMENT" },
   { id: "Report", label: "Report", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "VERSLAG subdocuments; PDF-heavy" },
   { id: "Topic", label: "Topic", domain: "legislative", status: "partial", idKey: "Eurovoc id + label", note: "On dossiers; utterance tagging future" },
-  { id: "LobbyOrg", label: "LobbyOrg", domain: "enrichment", status: "partial", idKey: "name", note: "Parser exists; source URL not wired" },
+  { id: "LobbyOrg", label: "LobbyOrg", domain: "enrichment", status: "scraped", idKey: "name", note: "301 orgs from lobbyregister.pdf" },
   { id: "Remuneration", label: "Remuneration", domain: "enrichment", status: "scraped", idKey: "{person, year, mandate}", note: "regimand.be; name match only" },
   { id: "MediaRecording", label: "MediaRecording", domain: "enrichment", status: "planned", idKey: "media id", note: "media.dekamer.be; fuzzy date match" },
   { id: "InterventionAnalysis", label: "InterventionAnalysis", domain: "enrichment", status: "planned", idKey: "dossier / meeting ref", note: "Structured speaker/topic data" },
@@ -81,22 +81,22 @@ const EDGES: EdgeDef[] = [
   { type: "HOLDS_ROLE", from: "Person", to: "Meeting", status: "partial", note: "Chair regex for commission" },
   { type: "HOLDS_ROLE", from: "Person", to: "Dossier", status: "partial", note: "Rapporteur on dossier fiche" },
   { type: "ATTENDED", from: "Person", to: "Meeting", status: "planned", note: "Opening/closing attendance lists" },
-  { type: "SPOKE", from: "Person", to: "Utterance", status: "partial", note: "MPs preferred when in index" },
-  { type: "SPOKE", from: "ExternalPerson", to: "Utterance", status: "partial", note: "Ministers, experts, roles" },
-  { type: "PART_OF", from: "Utterance", to: "Meeting", status: "working", note: "All utterances link to meeting" },
+  { type: "SPOKE", from: "Person", to: "Utterance", status: "working", note: "40,311 edges; chairs/unresolved skipped" },
+  { type: "SPOKE", from: "ExternalPerson", to: "Utterance", status: "working", note: "Ministers, experts, roles via ActorResolver" },
+  { type: "PART_OF", from: "Utterance", to: "Meeting", status: "working", note: "61,057 edges across all item kinds" },
   { type: "PART_OF", from: "Utterance", to: "Question", status: "working", note: "When item_kind = question" },
-  { type: "ASKED", from: "Person", to: "Question", status: "working", note: "Oral scraped" },
-  { type: "ANSWERED", from: "ExternalPerson", to: "Question", status: "partial", note: "Portfolio titles; minister resolution open" },
-  { type: "ANSWERED", from: "Person", to: "Question", status: "partial", note: "Same MP-preferring policy" },
+  { type: "ASKED", from: "Person", to: "Question", status: "working", note: "11,634 oral questioners" },
+  { type: "ANSWERED", from: "ExternalPerson", to: "Question", status: "working", note: "1,660 portfolio-title respondents" },
+  { type: "ANSWERED", from: "Person", to: "Question", status: "working", note: "5,525 named respondents" },
   { type: "ABOUT", from: "Question", to: "Topic", status: "planned", note: "Free text; summarizer exists" },
   { type: "LINKED_TO", from: "Question", to: "Dossier", status: "partial", note: "Commission questions carry dossier ids" },
-  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "Structured on site" },
+  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "6,798 via ActorResolver" },
   { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Regex from proposition/vote titles" },
   { type: "DISCUSSED_IN", from: "Dossier", to: "Meeting", status: "planned", note: "Dossier fiche calendar not ingested" },
-  { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "141 orphan refs to partial ids" },
+  { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "145 orphan refs to partial ids" },
   { type: "VOTED_ON", from: "Vote", to: "Document", status: "working", note: "From vote title parsing" },
   { type: "VOTED_ON", from: "Vote", to: "Motion", status: "partial", note: "motion_id partially parsed" },
-  { type: "CAST", from: "Person", to: "Vote", status: "working", note: "Via VoteCast concept; 189k casts" },
+  { type: "CAST", from: "Person", to: "Vote", status: "working", note: "189,496 casts; 6 vote mismatches" },
   { type: "TAGGED_WITH", from: "Dossier", to: "Topic", status: "working", note: "Eurovoc on dossier fiche" },
   { type: "TAGGED_WITH", from: "Utterance", to: "Topic", status: "planned", note: "NLP / intervention analysis" },
   { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "FLWB hierarchy" },
@@ -480,8 +480,8 @@ export default function DataGraphOverview() {
       <Grid columns={4} gap={12}>
         <Stat label="Node types" value={String(NODES.length)} tone="info" />
         <Stat label="Edge types" value={String(EDGES.length)} tone="info" />
-        <Stat label="Graph nodes (built)" value="10,652" tone="success" />
-        <Stat label="Graph edges (built)" value="215,991" tone="success" />
+        <Stat label="Graph nodes (built)" value="55,282" tone="success" />
+        <Stat label="Graph edges (built)" value="332,982" tone="success" />
       </Grid>
 
       <Card>
@@ -509,7 +509,7 @@ export default function DataGraphOverview() {
               ))}
             </Row>
             <Text size="small" tone="tertiary">
-              Source: DATA_GRAPH.md coverage table · branch stage-viz · last build 2026-07-01
+              Source: DATA_GRAPH.md coverage table · branch stage-viz · last build 2026-07-07
             </Text>
           </Stack>
         </CardBody>
@@ -671,8 +671,12 @@ export default function DataGraphOverview() {
       <H3>Pipeline</H3>
       <Row gap={8} wrap>
         <Pill tone="success">build-identity</Pill>
+        <Text tone="tertiary">+</Text>
+        <Pill tone="success">external-identity</Pill>
         <Text tone="tertiary">→</Text>
         <Pill tone="success">normalize-edges</Pill>
+        <Text tone="tertiary">→</Text>
+        <Pill tone="info">enrich-external-persons</Pill>
         <Text tone="tertiary">→</Text>
         <Pill tone="success">build-graph</Pill>
         <Text tone="tertiary">→</Text>

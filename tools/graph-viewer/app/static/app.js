@@ -3,6 +3,39 @@ const navStack = [];
 const linkSearchTimers = new Map();
 const PAGE_SIZE = 40;
 
+function navStackSnapshot() {
+  return navStack.map((item) => ({ type: item.type, id: item.id, label: item.label }));
+}
+
+function viewUrlForItem(item) {
+  if (!item) return window.location.pathname;
+  if (item.type === "Unresolved") {
+    return `?${new URLSearchParams({ unresolved: item.id })}`;
+  }
+  return `?${new URLSearchParams({ type: item.type, id: item.id })}`;
+}
+
+function currentViewUrl() {
+  return viewUrlForItem(navStack[navStack.length - 1]);
+}
+
+function writeHistory() {
+  history.pushState({ navStack: navStackSnapshot() }, "", currentViewUrl());
+}
+
+function seedHomeHistoryEntry() {
+  history.replaceState({ navStack: [] }, "", window.location.pathname);
+}
+
+function resetInspector() {
+  inspectorNode = null;
+  renderProvenanceBar("", "");
+  const el = document.getElementById("inspector-content");
+  el.innerHTML =
+    "Search for an entity or click an issue sample to inspect links and open source documents.";
+  el.classList.add("muted");
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   if (!res.ok) {
@@ -38,12 +71,15 @@ function pushNav(type, id, label) {
 function navigateToIndex(index) {
   if (index < 0 || index >= navStack.length) return;
   navStack.length = index + 1;
+  renderBreadcrumbs();
   const item = navStack[index];
-  openNode(item.type, item.id, false);
+  history.pushState({ navStack: navStackSnapshot() }, "", viewUrlForItem(item));
+  openNode(item.type, item.id, { resetNav: false, fromHistory: true });
 }
 
 function renderBreadcrumbs() {
   const bar = document.getElementById("breadcrumb-bar");
+  if (!bar) return;
   bar.innerHTML = "";
   if (!navStack.length) {
     bar.classList.add("hidden");
@@ -141,7 +177,7 @@ async function loadIssues() {
       s.textContent = JSON.stringify(sample.data);
       s.addEventListener("click", () => {
         const seed = seedFromSample(issue.id, sample);
-        if (seed) openNode(seed.type, seed.id, true);
+        if (seed) openNode(seed.type, seed.id, { resetNav: true });
       });
       li.appendChild(s);
     }
@@ -185,15 +221,19 @@ async function runSearch() {
 }
 
 async function openSearchResult(row) {
-  navStack.length = 0;
   if (row.source === "node" || row.source === "content") {
-    await openNode(row.type, row.id, true);
+    await openNode(row.type, row.id, { resetNav: true });
     return;
   }
   await showUnresolved(row.label);
 }
 
-async function openNode(type, id, resetNav = true) {
+async function openNode(type, id, options = {}) {
+  const { resetNav = true, fromHistory = false } = options;
+  if (type === "Unresolved") {
+    await showUnresolved(id, { fromHistory });
+    return;
+  }
   if (resetNav) {
     navStack.length = 0;
   }
@@ -201,10 +241,13 @@ async function openNode(type, id, resetNav = true) {
   pushNav(type, id, detail.label);
   inspectorNode = { type, id };
   renderNodeDetail(detail);
+  if (!fromHistory) {
+    writeHistory();
+  }
 }
 
 async function drillTo(neighborType, neighborId) {
-  await openNode(neighborType, neighborId, false);
+  await openNode(neighborType, neighborId, { resetNav: false });
 }
 
 function renderNodeDetail(detail) {
@@ -504,7 +547,7 @@ function createLinkGroup(direction, group) {
     clearTimeout(linkSearchTimers.get(listId));
     linkSearchTimers.set(
       listId,
-      setTimeout(() => loadLinkList(listId, direction, group.edge_type, search.value, 0), 250)
+      setTimeout(() => loadLinkList(list, pager, direction, group.edge_type, search.value, 0), 250)
     );
   });
   block.appendChild(search);
@@ -519,7 +562,7 @@ function createLinkGroup(direction, group) {
   pager.id = `${listId}-pager`;
   block.appendChild(pager);
 
-  loadLinkList(listId, direction, group.edge_type, "", 0);
+  loadLinkList(list, pager, direction, group.edge_type, "", 0);
   return block;
 }
 
@@ -575,11 +618,8 @@ function createLinkRow(link) {
   return row;
 }
 
-async function loadLinkList(listId, direction, edgeType, q = "", offset = 0) {
-  if (!inspectorNode) return;
-  const listEl = document.getElementById(listId);
-  const pagerEl = document.getElementById(`${listId}-pager`);
-  if (!listEl) return;
+async function loadLinkList(listEl, pagerEl, direction, edgeType, q = "", offset = 0) {
+  if (!inspectorNode || !listEl) return;
 
   listEl.innerHTML = `<div class="muted">Loading…</div>`;
   if (pagerEl) pagerEl.innerHTML = "";
@@ -612,7 +652,14 @@ async function loadLinkList(listId, direction, edgeType, q = "", offset = 0) {
       prev.disabled = offset === 0;
       prev.addEventListener("click", () => {
         const search = listEl.parentElement.querySelector(".link-search");
-        loadLinkList(listId, direction, edgeType, search?.value || "", Math.max(0, offset - PAGE_SIZE));
+        loadLinkList(
+          listEl,
+          pagerEl,
+          direction,
+          edgeType,
+          search?.value || "",
+          Math.max(0, offset - PAGE_SIZE)
+        );
       });
 
       const info = document.createElement("span");
@@ -625,7 +672,7 @@ async function loadLinkList(listId, direction, edgeType, q = "", offset = 0) {
       next.disabled = offset + PAGE_SIZE >= data.total;
       next.addEventListener("click", () => {
         const search = listEl.parentElement.querySelector(".link-search");
-        loadLinkList(listId, direction, edgeType, search?.value || "", offset + PAGE_SIZE);
+        loadLinkList(listEl, pagerEl, direction, edgeType, search?.value || "", offset + PAGE_SIZE);
       });
 
       pagerEl.append(prev, info, next);
@@ -666,8 +713,12 @@ async function showEdgeDetail(link) {
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-async function showUnresolved(rawName) {
-  navStack.length = 0;
+async function showUnresolved(rawName, options = {}) {
+  const { fromHistory = false } = options;
+  if (!fromHistory) {
+    navStack.length = 0;
+    pushNav("Unresolved", rawName, rawName);
+  }
   renderBreadcrumbs();
   renderProvenanceBar("", "");
 
@@ -748,7 +799,7 @@ async function showUnresolved(rawName) {
           openNode(
             row.source_bucket === "votes" ? "Vote" : "Question",
             row.context_id,
-            true
+            { resetNav: false }
           );
         }
       });
@@ -763,6 +814,9 @@ async function showUnresolved(rawName) {
   search.addEventListener("input", () => renderRows(search.value));
   renderRows("");
   el.appendChild(section);
+  if (!fromHistory) {
+    writeHistory();
+  }
 }
 
 document.getElementById("search-btn").addEventListener("click", runSearch);
@@ -770,10 +824,45 @@ document.getElementById("search-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runSearch();
 });
 
+window.addEventListener("popstate", (event) => {
+  if (event.state?.navStack?.length) {
+    navStack.length = 0;
+    navStack.push(...event.state.navStack);
+    renderBreadcrumbs();
+    const item = navStack[navStack.length - 1];
+    if (item.type === "Unresolved") {
+      showUnresolved(item.id, { fromHistory: true });
+    } else {
+      openNode(item.type, item.id, { resetNav: false, fromHistory: true });
+    }
+    return;
+  }
+  navStack.length = 0;
+  renderBreadcrumbs();
+  resetInspector();
+});
+
+async function initFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const type = params.get("type");
+  const id = params.get("id");
+  const unresolved = params.get("unresolved");
+  if (type && id) {
+    seedHomeHistoryEntry();
+    await openNode(type, id, { resetNav: true });
+    return;
+  }
+  if (unresolved) {
+    seedHomeHistoryEntry();
+    await showUnresolved(unresolved);
+  }
+}
+
 async function init() {
   try {
     await loadHealth();
     await loadIssues();
+    await initFromUrl();
   } catch (err) {
     document.getElementById("health-status").textContent = `Error: ${err.message}`;
   }

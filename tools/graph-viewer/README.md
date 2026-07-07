@@ -39,6 +39,7 @@ Open http://127.0.0.1:8765
 - Vote breakdown with yes/no/abstain member lists (resolved persons are clickable)
 - Open source pages on dekamer.be and cached HTML/PDF per entity and per edge
 - Question discussion text, vote reconciliation totals, data quality issues
+- URL-backed navigation (`?type=…&id=…`) with browser back/forward and breadcrumb trail when drilling between nodes
 
 ## API
 
