@@ -1,4 +1,4 @@
-use crate::normalize::{apply_typo_fix, normalize_name, typo_corrections, PersonName};
+use crate::normalize::{apply_typo_fix, clean_raw_name, normalize_name, typo_corrections, PersonName};
 use crate::parquet_io::{read_all_rows, read_string_column};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -116,7 +116,7 @@ impl Resolver {
     }
 
     pub fn resolve_detail(&self, raw: &str, _ctx: Bucket) -> ResolveDetail {
-        let trimmed = raw.trim();
+        let trimmed = clean_raw_name(raw);
         if trimmed.is_empty() {
             return ResolveDetail {
                 resolution: Resolution::Unresolved(UnresolvedReason::Empty),
@@ -128,7 +128,7 @@ impl Resolver {
             };
         }
 
-        let corrected = apply_typo_fix(trimmed, &self.typo_map);
+        let corrected = apply_typo_fix(&trimmed, &self.typo_map);
         let norm_primary = normalize_name(&corrected);
         let norm_reordered = normalize_name(&crate::normalize::reorder_name(&corrected));
 
@@ -146,7 +146,7 @@ impl Resolver {
             if let Some(person_id) = self.lookup.get(norm) {
                 return ResolveDetail {
                     resolution: Resolution::Resolved(person_id.clone()),
-                    raw_name: trimmed.to_string(),
+                    raw_name: raw.trim().to_string(),
                     typo_corrected: corrected,
                     norm_primary,
                     norm_reordered,
@@ -163,7 +163,7 @@ impl Resolver {
 
         ResolveDetail {
             resolution: Resolution::Unresolved(reason.clone()),
-            raw_name: trimmed.to_string(),
+            raw_name: raw.trim().to_string(),
             typo_corrected: corrected,
             norm_primary,
             norm_reordered,
@@ -235,6 +235,58 @@ mod tests {
         assert_eq!(
             resolver.resolve_person("Jambon Jan", Bucket::CommissionMember),
             Resolution::Resolved("O1234".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_vote_appendix_name_with_particles() {
+        let persons = vec![PersonRecord {
+            person_id: "06595".to_string(),
+            first_name: "Wim".to_string(),
+            last_name: "Van der Donckt".to_string(),
+        }];
+        let aliases = vec![AliasRecord {
+            alias_norm: "van der donckt".to_string(),
+            person_id: "06595".to_string(),
+            source: "last_name".to_string(),
+        }];
+        let resolver = Resolver::build(&persons, &aliases);
+        assert_eq!(
+            resolver.resolve_person("Donckt Wim Van der", Bucket::Vote),
+            Resolution::Resolved("06595".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_abbreviated_compound_surname() {
+        let persons = vec![PersonRecord {
+            person_id: "08151".to_string(),
+            first_name: "Lydia".to_string(),
+            last_name: "Mutyebele Ngoi".to_string(),
+        }];
+        let aliases = vec![AliasRecord {
+            alias_norm: "mutyebele ngoi".to_string(),
+            person_id: "08151".to_string(),
+            source: "last_name".to_string(),
+        }];
+        let resolver = Resolver::build(&persons, &aliases);
+        assert_eq!(
+            resolver.resolve_person("Ngoi Mutyebele", Bucket::Vote),
+            Resolution::Resolved("08151".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_speaker_with_title_prefix() {
+        let persons = vec![PersonRecord {
+            person_id: "06447".to_string(),
+            first_name: "Alexander".to_string(),
+            last_name: "De Croo".to_string(),
+        }];
+        let resolver = Resolver::build(&persons, &[]);
+        assert_eq!(
+            resolver.resolve_person("E erste minister  Alexander De Croo", Bucket::Speaker),
+            Resolution::Resolved("06447".to_string())
         );
     }
 

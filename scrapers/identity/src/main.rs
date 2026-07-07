@@ -314,6 +314,14 @@ fn build_aliases(persons: &[PersonRecord]) -> Vec<AliasRecord> {
         }
     };
 
+    let mut last_name_counts: HashMap<String, usize> = HashMap::new();
+    for person in persons {
+        let norm = normalize_name(&person.last_name);
+        if !norm.is_empty() {
+            *last_name_counts.entry(norm).or_default() += 1;
+        }
+    }
+
     for person in persons {
         let name = PersonName {
             first_name: person.first_name.clone(),
@@ -321,6 +329,11 @@ fn build_aliases(persons: &[PersonRecord]) -> Vec<AliasRecord> {
         };
         push_alias(&name.full(), &person.person_id, "self");
         push_alias(&name.reversed(), &person.person_id, "reorder");
+
+        let last_norm = normalize_name(&person.last_name);
+        if last_name_counts.get(&last_norm) == Some(&1) {
+            push_alias(&person.last_name, &person.person_id, "last_name");
+        }
     }
 
     let typo_map = typo_corrections();
