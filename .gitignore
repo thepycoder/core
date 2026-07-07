@@ -4,7 +4,10 @@
 .env
 
 # data
-/data
+/data/*
+!/data/qa/
+/data/qa/*
+!/data/qa/checks_baseline.parquet
 /cache
 
 # PDF summarizers

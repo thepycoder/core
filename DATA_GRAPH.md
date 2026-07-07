@@ -102,7 +102,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Parsed but not normalized**              | Commission role edges beyond chair; 2 576 utterances without `SPOKE` (unresolved/chair speakers)                                                                                                   |
 | **Enrichment (optional LLM)**              | `external_person_bios.parquet` via `just enrich-external-persons` (Mistral Agents API + `web_search`)                                                                                             |
 | **Not scraped / not normalized**           | Written Question/Answer, Motion (as node), Interpellation/Hearing (as nodes), InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar (`DISCUSSED_IN`), Beknopt verslag, `DECLARES_INTEREST` |
-| **Debug tooling (local only)**             | `tools/graph-viewer` — search, inspector, vote breakdown, discussion threads, unresolved-person triage, data-quality issues over `data/graph/*.parquet` (not part of the scraper pipeline)        |
+| **Debug tooling (local only)**             | `tools/graph-viewer` — search, inspector, vote breakdown, discussion threads, unresolved-person triage; issues panel reads `data/qa/checks.parquet` from `just qa` |
 
 ## Implementation state
 
@@ -111,9 +111,9 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 ### Pipeline (Steps 0–3)
 
 - **Stage 0 contract (partially done):** `STAGING.md` documents every current Parquet schema and ID conventions. Major scrapers now emit `source_url` + `cache_path` on staging rows. Question ids include meeting kind (`{session}_{plenary\|commission}_{meeting}_{seq}`) via `composite_scoped_id`, with `ensure_question_id` upgrading legacy rows at normalize/graph time; site-native refs stay in `internal_ids`. Still open: commission `meeting_id` vs `commission_id` rename, vote ids still meeting-scoped composites (not site-native), idempotent per-meeting incremental scraping.
-- **Stage 0 QA (soft report):** `data/qa/summary.md` last reported 97 passes and 2 issues: stale commission-question `dossier_ids` mislabel signal, and one plenary vote total mismatch in meeting 129. Regenerated staging passes the normalize staging check (`internal_ids` present, no `dossier_ids`); re-run Stage 0 QA to clear the stale schema warning.
+- **Stage 0 QA (superseded):** `just qa` now regenerates `data/qa/checks.parquet` and `summary.md` from detail rows. Stale Jul-1 artifacts replaced.
 - **Step 1 identity (working):** `just build-identity` runs `identity` + `external-identity`. Writes `persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `external_persons.parquet` (57), `external_person_aliases.parquet` (129), `external_person_contexts.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`. Last run: 175 persons, 13 parties, 1 302 memberships, 21 unresolved commission-member occurrences (placeholder `N .` only).
-- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (189 496 vote casts, 6 798 authored, 11 634 asked, 7 185 answered, 410 holds_role, 42 887 utterances; 4 695 unresolved names). Six vote reconciliation mismatches (`56_129_4`, `56_133_18`–`21`, `56_133_32`). Emits soft speaker QA: `data/qa/speaker_checks.parquet`, `speaker_check_details.parquet`, `alias_candidates.parquet`.
+- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (189 496 vote casts, 6 798 authored, 11 634 asked, 7 185 answered, 410 holds_role, 42 887 utterances; 4 695 unresolved names). Six vote reconciliation mismatches (`56_129_4`, `56_133_18`–`21`, `56_133_32`). Speaker regression checks moved to `just qa`.
 - **Step 3 graph (working):** `just build-graph` writes `data/graph/nodes.parquet` (55 282 nodes), `edges.parquet` (332 982 edges: MEMBER_OF, CAST, AUTHORED, ASKED, ANSWERED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (2 384 artifacts). 145 orphan `VOTED_ON` edges (partial vote-title refs). 2 576 Utterance nodes without `SPOKE`. Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
 
 ### Branch additions since 2026-07-01
@@ -123,12 +123,13 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 - **External identity + ActorResolver (Step 1–2, done):** `external-identity` scans staging for non-MP actors; `ActorResolver` routes speakers, authors, and respondents to Person or ExternalPerson. `ANSWERED` edges wired (7 185). Optional `enrich-external-persons` adds LLM bios.
 - **Lobby register (Step 6 partial):** `scrape-lobby` downloads `lobbyregister.pdf`, extracts 301 orgs to `lobby.parquet` with `source_url` + `cache_path`.
 - **Commission meeting gaps:** `meeting_gaps.parquet` tracks ids in `1..=last` with no scraped row (10 gaps today).
-- **Speaker QA (Step 5 interim):** `normalize-edges` emits `speaker_checks.parquet` (digit-prefix, duplicate-id, re-resolution guards). Broader meeting-report crosschecks catalogued in `meeting-report-qa-plan.md`.
+- **Speaker QA (Step 5 interim):** Broader meeting-report crosschecks catalogued in `meeting-report-qa-plan.md`.
+- **QA runner (Step 5, working):** `just qa` (`scrapers/qa`) writes `data/qa/meeting_report_check_details.parquet`, derived `checks.parquet`, `summary.md`, `alias_candidates.parquet`, and `row_counts.json`. Summary counts are derived from detail rows (S8 meta-check). `just qa-strict` exits non-zero on regression vs committed `checks_baseline.parquet`. Last run: 10 763 detail rows, 16 issue checks (6 vote mismatches, 145 orphan `VOTED_ON`, 2 576 speakerless utterances, 2 384 empty `scraped_at`, etc.). `tools/graph-viewer` issues panel reads `data/qa/` (no recompute).
 - **Graph debug viewer (`tools/graph-viewer`, local only):** FastAPI + DuckDB UI over `data/graph/*.parquet`. Search entities; inspector with metadata, excerpts, discussion threads, and source links; paginated edge lists; vote reconciliation totals; **vote breakdown** (yes/no/abstain member lists with clickable resolved persons); unresolved-person and data-quality issue panels; open dekamer.be source pages and cached HTML/PDF. Run: `cd tools/graph-viewer && uv sync && uv run uvicorn app.main:app --reload --port 8765` (after `just build-graph`). Node routes use `{node_id:path}` so dossier ids like `56/297` resolve correctly.
 
 ### Not done yet
 
-Government/minister mandate-over-time table (portfolio titles resolve to ExternalPerson today, not dated mandates), automated graph-level QA (Step 5), and remaining Step 4 sources (written Q&A, Motion/Interpellation/Hearing nodes, dossier calendar edges, Beknopt verslag). Graph viewer is manual inspection only — it does not replace the `qa` binary described in Step 5.
+Government/minister mandate-over-time table (portfolio titles resolve to ExternalPerson today, not dated mandates) and remaining Step 4 sources (written Q&A, Motion/Interpellation/Hearing nodes, dossier calendar edges, Beknopt verslag). Stage 0 schema-hygiene checks are partially reimplemented in `just qa` (`schema.*` tier).
 
 
 ## Scrutiny
@@ -215,11 +216,11 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 
 **5. Now that the architecture exists, stand up QA over it.**
 
-- **Interim:** `tools/graph-viewer` already surfaces vote reconciliation, unresolved persons, alias-style triage, and structural issue panels for manual inspection; promote the same checks into an automated `qa` binary.
-- Create a `qa` binary that loads every parquet plus the graph output and runs structural + referential + domain checks: vote totals vs counted names, `meeting_id` foreign keys from questions/votes, document-id regex, dates inside the session window. The data is now stable enough to check properly.
-- Wire the resolver outputs: `unresolved_persons` and `alias_candidates` on every run, plus a soft signal for any new `fraction` string not already in `parties`.
-- Cross-check the normalized edges: every `VoteCast` person should be `MEMBER_OF` a party at the vote date — flag casts by non-members as oddities; include vote-total arithmetic in the issue report.
-- Run the referential and domain checks over the actual graph output, not just staging, and add each source's row-count/delta check and unresolved-name bucket.
+- ~~Create a `qa` binary~~ **Done:** `scrapers/qa` + `just qa` / `just qa-strict` / `just qa-update-baseline`.
+- ~~Derive `checks.parquet` from detail rows (S8).~~ **Done.**
+- ~~Promote graph-viewer issue checks into automated runner.~~ **Done** (`graph.*`, vote, speaker, schema tiers). Viewer reads `data/qa/` only.
+- Expand source-level crosschecks per `meeting-report-qa-plan.md` as scraper fixes land; tighten `warn` → `fail` per check after fixture review.
+- Wire resolver triage: `alias_candidates.parquet` on every run (done); extend bucket coverage.
 
 **6. Only then enrich.**
 

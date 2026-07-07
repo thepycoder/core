@@ -256,6 +256,24 @@ pub fn agenda_item_for_block<'a>(items: &'a [AgendaItem], block_index: u32) -> O
         .find(|item| block_index >= item.start_block && block_index < item.end_block)
 }
 
+/// Count question agenda items from a cached meeting report (for QA crosschecks).
+pub fn count_agenda_questions_from_cache(
+    cache_path: &std::path::Path,
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    use crate::report_blocks::{parse_report_blocks, read_report_html};
+    let html = read_report_html(cache_path)?;
+    let document = Html::parse_document(&html);
+    let blocks = parse_report_blocks(&document);
+    let items = build_agenda_timeline(&document, &blocks, meeting_kind, session_id, meeting_id);
+    Ok(items
+        .iter()
+        .filter(|a| a.item_kind == ItemKind::Question)
+        .count())
+}
+
 pub fn heading_text_from_block(block: &ReportBlock) -> String {
     clean_text(&block.text)
 }

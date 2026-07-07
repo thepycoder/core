@@ -11,9 +11,10 @@ just build-identity
 just normalize-edges
 just enrich-external-persons   # optional: MISTRAL_API_TOKEN
 just build-graph
+just qa
 ```
 
-`build-identity` writes Chamber MP tables and bootstraps `ExternalPerson` from all staging name fields (Q&A, dossier authors, org/role seeds). `normalize-edges` links staging rows to those identity tables.
+`build-identity` writes Chamber MP tables and bootstraps `ExternalPerson` from all staging name fields (Q&A, dossier authors, org/role seeds). `normalize-edges` links staging rows to those identity tables. `qa` writes `data/qa/checks.parquet` and detail rows; the issues panel reads that output (no recompute).
 
 ## Environment
 
@@ -38,7 +39,7 @@ Open http://127.0.0.1:8765
 - Filterable paginated link lists (search vote titles, question topics, etc.)
 - Vote breakdown with yes/no/abstain member lists (resolved persons are clickable)
 - Open source pages on dekamer.be and cached HTML/PDF per entity and per edge
-- Question discussion text, vote reconciliation totals, data quality issues
+- Question discussion text, vote reconciliation totals, data quality issues (from `data/qa/checks.parquet` via `just qa`)
 - URL-backed navigation (`?type=…&id=…`) with browser back/forward and breadcrumb trail when drilling between nodes
 
 ## API

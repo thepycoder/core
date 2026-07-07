@@ -3,9 +3,6 @@ use normalize::authored::{normalize_authored, write_authored};
 use normalize::common::{dedupe_unresolved, verify_staging, write_unresolved_persons, UnresolvedRow};
 use normalize::questions::{normalize_asked, write_asked};
 use normalize::roles::{normalize_holds_role, write_holds_role};
-use normalize::speaker_qa::{
-    run_speaker_qa, write_alias_candidates, write_check_summaries, write_speaker_check_details,
-};
 use normalize::utterances::{normalize_utterances, write_utterances};
 use normalize::vote_casts::{
     normalize_vote_casts, write_vote_casts, write_vote_reconciliation,
@@ -59,28 +56,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     dedupe_unresolved(&mut unresolved);
     write_unresolved_persons(&out_dir.join("unresolved_persons.parquet"), &unresolved)?;
 
-    let qa_dir = root.join("qa");
-    std::fs::create_dir_all(&qa_dir)?;
-    let speaker_qa = run_speaker_qa(
-        &root,
-        &utterances_out.rows,
-        &unresolved,
-        &actor_resolver,
-        &resolver,
-    )?;
-    write_speaker_check_details(
-        &qa_dir.join("speaker_check_details.parquet"),
-        &speaker_qa.details,
-    )?;
-    write_alias_candidates(
-        &qa_dir.join("alias_candidates.parquet"),
-        &speaker_qa.alias_candidates,
-    )?;
-    write_check_summaries(
-        &qa_dir.join("speaker_checks.parquet"),
-        &speaker_qa.summaries,
-    )?;
-
     eprintln!(
         "Normalized: {} vote casts, {} authored, {} asked, {} answered, {} holds_role, {} utterances; {} unresolved",
         vote_out.casts.len(),
@@ -91,13 +66,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         utterances_out.rows.len(),
         unresolved.len()
     );
-
-    for summary in &speaker_qa.summaries {
-        eprintln!(
-            "[normalize] QA {}: {} ({})",
-            summary.check, summary.status, summary.detail
-        );
-    }
 
     Ok(())
 }

@@ -163,6 +163,24 @@ Written by summarizer binaries; schemas unchanged by Stage 0.
 
 **external_person_bios.parquet:** `external_person_id`, `input_hash`, `bio_nl`, `bio_json`, `model`, `search_queries`, `created_at` — LLM output from `enrich-external-persons`.
 
+## QA outputs (`data/qa/`)
+
+Produced by `just qa` (`scrapers/qa`). Detail-first: summary artifacts are always derived from detail rows.
+
+**meeting_report_check_details.parquet:** `check_id`, `severity`, `status`, `session_id`, `meeting_kind`, `meeting_id`, `entity_type`, `entity_id`, `expected`, `actual`, `message`, `source_url`, `cache_path`, `source_block`, `created_at`
+
+**checks.parquet:** `table`, `check`, `status`, `count`, `detail`, `examples` — aggregated per `check_id`; includes `qa.summary_vs_detail` meta-check.
+
+**checks_baseline.parquet:** committed snapshot for `just qa-strict` regression detection. Update with `just qa-update-baseline` after reviewed changes.
+
+**alias_candidates.parquet:** `raw_name`, `cleaned_name`, `matched_person_id`, `source_bucket`, `context_id`, `check_id`, `confidence`
+
+**row_counts.json:** per-table row counts for `schema.row_count_delta` checks.
+
+**summary.md:** human-readable rollup of `checks.parquet`.
+
+Commands: `just qa` (soft, exit 0), `just qa-strict` (exit 1 on baseline regression), `just qa-update-baseline`.
+
 ## Sidecar files (not parquet)
 
 - `data/current_plenary_id.txt` — last known plenary meeting id (discovery only)

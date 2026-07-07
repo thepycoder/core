@@ -680,6 +680,8 @@ export default function DataGraphOverview() {
         <Text tone="tertiary">→</Text>
         <Pill tone="success">build-graph</Pill>
         <Text tone="tertiary">→</Text>
+        <Pill tone="success">qa</Pill>
+        <Text tone="tertiary">→</Text>
         <Pill tone="info">graph-viewer :8765</Pill>
       </Row>
       <Row gap={8}>

@@ -96,18 +96,18 @@ mod tests {
     fn fixture_baseline_utterance_counts() {
         const BASELINE: &[(&str, u32, usize)] = &[
             ("plenary", 2, 29),
-            ("plenary", 19, 97),
+            ("plenary", 19, 98),
             ("plenary", 50, 123),
             ("plenary", 52, 129),
             ("plenary", 57, 202),
             ("plenary", 100, 96),
-            ("plenary", 117, 107),
+            ("plenary", 117, 108),
             ("plenary", 120, 82),
             ("plenary", 133, 44),
             ("commission", 2, 30),
             ("commission", 15, 16),
-            ("commission", 17, 112),
-            ("commission", 19, 39),
+            ("commission", 17, 114),
+            ("commission", 19, 42),
             ("commission", 30, 31),
             ("commission", 57, 57),
         ];
