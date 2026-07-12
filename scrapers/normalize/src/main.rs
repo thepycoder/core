@@ -1,4 +1,8 @@
 use normalize::answered::{normalize_answered, write_answered};
+use normalize::hearings::{normalize_invited, write_invited};
+use normalize::interpellations::{
+    normalize_interpellations, write_interpellated, write_interpellation_responded,
+};
 use normalize::authored::{normalize_authored, write_authored};
 use normalize::common::{dedupe_unresolved, verify_staging, write_unresolved_persons, UnresolvedRow};
 use normalize::questions::{normalize_asked, write_asked};
@@ -43,6 +47,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let roles_out = normalize_holds_role(&root, &resolver)?;
     write_holds_role(&out_dir.join("holds_role.parquet"), &roles_out.rows)?;
 
+    let invited_out = normalize_invited(&root, &actor_resolver)?;
+    write_invited(&out_dir.join("invited.parquet"), &invited_out.rows)?;
+
+    let interpellation_out = normalize_interpellations(&root, &resolver, &actor_resolver)?;
+    write_interpellated(
+        &out_dir.join("interpellated.parquet"),
+        &interpellation_out.interpellated,
+    )?;
+    write_interpellation_responded(
+        &out_dir.join("interpellation_responded.parquet"),
+        &interpellation_out.responded,
+    )?;
+
     let utterances_out = normalize_utterances(&root, &actor_resolver)?;
     write_utterances(&out_dir.join("utterances.parquet"), &utterances_out.rows)?;
 
@@ -52,17 +69,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     unresolved.extend(asked_out.unresolved);
     unresolved.extend(answered_out.unresolved);
     unresolved.extend(roles_out.unresolved);
+    unresolved.extend(invited_out.unresolved);
+    unresolved.extend(interpellation_out.unresolved);
     unresolved.extend(utterances_out.unresolved);
     dedupe_unresolved(&mut unresolved);
     write_unresolved_persons(&out_dir.join("unresolved_persons.parquet"), &unresolved)?;
 
     eprintln!(
-        "Normalized: {} vote casts, {} authored, {} asked, {} answered, {} holds_role, {} utterances; {} unresolved",
+        "Normalized: {} vote casts, {} authored, {} asked, {} answered, {} holds_role, {} invited, {} interpellated, {} interpellation_responded, {} utterances; {} unresolved",
         vote_out.casts.len(),
         authored_out.rows.len(),
         asked_out.asked.len(),
         answered_out.rows.len(),
         roles_out.rows.len(),
+        invited_out.rows.len(),
+        interpellation_out.interpellated.len(),
+        interpellation_out.responded.len(),
         utterances_out.rows.len(),
         unresolved.len()
     );

@@ -1,3 +1,4 @@
+use crate::proceeding_entities::classify_heading_kind;
 use crate::report_blocks::{BlockTag, ReportBlock};
 use crate::utils::{clean_text, composite_scoped_id};
 use regex::Regex;
@@ -23,6 +24,7 @@ impl MeetingKind {
 pub enum ItemKind {
     Question,
     Hearing,
+    Interpellation,
     GeneralDebate,
     Proposition,
     Notice,
@@ -39,6 +41,7 @@ impl ItemKind {
         match self {
             ItemKind::Question => "question",
             ItemKind::Hearing => "hearing",
+            ItemKind::Interpellation => "interpellation",
             ItemKind::GeneralDebate => "general_debate",
             ItemKind::Proposition => "proposition",
             ItemKind::Notice => "notice",
@@ -112,6 +115,8 @@ pub fn build_agenda_timeline(
     let mut items: Vec<AgendaItem> = Vec::new();
     let mut current_section = String::new();
     let mut question_seq = 0i32;
+    let mut hearing_seq = 0i32;
+    let mut interpellation_seq = 0i32;
     let mut pending_nl: Option<(u32, String)> = None;
 
     for block in blocks.iter() {
@@ -144,15 +149,30 @@ pub fn build_agenda_timeline(
             last.end_block = block.index;
         }
 
-        let item_kind = classify_item_kind(meeting_kind, &current_section, &block.text);
-        if item_kind == ItemKind::Hearing {
-            question_seq = 0;
-        }
+        let item_kind = classify_heading_kind(meeting_kind, &current_section, &block.text);
 
         let mut item_id = String::new();
-        if item_kind == ItemKind::Question {
-            item_id = composite_scoped_id(session_id, meeting_kind.as_str(), meeting_id, question_seq);
-            question_seq += 1;
+        match item_kind {
+            ItemKind::Question => {
+                item_id =
+                    composite_scoped_id(session_id, meeting_kind.as_str(), meeting_id, question_seq);
+                question_seq += 1;
+            }
+            ItemKind::Hearing => {
+                item_id =
+                    composite_scoped_id(session_id, meeting_kind.as_str(), meeting_id, hearing_seq);
+                hearing_seq += 1;
+            }
+            ItemKind::Interpellation => {
+                item_id = composite_scoped_id(
+                    session_id,
+                    meeting_kind.as_str(),
+                    meeting_id,
+                    interpellation_seq,
+                );
+                interpellation_seq += 1;
+            }
+            _ => {}
         }
 
         let internal_ids = extract_internal_ids(document, &block.text);
@@ -188,46 +208,6 @@ fn extract_agenda_number(text: &str) -> Option<String> {
     agenda_num_regex()
         .captures(text.trim())
         .map(|c| c[1].to_string())
-}
-
-fn classify_item_kind(meeting_kind: MeetingKind, section: &str, h2_text: &str) -> ItemKind {
-    let lower = h2_text.to_lowercase();
-    let section = section.to_lowercase();
-
-    if lower.contains("hoorzitting") || lower.contains("audition") {
-        return ItemKind::Hearing;
-    }
-
-    match meeting_kind {
-        MeetingKind::Plenary => {
-            if section.contains("mondelinge") || section.contains("question") {
-                return ItemKind::Question;
-            }
-            if section.contains("voorstel") || section.contains("proposition") {
-                return ItemKind::Proposition;
-            }
-            if section.contains("mededeling") {
-                return ItemKind::Notice;
-            }
-            if section.contains("naamstemming") || section.contains("vote") {
-                return ItemKind::Vote;
-            }
-            ItemKind::GeneralDebate
-        }
-        MeetingKind::Commission => {
-            if lower.starts_with("vraag van")
-                || lower.starts_with("question de")
-                || lower.contains("samengevoegde vragen")
-                || lower.contains("toegevoegde vragen")
-                || lower.contains("questions jointes")
-                || lower.starts_with('-')
-            {
-                ItemKind::Question
-            } else {
-                ItemKind::GeneralDebate
-            }
-        }
-    }
 }
 
 fn extract_internal_ids(_document: &Html, text: &str) -> Vec<String> {

@@ -1,6 +1,7 @@
 use crate::types::CheckDetail;
 use crawl::agenda_timeline::{count_agenda_questions_from_cache, MeetingKind};
 use crawl::paths::cache_dir;
+use crawl::proceeding_entities::{is_hearing_heading, is_interpellation_heading};
 use crawl::report_blocks::read_report_html;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
@@ -13,6 +14,7 @@ pub fn run_agenda_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Er
     details.extend(check_entity_counts(data_dir)?);
     details.extend(check_dossier_refs(data_dir)?);
     details.extend(check_hearing_headings(data_dir)?);
+    details.extend(check_interpellation_headings(data_dir)?);
     details.extend(check_question_internal_ids(data_dir)?);
     Ok(details)
 }
@@ -134,12 +136,70 @@ fn check_dossier_refs(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
     Ok(details)
 }
 
+fn count_formal_hearing_headings(html: &str) -> usize {
+    let re = regex::Regex::new(r"(?is)<h2[^>]*>(.*?)</h2>").unwrap();
+    re.captures_iter(html)
+        .filter_map(|cap| {
+            let text = regex::Regex::new(r"<[^>]+>")
+                .unwrap()
+                .replace_all(&cap[1], " ")
+                .to_string();
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if is_hearing_heading(&text.to_lowercase()) {
+                Some(())
+            } else {
+                None
+            }
+        })
+        .count()
+}
+
+fn count_formal_interpellation_headings(html: &str) -> usize {
+    let re = regex::Regex::new(r"(?is)<h2[^>]*>(.*?)</h2>").unwrap();
+    re.captures_iter(html)
+        .filter_map(|cap| {
+            let text = regex::Regex::new(r"<[^>]+>")
+                .unwrap()
+                .replace_all(&cap[1], " ")
+                .to_string();
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if is_interpellation_heading(&text.to_lowercase()) {
+                Some(())
+            } else {
+                None
+            }
+        })
+        .count()
+}
+
+fn proceeding_counts_by_meeting(
+    data_dir: &Path,
+    rel_path: &str,
+    id_column: &str,
+) -> Result<HashMap<String, usize>, Box<dyn Error>> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let path = data_dir.join(rel_path);
+    if !path.exists() {
+        return Ok(counts);
+    }
+    for batch in read_all_rows(&path)? {
+        let meeting_ids = read_string_column(&batch, "meeting_id")?;
+        let _ = read_string_column(&batch, id_column)?;
+        for id in meeting_ids {
+            *counts.entry(id).or_default() += 1;
+        }
+    }
+    Ok(counts)
+}
+
 fn check_hearing_headings(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
     let mut details = Vec::new();
     let meetings_path = data_dir.join(format!("sessions/{SESSION_ID}/commission/meetings.parquet"));
+    let hearings_path = format!("sessions/{SESSION_ID}/commission/hearings.parquet");
     if !meetings_path.exists() {
         return Ok(details);
     }
+    let hearing_counts = proceeding_counts_by_meeting(data_dir, &hearings_path, "hearing_id")?;
     for batch in read_all_rows(&meetings_path)? {
         let meeting_ids = read_string_column(&batch, "meeting_id")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
@@ -154,19 +214,76 @@ fn check_hearing_headings(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn E
                 continue;
             }
             let html = read_report_html(&full)?;
-            let lower = html.to_lowercase();
-            if lower.contains("hoorzitting") || lower.contains("audition") {
+            let source_count = count_formal_hearing_headings(&html);
+            if source_count == 0 {
+                continue;
+            }
+            let parquet_count = hearing_counts.get(&meeting_ids[i]).copied().unwrap_or(0);
+            if parquet_count == 0 {
                 details.push(
                     CheckDetail::new(
                         "agenda.hearing_not_extracted",
-                        "info",
-                        "info",
+                        "fail",
+                        "fail",
                         format!(
-                            "meeting {} has hearing heading but no dedicated hearing rows",
+                            "meeting {} has {source_count} formal hearing heading(s) but no hearings.parquet rows",
                             meeting_ids[i]
                         ),
                     )
                     .with_meeting("commission", &meeting_ids[i])
+                    .with_values(source_count.to_string(), parquet_count.to_string())
+                    .with_source(&source_urls[i], cache_path),
+                );
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_interpellation_headings(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut details = Vec::new();
+    let meetings_path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/meetings.parquet"));
+    let interpellations_path = format!("sessions/{SESSION_ID}/plenary/interpellations.parquet");
+    if !meetings_path.exists() {
+        return Ok(details);
+    }
+    let interpellation_counts =
+        proceeding_counts_by_meeting(data_dir, &interpellations_path, "interpellation_id")?;
+    for batch in read_all_rows(&meetings_path)? {
+        let meeting_ids = read_string_column(&batch, "meeting_id")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        for i in 0..batch.num_rows() {
+            let cache_path = &cache_paths[i];
+            if cache_path.is_empty() {
+                continue;
+            }
+            let full = cache_dir().join(cache_path);
+            if !full.exists() {
+                continue;
+            }
+            let html = read_report_html(&full)?;
+            let source_count = count_formal_interpellation_headings(&html);
+            if source_count == 0 {
+                continue;
+            }
+            let parquet_count = interpellation_counts
+                .get(&meeting_ids[i])
+                .copied()
+                .unwrap_or(0);
+            if parquet_count == 0 {
+                details.push(
+                    CheckDetail::new(
+                        "agenda.interpellation_not_extracted",
+                        "fail",
+                        "fail",
+                        format!(
+                            "meeting {} has {source_count} interpellation heading(s) but no interpellations.parquet rows",
+                            meeting_ids[i]
+                        ),
+                    )
+                    .with_meeting("plenary", &meeting_ids[i])
+                    .with_values(source_count.to_string(), parquet_count.to_string())
                     .with_source(&source_urls[i], cache_path),
                 );
             }

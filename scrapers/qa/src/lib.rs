@@ -206,6 +206,7 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "source.cache_exists",
         "agenda.entity_count_vs_parquet",
         "agenda.hearing_not_extracted",
+        "agenda.interpellation_not_extracted",
         "question.grouped_internal_ids_complete",
         "dossier.ref_exists",
         "meeting.chair_source_vs_parquet",

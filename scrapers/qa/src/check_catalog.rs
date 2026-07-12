@@ -111,8 +111,12 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             measures: "Counts agenda question headings in cache HTML vs question rows per `meeting_id` in staging parquet.",
         },
         "agenda.hearing_not_extracted" => CheckDoc {
-            what: "Commission meeting HTML contains a hearing heading (hoorzitting/audition) but no dedicated hearing entities were extracted.",
-            measures: "Scans commission meeting cache HTML for hearing keywords; flags when extraction has no hearing rows.",
+            what: "Commission meeting HTML contains a formal hearing heading but no matching rows in hearings.parquet.",
+            measures: "Counts formal `hoorzitting met` / `audition de` h2 headings vs hearings.parquet rows per meeting.",
+        },
+        "agenda.interpellation_not_extracted" => CheckDoc {
+            what: "Plenary meeting HTML contains an interpellation heading but no matching rows in interpellations.parquet.",
+            measures: "Counts `Interpellatie van` / `Interpellation de` h2 headings vs interpellations.parquet rows per meeting.",
         },
         "question.grouped_internal_ids_complete" => CheckDoc {
             what: "A commission or plenary question row is missing `internal_ids` (site-native sub-question keys).",

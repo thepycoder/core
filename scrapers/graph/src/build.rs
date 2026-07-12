@@ -109,6 +109,10 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     load_authored_edges(data_dir, &mut add_edge)?;
     load_asked_edges(data_dir, &mut add_edge)?;
     load_answered_edges(data_dir, &mut add_edge)?;
+    load_interpellated_edges(data_dir, &mut add_edge)?;
+    load_interpellation_responded_edges(data_dir, &mut add_edge)?;
+    load_invited_edges(data_dir, &mut add_edge)?;
+    load_proceeding_meeting_edges(data_dir, &mut add_edge)?;
     load_holds_role_edges(data_dir, &mut add_edge)?;
     load_spoke_and_part_of_edges(data_dir, &mut add_edge)?;
 
@@ -245,6 +249,64 @@ fn load_staging_nodes(
                 add_node(
                     "Question",
                     &question_id,
+                    &label,
+                    &source_urls[i],
+                    &cache_paths[i],
+                );
+            }
+        }
+    }
+
+    for (kind, rel, node_type, id_col, title_col) in [
+        (
+            "plenary",
+            "plenary/hearings.parquet",
+            "Hearing",
+            "hearing_id",
+            "title_nl",
+        ),
+        (
+            "commission",
+            "commission/hearings.parquet",
+            "Hearing",
+            "hearing_id",
+            "title_nl",
+        ),
+        (
+            "plenary",
+            "plenary/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+            "topics_nl",
+        ),
+        (
+            "commission",
+            "commission/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+            "topics_nl",
+        ),
+    ] {
+        let path = session.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let entity_ids = read_string_column(&batch, id_col)?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let titles = read_string_column(&batch, title_col)?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let entity_id = ensure_question_id(&session_ids[i], kind, &entity_ids[i]);
+                let label = if titles[i].is_empty() {
+                    entity_id.clone()
+                } else {
+                    titles[i].chars().take(120).collect()
+                };
+                add_node(
+                    node_type,
+                    &entity_id,
                     &label,
                     &source_urls[i],
                     &cache_paths[i],
@@ -657,6 +719,163 @@ fn load_holds_role_edges(
     Ok(())
 }
 
+fn load_interpellated_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+) -> Result<(), Box<dyn Error>> {
+    let path = data_dir.join("normalized/interpellated.parquet");
+    if !path.exists() {
+        return Ok(());
+    }
+    for batch in read_all_rows(&path)? {
+        let person_ids = read_string_column(&batch, "person_id")?;
+        let interpellation_ids = read_string_column(&batch, "interpellation_id")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let confidences = read_string_column(&batch, "confidence")?;
+        for i in 0..batch.num_rows() {
+            add_edge(
+                "INTERPELLED",
+                "Person",
+                &person_ids[i],
+                "Interpellation",
+                &interpellation_ids[i],
+                "",
+                &source_urls[i],
+                &cache_paths[i],
+                &confidences[i],
+            );
+        }
+    }
+    Ok(())
+}
+
+fn load_interpellation_responded_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+) -> Result<(), Box<dyn Error>> {
+    let path = data_dir.join("normalized/interpellation_responded.parquet");
+    if !path.exists() {
+        return Ok(());
+    }
+    for batch in read_all_rows(&path)? {
+        let entity_types = read_string_column(&batch, "entity_type")?;
+        let entity_ids = read_string_column(&batch, "entity_id")?;
+        let interpellation_ids = read_string_column(&batch, "interpellation_id")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let confidences = read_string_column(&batch, "confidence")?;
+        for i in 0..batch.num_rows() {
+            if entity_ids[i].is_empty() {
+                continue;
+            }
+            add_edge(
+                "RESPONDED",
+                &entity_types[i],
+                &entity_ids[i],
+                "Interpellation",
+                &interpellation_ids[i],
+                "",
+                &source_urls[i],
+                &cache_paths[i],
+                &confidences[i],
+            );
+        }
+    }
+    Ok(())
+}
+
+fn load_invited_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+) -> Result<(), Box<dyn Error>> {
+    let path = data_dir.join("normalized/invited.parquet");
+    if !path.exists() {
+        return Ok(());
+    }
+    for batch in read_all_rows(&path)? {
+        let entity_types = read_string_column(&batch, "entity_type")?;
+        let entity_ids = read_string_column(&batch, "entity_id")?;
+        let hearing_ids = read_string_column(&batch, "hearing_id")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let confidences = read_string_column(&batch, "confidence")?;
+        for i in 0..batch.num_rows() {
+            if entity_ids[i].is_empty() {
+                continue;
+            }
+            add_edge(
+                "INVITED",
+                &entity_types[i],
+                &entity_ids[i],
+                "Hearing",
+                &hearing_ids[i],
+                "",
+                &source_urls[i],
+                &cache_paths[i],
+                &confidences[i],
+            );
+        }
+    }
+    Ok(())
+}
+
+fn load_proceeding_meeting_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+) -> Result<(), Box<dyn Error>> {
+    let session = data_dir.join(format!("sessions/{SESSION_ID}"));
+    for (kind, rel, node_type, id_col) in [
+        ("plenary", "plenary/hearings.parquet", "Hearing", "hearing_id"),
+        (
+            "commission",
+            "commission/hearings.parquet",
+            "Hearing",
+            "hearing_id",
+        ),
+        (
+            "plenary",
+            "plenary/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+        ),
+        (
+            "commission",
+            "commission/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+        ),
+    ] {
+        let path = session.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let entity_ids = read_string_column(&batch, id_col)?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let entity_id = ensure_question_id(&session_ids[i], kind, &entity_ids[i]);
+                let meeting_node_id = format!("{kind}_{}_{}", session_ids[i], meeting_ids[i]);
+                add_edge(
+                    "PART_OF",
+                    node_type,
+                    &entity_id,
+                    "Meeting",
+                    &meeting_node_id,
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    "exact",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_spoke_and_part_of_edges(
     data_dir: &Path,
     add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
@@ -700,6 +919,30 @@ fn load_spoke_and_part_of_edges(
                     "Utterance",
                     &utterance_ids[i],
                     "Question",
+                    &item_ids[i],
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    "exact",
+                );
+            } else if item_kinds[i] == "hearing" && !item_ids[i].is_empty() {
+                add_edge(
+                    "PART_OF",
+                    "Utterance",
+                    &utterance_ids[i],
+                    "Hearing",
+                    &item_ids[i],
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    "exact",
+                );
+            } else if item_kinds[i] == "interpellation" && !item_ids[i].is_empty() {
+                add_edge(
+                    "PART_OF",
+                    "Utterance",
+                    &utterance_ids[i],
+                    "Interpellation",
                     &item_ids[i],
                     "",
                     &source_urls[i],

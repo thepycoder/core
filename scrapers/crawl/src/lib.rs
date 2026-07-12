@@ -5,6 +5,8 @@ pub mod utils;
 
 pub mod agenda_timeline;
 pub mod meeting_report;
+pub mod proceeding_entities;
+pub mod proceeding_io;
 pub mod report_blocks;
 pub mod speaker_parse;
 pub mod qa_markers;
@@ -16,6 +18,11 @@ pub mod vote_inventory;
 pub use agenda_timeline::{
     count_agenda_questions_from_cache, AgendaItem, ItemKind, MeetingKind,
 };
+pub use proceeding_entities::{
+    extract_proceedings_from_document, is_non_question_proceeding_heading, HearingDraft,
+    InterpellationDraft,
+};
+pub use proceeding_io::{write_hearings_parquet, write_interpellations_parquet};
 pub use speaker_parse::{count_source_markers, detect_turn_start, parse_speaker_label, SpeakerRole, TurnStart};
 pub use meeting_report::{extract_utterances_from_cache, extract_utterances_from_document};
 pub use report_blocks::{parse_report_blocks, read_report_html, BlockTag, ReportBlock};

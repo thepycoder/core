@@ -1,0 +1,501 @@
+use crate::agenda_timeline::{AgendaItem, ItemKind, MeetingKind};
+use crate::report_blocks::parse_report_blocks;
+use regex::Regex;
+use scraper::Html;
+use std::sync::OnceLock;
+
+#[derive(Debug, Clone)]
+pub struct HearingDraft {
+    pub hearing_id: String,
+    pub session_id: u32,
+    pub meeting_id: u32,
+    pub meeting_kind: MeetingKind,
+    pub agenda_id: String,
+    pub title_nl: String,
+    pub title_fr: String,
+    pub witnesses: String,
+    pub dossier_id: String,
+    pub internal_ids: String,
+    pub source_url: String,
+    pub cache_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InterpellationDraft {
+    pub interpellation_id: String,
+    pub session_id: u32,
+    pub meeting_id: u32,
+    pub meeting_kind: MeetingKind,
+    pub agenda_id: String,
+    pub interpellators: String,
+    pub respondents: String,
+    pub topics_nl: String,
+    pub topics_fr: String,
+    pub internal_ids: String,
+    pub dossier_id: String,
+    pub source_url: String,
+    pub cache_path: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct InterpellationParsed {
+    interpellators: Vec<String>,
+    respondents: Vec<String>,
+    topics: Vec<String>,
+    internal_ids: Vec<String>,
+}
+
+static INTERPELLATION_REGEX: OnceLock<Regex> = OnceLock::new();
+static INTERPELLATION_ID: OnceLock<Regex> = OnceLock::new();
+
+fn interpellation_regex() -> &'static Regex {
+    INTERPELLATION_REGEX.get_or_init(|| {
+        Regex::new(
+            r#"(?m)(?:Interpellatie van|Interpellation de)\s+(.+?)\s+(?:aan|à)\s+(.+?)\s+(?:over|sur)\s*["'""](.+?)["'""]\s*\((\d{8}[Ii])\)"#,
+        )
+        .unwrap()
+    })
+}
+
+fn interpellation_id_regex() -> &'static Regex {
+    INTERPELLATION_ID.get_or_init(|| Regex::new(r"\((\d{8}[Ii])\)").unwrap())
+}
+
+/// True when an h2 heading is a hearing or interpellation agenda item (not a question).
+pub fn is_non_question_proceeding_heading(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    if is_motion_conclusion_heading(&lower) {
+        return false;
+    }
+    is_hearing_heading(&lower) || is_interpellation_heading(&lower)
+}
+
+pub fn is_motion_conclusion_heading(lower: &str) -> bool {
+    lower.contains("motie ingediend tot besluit")
+        || lower.contains("moties ingediend tot besluit")
+        || lower.contains("motion déposée en conclusion")
+        || lower.contains("motions déposées en conclusion")
+        || lower.contains("motion deposee en conclusion")
+        || lower.contains("motions deposees en conclusion")
+}
+
+fn heading_body(lower: &str) -> String {
+    static AGENDA_PREFIX: OnceLock<Regex> = OnceLock::new();
+    let re = AGENDA_PREFIX.get_or_init(|| Regex::new(r"^\d{2}\s+").unwrap());
+    re.replace(lower.trim(), "").trim().to_string()
+}
+
+pub fn is_question_heading(lower: &str) -> bool {
+    let body = heading_body(lower);
+    body.starts_with("vraag van")
+        || body.starts_with("question de")
+        || body.contains("samengevoegde vragen")
+        || body.contains("toegevoegde vragen")
+        || body.contains("questions jointes")
+        || body.starts_with('-')
+}
+
+pub fn is_interpellation_heading(lower: &str) -> bool {
+    if is_motion_conclusion_heading(lower) {
+        return false;
+    }
+    lower.contains("interpellatie van") || lower.contains("interpellation de")
+}
+
+pub fn is_hearing_heading(lower: &str) -> bool {
+    if is_question_heading(lower) {
+        return false;
+    }
+    if is_interpellation_heading(lower) {
+        return false;
+    }
+    lower.contains("hoorzitting met")
+        || lower.contains("audition de:")
+        || lower.ends_with("audition de")
+}
+
+pub fn classify_heading_kind(meeting_kind: MeetingKind, section: &str, h2_text: &str) -> ItemKind {
+    let lower = h2_text.to_lowercase();
+    let section = section.to_lowercase();
+
+    if is_motion_conclusion_heading(&lower) {
+        return ItemKind::Procedural;
+    }
+
+    if is_interpellation_heading(&lower) {
+        return ItemKind::Interpellation;
+    }
+
+    if is_hearing_heading(&lower) {
+        return ItemKind::Hearing;
+    }
+
+    match meeting_kind {
+        MeetingKind::Plenary => {
+            if section.contains("mondelinge") || section.contains("question") {
+                return ItemKind::Question;
+            }
+            if section.contains("voorstel") || section.contains("proposition") {
+                return ItemKind::Proposition;
+            }
+            if section.contains("mededeling") {
+                return ItemKind::Notice;
+            }
+            if section.contains("naamstemming") || section.contains("vote") {
+                return ItemKind::Vote;
+            }
+            ItemKind::GeneralDebate
+        }
+        MeetingKind::Commission => {
+            if is_question_heading(&lower) {
+                ItemKind::Question
+            } else {
+                ItemKind::GeneralDebate
+            }
+        }
+    }
+}
+
+pub fn extract_proceedings_from_agenda(
+    agenda: &[AgendaItem],
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+) -> (Vec<HearingDraft>, Vec<InterpellationDraft>) {
+    let mut hearings = Vec::new();
+    let mut interpellations = Vec::new();
+
+    for item in agenda {
+        if item.item_id.is_empty() {
+            continue;
+        }
+        match item.item_kind {
+            ItemKind::Hearing => hearings.push(hearing_from_agenda_item(
+                item,
+                meeting_kind,
+                session_id,
+                meeting_id,
+                source_url,
+                cache_path,
+            )),
+            ItemKind::Interpellation => {
+                if let Some(draft) = interpellation_from_agenda_item(
+                    item,
+                    meeting_kind,
+                    session_id,
+                    meeting_id,
+                    source_url,
+                    cache_path,
+                ) {
+                    interpellations.push(draft);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (hearings, interpellations)
+}
+
+pub fn extract_proceedings_from_document(
+    document: &Html,
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+) -> (Vec<HearingDraft>, Vec<InterpellationDraft>) {
+    let blocks = parse_report_blocks(document);
+    let agenda = crate::agenda_timeline::build_agenda_timeline(
+        document,
+        &blocks,
+        meeting_kind,
+        session_id,
+        meeting_id,
+    );
+    extract_proceedings_from_agenda(
+        &agenda,
+        meeting_kind,
+        session_id,
+        meeting_id,
+        source_url,
+        cache_path,
+    )
+}
+
+fn hearing_from_agenda_item(
+    item: &AgendaItem,
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+) -> HearingDraft {
+    let witnesses = extract_witnesses_from_title(&item.title_nl)
+        .or_else(|| extract_witnesses_from_title(&item.title_fr))
+        .unwrap_or_default();
+    let mut internal_ids = item.internal_ids.clone();
+    internal_ids.extend(extract_interpellation_ids_from_text(&item.title_nl));
+    internal_ids.extend(extract_interpellation_ids_from_text(&item.title_fr));
+    internal_ids.sort();
+    internal_ids.dedup();
+
+    HearingDraft {
+        hearing_id: item.item_id.clone(),
+        session_id,
+        meeting_id,
+        meeting_kind,
+        agenda_id: item.agenda_id.clone(),
+        title_nl: clean_heading(&item.title_nl),
+        title_fr: clean_heading(&item.title_fr),
+        witnesses,
+        dossier_id: item.dossier_id.clone(),
+        internal_ids: internal_ids.join(","),
+        source_url: source_url.to_string(),
+        cache_path: cache_path.to_string(),
+    }
+}
+
+fn interpellation_from_agenda_item(
+    item: &AgendaItem,
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+) -> Option<InterpellationDraft> {
+    let nl = parse_interpellation_text(&item.title_nl);
+    let fr = parse_interpellation_text(&item.title_fr);
+    let topics_nl = nl.as_ref().map(|p| p.topics.join(";")).unwrap_or_default();
+    let topics_fr = fr.as_ref().map(|p| p.topics.join(";")).unwrap_or_default();
+    let parsed = merge_interpellation_parsed(nl.as_ref(), fr.as_ref());
+
+    if parsed.interpellators.is_empty() && parsed.topics.is_empty() {
+        return None;
+    }
+
+    let mut internal_ids = item.internal_ids.clone();
+    internal_ids.extend(parsed.internal_ids.clone());
+    internal_ids.sort();
+    internal_ids.dedup();
+
+    Some(InterpellationDraft {
+        interpellation_id: item.item_id.clone(),
+        session_id,
+        meeting_id,
+        meeting_kind,
+        agenda_id: item.agenda_id.clone(),
+        interpellators: parsed.interpellators.join(","),
+        respondents: parsed.respondents.join(","),
+        topics_nl,
+        topics_fr,
+        internal_ids: internal_ids.join(","),
+        dossier_id: item.dossier_id.clone(),
+        source_url: source_url.to_string(),
+        cache_path: cache_path.to_string(),
+    })
+}
+
+fn parse_interpellation_text(text: &str) -> Option<InterpellationParsed> {
+    let clean = clean_heading(text);
+    if clean.is_empty() {
+        return None;
+    }
+    let mut parsed = InterpellationParsed::default();
+    for cap in interpellation_regex().captures_iter(&clean) {
+        parsed.interpellators.push(cap[1].trim().to_string());
+        let respondent = cap[2].trim().to_string();
+        if !respondent.is_empty() && !parsed.respondents.contains(&respondent) {
+            parsed.respondents.push(respondent);
+        }
+        parsed.topics.push(cap[3].trim().to_string());
+        parsed
+            .internal_ids
+            .push(cap[4].trim().to_uppercase().replace('i', "I"));
+    }
+    if parsed.interpellators.is_empty() {
+        return None;
+    }
+    Some(parsed)
+}
+
+fn merge_interpellation_parsed(
+    nl: Option<&InterpellationParsed>,
+    fr: Option<&InterpellationParsed>,
+) -> InterpellationParsed {
+    let mut out = InterpellationParsed::default();
+    for src in nl.into_iter().chain(fr) {
+        for name in &src.interpellators {
+            if !out.interpellators.contains(name) {
+                out.interpellators.push(name.clone());
+            }
+        }
+        for name in &src.respondents {
+            if !out.respondents.contains(name) {
+                out.respondents.push(name.clone());
+            }
+        }
+        for topic in &src.topics {
+            if !out.topics.contains(topic) {
+                out.topics.push(topic.clone());
+            }
+        }
+        for id in &src.internal_ids {
+            if !out.internal_ids.contains(id) {
+                out.internal_ids.push(id.clone());
+            }
+        }
+    }
+    out
+}
+
+fn extract_witnesses_from_title(title: &str) -> Option<String> {
+    let clean = clean_heading(title);
+    let lower = clean.to_lowercase();
+    let after = if let Some(idx) = lower.find("hoorzitting met:") {
+        &clean[idx + "hoorzitting met:".len()..]
+    } else if let Some(idx) = lower.find("audition de:") {
+        &clean[idx + "audition de:".len()..]
+    } else if lower.ends_with("audition de") {
+        return None;
+    } else {
+        return None;
+    };
+    let witnesses = after.trim().trim_end_matches(':').trim();
+    if witnesses.is_empty() {
+        None
+    } else {
+        Some(witnesses.to_string())
+    }
+}
+
+fn extract_interpellation_ids_from_text(text: &str) -> Vec<String> {
+    interpellation_id_regex()
+        .captures_iter(text)
+        .map(|c| c[1].trim().to_uppercase().replace('i', "I"))
+        .collect()
+}
+
+fn clean_heading(text: &str) -> String {
+    text.replace('\u{00A0}', " ")
+        .replace("&quot;", "\"")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report_blocks::read_report_html;
+
+    #[test]
+    fn question_about_audition_stays_question_not_hearing() {
+        let lower = "06 question de pierre jadoul sur l'audition des mineurs".to_string();
+        assert!(is_question_heading(&lower));
+        assert!(!is_hearing_heading(&lower));
+    }
+
+    #[test]
+    fn formal_hearing_heading_detected() {
+        let lower = "01 de cop29 en de europese uitdagingen. hoorzitting met:".to_string();
+        assert!(is_hearing_heading(&lower));
+    }
+
+    #[test]
+    fn interpellation_heading_detected() {
+        let text = "16 Interpellatie van Raoul Hedebouw aan Bart De Wever over \"De huisvestingstoelage\" (56000070I)";
+        assert!(is_interpellation_heading(&text.to_lowercase()));
+        assert!(is_motion_conclusion_heading(
+            &"19 Motie ingediend tot besluit van de interpellatie".to_lowercase()
+        ));
+    }
+
+    #[test]
+    fn parse_interpellation_regex_extracts_fields() {
+        let text = r#"16 Interpellatie van Raoul Hedebouw aan Bart De Wever (eerste minister) over "De huisvestingstoelage van de federale ministers" (56000070I)"#;
+        let parsed = parse_interpellation_text(text).unwrap();
+        assert_eq!(parsed.interpellators[0], "Raoul Hedebouw");
+        assert!(parsed.respondents[0].contains("Bart De Wever"));
+        assert!(parsed.topics[0].contains("huisvestingstoelage"));
+        assert_eq!(parsed.internal_ids[0], "56000070I");
+    }
+
+    #[test]
+    fn commission_hearing_fixture_yields_entity() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/commission/56-15.html");
+        if !path.exists() {
+            let alt = std::path::Path::new("/home/victor/Projects/partijgedrag-parent/partijgedrag-3/core/cache/sessions/56/meetings/commission/56-15.html");
+            if !alt.exists() {
+                return;
+            }
+            let html = read_report_html(alt).unwrap();
+            let document = Html::parse_document(&html);
+            let (hearings, interpellations) = extract_proceedings_from_document(
+                &document,
+                MeetingKind::Commission,
+                56,
+                15,
+                "url",
+                "cache",
+            );
+            assert!(!hearings.is_empty());
+            assert!(hearings.iter().all(|h| !h.hearing_id.is_empty()));
+            return;
+        }
+        let html = read_report_html(&path).unwrap();
+        let document = Html::parse_document(&html);
+        let (hearings, _) = extract_proceedings_from_document(
+            &document,
+            MeetingKind::Commission,
+            56,
+            15,
+            "url",
+            "cache",
+        );
+        assert!(!hearings.is_empty());
+    }
+
+    #[test]
+    fn plenary_interpellation_fixture_yields_entity() {
+        for mid in [45u32, 95, 97] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../cache/sessions/56/meetings/plenary/56-{mid}.html"));
+            let alt = std::path::PathBuf::from(format!(
+                "/home/victor/Projects/partijgedrag-parent/partijgedrag-3/core/cache/sessions/56/meetings/plenary/56-{mid}.html"
+            ));
+            let path = if path.exists() { path } else { alt };
+            if !path.exists() {
+                continue;
+            }
+            let html = read_report_html(&path).unwrap();
+            let document = Html::parse_document(&html);
+            let (_, interpellations) = extract_proceedings_from_document(
+                &document,
+                MeetingKind::Plenary,
+                56,
+                mid,
+                "url",
+                "cache",
+            );
+            assert!(
+                !interpellations.is_empty(),
+                "expected interpellation in meeting {mid}"
+            );
+        }
+    }
+
+    #[test]
+    fn question_with_audition_in_title_is_not_hearing() {
+        let kind = classify_heading_kind(
+            MeetingKind::Commission,
+            "",
+            "06 Question de Pierre Jadoul sur \"L'audition des mineurs\" (56000853C)",
+        );
+        assert_eq!(kind, ItemKind::Question);
+    }
+}

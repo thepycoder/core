@@ -26,15 +26,25 @@ _THREAD_COLUMNS = """
 def fetch_question_thread(
     conn, question_id: str, *, limit: int = 500
 ) -> list[dict[str, Any]]:
+    return fetch_proceeding_thread(conn, "question", question_id, limit=limit)
+
+
+def fetch_proceeding_thread(
+    conn,
+    item_kind: str,
+    item_id: str,
+    *,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
     rows = conn.execute(
         f"""
         SELECT {_THREAD_COLUMNS}
         FROM utterances
-        WHERE item_kind = 'question' AND item_id = ?
+        WHERE item_kind = ? AND item_id = ?
         ORDER BY cast(seq AS integer), utterance_id
         LIMIT ?
         """,
-        [question_id, limit],
+        [item_kind, item_id, limit],
     ).fetchall()
     return [_row_to_dict(row) for row in rows]
 

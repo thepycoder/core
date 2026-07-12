@@ -56,6 +56,31 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+const EDGE_ROLE_LABELS = {
+  chair: "Chair",
+  subchair: "Subchair",
+  permanent: "Permanent member",
+  replacement: "Replacement member",
+  member: "Member",
+};
+
+function formatEdgeRole(role) {
+  if (!role) return "";
+  return EDGE_ROLE_LABELS[role] || role.replace(/_/g, " ");
+}
+
+function displayEdgeRole(role) {
+  const label = formatEdgeRole(role);
+  if (!label || label === "Member") return "";
+  return label;
+}
+
+function edgeRoleMarkup(role) {
+  const label = displayEdgeRole(role);
+  if (!label) return "";
+  return ` · <span class="link-drill-role">${escapeHtml(label)}</span>`;
+}
+
 function cacheUrl(cachePath) {
   if (!cachePath) return null;
   return `/api/cache/${cachePath.split("/").map(encodeURIComponent).join("/")}`;
@@ -134,28 +159,193 @@ function renderProvenanceBar(sourceUrl, cachePath) {
   }
 }
 
-function seedFromSample(issueId, sample) {
-  const d = sample.data || sample;
-  switch (issueId) {
-    case "orphan_to":
-      return { type: d.to_type, id: d.to_id };
-    case "orphan_from":
-      return { type: d.from_type, id: d.from_id };
-    case "vote_reconciliation":
-      return { type: "Vote", id: d.vote_id };
-    case "duplicate_utterance_ids":
-    case "utterances_without_spoke":
-      return { type: "Utterance", id: d.utterance_id };
-    default:
-      return null;
+function seedFromSample(_issueId, sample) {
+  if (sample.node_type && sample.node_id) {
+    return { type: sample.node_type, id: sample.node_id };
   }
+  return null;
+}
+
+function formatIssueSampleHint(sample) {
+  if (sample.action === "node") return "Open in inspector";
+  if (sample.action === "unresolved_bucket") return "Browse unresolved names";
+  if (sample.action === "artifact") return "View artifact";
+  return "View issue details";
+}
+
+async function openIssueSample(issue, sample) {
+  if (sample.action === "node" && sample.node_type && sample.node_id) {
+    try {
+      await openNode(sample.node_type, sample.node_id, { resetNav: true });
+      return;
+    } catch (err) {
+      showIssueContext(issue, sample, err.message);
+      return;
+    }
+  }
+  if (sample.action === "unresolved_bucket") {
+    await showUnresolvedBucket(sample.unresolved_bucket, sample.unresolved_reason, sample.label);
+    return;
+  }
+  if (sample.action === "artifact" && sample.artifact_id) {
+    await showArtifactIssue(sample);
+    return;
+  }
+  showIssueContext(issue, sample);
+}
+
+function showIssueContext(issue, sample, errorMessage = "") {
+  if (!sample.label && !sample.data) return;
+  navStack.length = 0;
+  pushNav("QA issue", issue.id, issue.id);
+  renderBreadcrumbs();
+  renderProvenanceBar(sample.source_url || sample.data?.source_url || "", sample.cache_path || sample.data?.cache_path || "");
+
+  const el = document.getElementById("inspector-content");
+  el.innerHTML = "";
+  el.classList.remove("muted");
+  inspectorNode = null;
+
+  const header = document.createElement("div");
+  header.className = "entity-header";
+  header.innerHTML = `
+    <span class="type-badge">QA issue</span>
+    <h2>${escapeHtml(issue.id)}</h2>
+    <div class="entity-meta"><span>${issue.count} occurrences</span></div>
+  `;
+  el.appendChild(header);
+
+  const summary = document.createElement("p");
+  summary.className = "inspector-note";
+  summary.textContent = issue.summary;
+  el.appendChild(summary);
+
+  if (errorMessage) {
+    const err = document.createElement("p");
+    err.className = "inspector-note";
+    err.textContent = `Could not open linked node: ${errorMessage}`;
+    el.appendChild(err);
+  }
+
+  const section = document.createElement("div");
+  section.className = "detail-section";
+  section.innerHTML = `<h3>Sample detail</h3>`;
+
+  const dl = document.createElement("dl");
+  dl.className = "preview-fields";
+  const fields = [
+    ["Message", sample.label || sample.data?.message],
+    ["Entity", sample.data?.entity_type && sample.data?.entity_id ? `${sample.data.entity_type} ${sample.data.entity_id}` : ""],
+    ["Expected", sample.data?.expected],
+    ["Actual", sample.data?.actual],
+    ["Meeting", sample.data?.meeting_kind && sample.data?.meeting_id ? `${sample.data.meeting_kind} ${sample.data.meeting_id}` : ""],
+  ];
+  for (const [label, value] of fields) {
+    if (!value) continue;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+  section.appendChild(dl);
+  el.appendChild(section);
+  writeHistory();
+}
+
+async function showUnresolvedBucket(bucket, reason, title) {
+  navStack.length = 0;
+  pushNav("Unresolved bucket", `${bucket}:${reason}`, title || `${bucket} · ${reason}`);
+  renderBreadcrumbs();
+  renderProvenanceBar("", "");
+
+  const params = new URLSearchParams({ limit: "100", offset: "0" });
+  if (bucket) params.set("bucket", bucket);
+  if (reason) params.set("reason", reason);
+  const data = await api(`/api/unresolved?${params}`);
+
+  const el = document.getElementById("inspector-content");
+  el.innerHTML = "";
+  el.classList.remove("muted");
+  inspectorNode = null;
+
+  const header = document.createElement("div");
+  header.className = "entity-header";
+  header.innerHTML = `
+    <span class="type-badge">Unresolved bucket</span>
+    <h2>${escapeHtml(title || `${bucket} · ${reason}`)}</h2>
+    <div class="entity-meta"><span>${data.total} unresolved names</span></div>
+  `;
+  el.appendChild(header);
+
+  const section = document.createElement("div");
+  section.className = "detail-section";
+  section.innerHTML = `<h3>Names</h3>`;
+  const list = document.createElement("div");
+  list.className = "link-list";
+
+  if (!data.rows.length) {
+    list.innerHTML = `<div class="muted">No rows for this bucket filter.</div>`;
+  } else {
+    for (const row of data.rows) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "link-drill";
+      item.innerHTML = `
+        <span class="link-drill-type">${escapeHtml(row.source_bucket)} · ${escapeHtml(row.role || "—")}</span>
+        <span class="link-drill-label">${escapeHtml(row.raw_name)}</span>
+        <span class="link-drill-id muted">${escapeHtml(row.context_label || row.context_id || "")}</span>
+      `;
+      item.addEventListener("click", () => showUnresolved(row.raw_name));
+      list.appendChild(item);
+    }
+  }
+
+  section.appendChild(list);
+  el.appendChild(section);
+  writeHistory();
+}
+
+async function showArtifactIssue(sample) {
+  const detail = await api(`/api/artifact/${encodeURIComponent(sample.artifact_id)}`);
+  navStack.length = 0;
+  pushNav("Artifact", sample.artifact_id, sample.artifact_id);
+  renderBreadcrumbs();
+  renderProvenanceBar(detail.source_url, detail.cache_path);
+
+  const el = document.getElementById("inspector-content");
+  el.innerHTML = "";
+  el.classList.remove("muted");
+  inspectorNode = null;
+
+  const header = document.createElement("div");
+  header.className = "entity-header";
+  header.innerHTML = `
+    <span class="type-badge">Artifact</span>
+    <h2>${escapeHtml(sample.artifact_id)}</h2>
+    <div class="entity-meta"><span>${escapeHtml(sample.label || "Missing scraped_at")}</span></div>
+  `;
+  el.appendChild(header);
+
+  const section = document.createElement("div");
+  section.className = "detail-section preview-section";
+  section.innerHTML = `
+    <dl class="preview-fields">
+      <dt>Parser version</dt><dd>${escapeHtml(detail.parser_version || "—")}</dd>
+      <dt>Scraped at</dt><dd>${escapeHtml(detail.scraped_at || "—")}</dd>
+    </dl>
+  `;
+  el.appendChild(section);
+  writeHistory();
 }
 
 async function loadHealth() {
   const health = await api("/api/health");
   const missing = health.files.filter((f) => !f.exists).length;
   const el = document.getElementById("health-status");
-  el.textContent = `${health.data_dir} · ${missing ? `${missing} missing files` : "data ok"}`;
+  const version = health.viewer_version ? ` · viewer ${health.viewer_version}` : "";
+  el.textContent = `${health.data_dir} · ${missing ? `${missing} missing files` : "data ok"}${version}`;
   if (health.warnings.length) el.title = health.warnings.join("\n");
 }
 
@@ -173,12 +363,10 @@ async function loadIssues() {
     `;
     for (const sample of issue.samples.slice(0, 3)) {
       const s = document.createElement("div");
-      s.className = "sample";
-      s.textContent = JSON.stringify(sample.data);
-      s.addEventListener("click", () => {
-        const seed = seedFromSample(issue.id, sample);
-        if (seed) openNode(seed.type, seed.id, { resetNav: true });
-      });
+      s.className = `sample${sample.action === "node" ? " sample-actionable" : ""}`;
+      s.title = formatIssueSampleHint(sample);
+      s.textContent = sample.label || JSON.stringify(sample.data);
+      s.addEventListener("click", () => openIssueSample(issue, sample));
       li.appendChild(s);
     }
     list.appendChild(li);
@@ -575,7 +763,7 @@ function createLinkRow(link) {
   btn.className = "link-drill";
   const label = link.neighbor_label || link.neighbor_id;
   btn.innerHTML = `
-    <span class="link-drill-type">${escapeHtml(link.neighbor_type)} · ${escapeHtml(link.edge_type)}</span>
+    <span class="link-drill-type">${escapeHtml(link.neighbor_type)} · ${escapeHtml(link.edge_type)}${edgeRoleMarkup(link.role)}</span>
     <span class="link-drill-label">${escapeHtml(label)}</span>
     <span class="link-drill-id muted">${escapeHtml(link.neighbor_id)}${link.confidence !== "exact" ? ` · ${escapeHtml(link.confidence)}` : ""}</span>
   `;
@@ -692,15 +880,19 @@ async function showEdgeDetail(link) {
     to_type: link.to_type,
     to_id: link.to_id,
   });
+  if (link.role) params.set("role", link.role);
   const detail = await api(`/api/edge?${params}`);
 
   const el = document.getElementById("inspector-content");
   const panel = document.createElement("div");
   panel.className = "inspector-note";
+  const roleLine = displayEdgeRole(detail.role)
+    ? `<br>role: ${escapeHtml(displayEdgeRole(detail.role))}`
+    : "";
   panel.innerHTML = `
     <strong>Edge: ${escapeHtml(detail.edge_type)}</strong><br>
     ${escapeHtml(detail.from_type)}:${escapeHtml(detail.from_id)} →
-    ${escapeHtml(detail.to_type)}:${escapeHtml(detail.to_id)}<br>
+    ${escapeHtml(detail.to_type)}:${escapeHtml(detail.to_id)}${roleLine}<br>
     confidence: ${escapeHtml(detail.confidence)} · artifact: ${escapeHtml(detail.source_artifact_id || "—")}
   `;
   if (detail.source_url) {

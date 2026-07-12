@@ -3,14 +3,30 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.models import Issue, IssueSample, IssuesResponse
+from app.queries.issue_navigation import format_sample_label, resolve_issue_navigation
 
 
-def _rows_to_samples(rows, limit: int = 5) -> list[IssueSample]:
+def _rows_to_samples(conn, check_id: str, rows, limit: int = 5) -> list[IssueSample]:
     cols = [desc[0] for desc in rows.description]
-    return [
-        IssueSample(data=dict(zip(cols, row, strict=True)))
-        for row in rows.fetchmany(limit)
-    ]
+    samples: list[IssueSample] = []
+    for row in rows.fetchmany(limit):
+        data = dict(zip(cols, row, strict=True))
+        nav = resolve_issue_navigation(conn, check_id, data)
+        samples.append(
+            IssueSample(
+                data=data,
+                label=nav.get("label") or format_sample_label(data),
+                action=nav.get("action") or "context",
+                node_type=nav.get("node_type") or "",
+                node_id=nav.get("node_id") or "",
+                unresolved_bucket=nav.get("unresolved_bucket") or "",
+                unresolved_reason=nav.get("unresolved_reason") or "",
+                artifact_id=nav.get("artifact_id") or "",
+                source_url=nav.get("source_url") or data.get("source_url") or "",
+                cache_path=nav.get("cache_path") or data.get("cache_path") or "",
+            )
+        )
+    return samples
 
 
 def _qa_parquet_paths(data_dir: Path) -> tuple[Path, Path]:
@@ -78,7 +94,7 @@ def fetch_issues(conn, data_dir: Path | None = None) -> IssuesResponse:
                 """,
                 [check],
             )
-            samples = _rows_to_samples(sample_rows)
+            samples = _rows_to_samples(conn, check, sample_rows)
 
         issues.append(
             Issue(

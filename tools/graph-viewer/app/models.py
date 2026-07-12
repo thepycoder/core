@@ -12,6 +12,7 @@ class HealthResponse(BaseModel):
     data_dir: str
     cache_dir: str
     duckdb_ok: bool
+    viewer_version: str = ""
     files: list[HealthFileStatus]
     warnings: list[str]
 
@@ -31,6 +32,15 @@ class StatsResponse(BaseModel):
 
 class IssueSample(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
+    label: str = ""
+    action: str = "context"
+    node_type: str = ""
+    node_id: str = ""
+    unresolved_bucket: str = ""
+    unresolved_reason: str = ""
+    artifact_id: str = ""
+    source_url: str = ""
+    cache_path: str = ""
 
 
 class Issue(BaseModel):
@@ -169,6 +179,7 @@ class NodeLink(BaseModel):
     from_id: str
     to_type: str
     to_id: str
+    role: str = ""
     confidence: str
     neighbor_label: str
     neighbor_type: str
@@ -192,6 +203,7 @@ class EdgeDetailResponse(BaseModel):
     from_id: str
     to_type: str
     to_id: str
+    role: str = ""
     source_artifact_id: str
     source_url: str
     cache_path: str

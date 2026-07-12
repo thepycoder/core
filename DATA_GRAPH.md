@@ -33,8 +33,9 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Amendment**                | document id + dossier                                           | Dossier subdocuments typed `AMENDEMENT`                                                                                                                               | Same as Document; authors are structured on site.                                                                         |
 | **Report**                   | document id + dossier                                           | Subdocuments typed `VERSLAG`; commission integraal                                                                                                                    | PDF-heavy; rapporteur named on dossier page, speech inside PDF.                                                           |
 | **Motion**                   | motion id + meeting/dossier context                             | Motions database; vote titles                                                                                                                                         | Referenced by vote parsing today but not modelled as a node.                                                              |
-| **Interpellation / Hearing** | oral-control id or `{meeting_id, agenda_seq}`                   | Commission/plenary reports; INQO search database                                                                                                                      | Needed because commission reports are not only questions; hearings are explicitly skipped today.                          |
-| **Vote**                     | `{meeting_id, vote_id}`                                         | Plenary integraal (tables + appendix)                                                                                                                                 | Already scraped. Roll-call names are CSV strings, not person links.                                                       |
+| **Hearing**                  | `{session_id}_{meeting_kind}_{meeting_id}_{seq}` (+ site refs in `internal_ids`) | Commission integraal (`hoorzitting met` / `audition de` h2); plenary rare | Staging `hearings.parquet`; graph Hearing nodes; `item_kind=hearing` utterances linked via `item_id`. |
+| **Interpellation**           | `{session_id}_{meeting_kind}_{meeting_id}_{seq}` (+ `56000070I` in `internal_ids`) | Plenary integraal (`Interpellatie van` / `Interpellation de` h2) | Staging `interpellations.parquet`; graph Interpellation nodes; site ref suffix `I`. Commission has no formal interpellation h2s. |
+| **Vote**                     | `{meeting_id, vote_id}`                                         | Plenary integraal (tables + appendix) only                                                                                                                            | Already scraped. **Commission integraal has no roll-call vote tables** — do not port plenary `extract_votes`.             |
 | **VoteCast**                 | `{vote_id, person_id, position}`                                | Vote appendix tables                                                                                                                                                  | Name→person matching; “Nee” block parsing is fragile.                                                                     |
 | **Topic**                    | Eurovoc id + label                                              | Dossier fiche; optional NLP on utterances                                                                                                                             | Eurovoc on dossiers scraped. Utterance tagging not done.                                                                  |
 | **LobbyOrg**                 | name                                                            | Lobby register PDF (`lobbyregister.pdf`)                                                                                                                              | Scraped flat (301 orgs); `DECLARES_INTEREST` links to persons not wired yet.                                                |
@@ -62,6 +63,9 @@ Decisions for anyone (human or LLM) extending this repo:
 | `AUTHORED`          | Person → Document                  | Dossier subdocument author list                     | Structured on site; stored as CSV today.                       |
 | `REFERENCES`        | Meeting → Dossier                  | Proposition/vote titles `(297/10)`                  | Regex extraction; already collected as sidecar ids.            |
 | `DISCUSSED_IN`      | Dossier → Meeting                  | Dossier fiche calendar (commission + plenary steps) | Rich HTML; not ingested as edges.                              |
+| `INTERPELLED`       | Person → Interpellation              | `interpellators` on interpellation header           | Same resolver path as `ASKED`.                                 |
+| `RESPONDED`         | Person / ExternalPerson → Interpellation | `respondents` on interpellation header          | Distinct from `ANSWERED` (Question target).                    |
+| `INVITED`           | Person / ExternalPerson → Hearing    | `witnesses` on hearing header (when parseable)      | Best-effort; empty witnesses common.                           |
 | `VOTED_ON`          | Vote → Dossier / Document / Motion | Vote title                                          | Partially parsed (dossier_id, motion_id).                      |
 | `CAST`              | Person → VoteCast → Vote           | Vote appendix                                       | Needs normalization from name lists.                           |
 | `TAGGED_WITH`       | Dossier → Topic                    | Eurovoc on dossier fiche                            | Scraped.                                                       |
@@ -78,7 +82,7 @@ Decisions for anyone (human or LLM) extending this repo:
 | Bucket                     | URL pattern / entry                           | Maps to                                                  |
 | -------------------------- | --------------------------------------------- | -------------------------------------------------------- |
 | Plenary integraal          | `/doc/PCRI/html/{session}/ip{N}x.html`        | Meeting, AgendaItem, Utterance, Question, Vote, VoteCast |
-| Commission integraal       | `/doc/CCRI/html/{session}/ic{N}x.html`        | Meeting, Utterance, Question                             |
+| Commission integraal       | `/doc/CCRI/html/{session}/ic{N}x.html`        | Meeting, Utterance, Question, Hearing, Interpellation (rare) |
 | Plenary/commission beknopt | via Documenten → Beknopt verslag              | Utterance (summary text)                                 |
 | Dossiers                   | `flwbn.cfm?legislat=&dossierID=`              | Dossier, Document, edges to Meeting/Person/Topic         |
 | FLWB browse                | `ListDocument.cfm?legislat=` → `ListFromTo.cfm` | Dossier id discovery (union with plenary refs)          |
@@ -97,11 +101,11 @@ Decisions for anyone (human or LLM) extending this repo:
 
 | Status                                     | Nodes / edges                                                                                                                                                                                     |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Scraped, flat**                          | Session, Person, Commission, Meeting, Question (oral), Vote, Dossier, Document (meta), Remuneration, LobbyOrg (301), staging `utterances.parquet` (42 887)                                       |
-| **Canonicalized and working**              | Identity: Person, ExternalPerson (57), Party, Commission, memberships, person/external aliases; normalized edges (`vote_casts`, `authored`, `asked`, `answered`, `holds_role`, `utterances`); graph Parquet (`nodes`, `edges`, `source_artifacts`); soft speaker QA in `normalize-edges` |
-| **Parsed but not normalized**              | Commission role edges beyond chair; 2 576 utterances without `SPOKE` (unresolved/chair speakers)                                                                                                   |
+| **Scraped, flat**                          | Session, Person, Commission, Meeting, Question (oral), Vote, Dossier, Document (meta), Remuneration, LobbyOrg (301), staging `utterances.parquet`, `hearings.parquet`, `interpellations.parquet` |
+| **Canonicalized and working**              | Identity: Person, ExternalPerson (57), Party, Commission, memberships, person/external aliases; normalized edges (`vote_casts`, `authored`, `asked`, `answered`, `interpellated`, `interpellation_responded`, `invited`, `holds_role`, `utterances`); graph Parquet; Hearing + Interpellation nodes with `PART_OF` utterance links |
+| **Parsed but not normalized**              | Commission role edges beyond chair; 2 576 utterances without `SPOKE` (unresolved/chair speakers); INQO oral-control id enrichment for interpellations |
 | **Enrichment (optional LLM)**              | `external_person_bios.parquet` via `just enrich-external-persons` (Mistral Agents API + `web_search`)                                                                                             |
-| **Not scraped / not normalized**           | Written Question/Answer, Motion (as node), Interpellation/Hearing (as nodes), InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar (`DISCUSSED_IN`), Beknopt verslag, `DECLARES_INTEREST` |
+| **Not scraped / not normalized**           | Written Question/Answer, Motion (as node), InterventionAnalysis, MediaRecording, Meeting↔Dossier calendar (`DISCUSSED_IN`), Beknopt verslag, `DECLARES_INTEREST`, **commission roll-call votes** (not present in integraal verslag HTML) |
 | **Debug tooling (local only)**             | `tools/graph-viewer` — search, inspector, vote breakdown, discussion threads, unresolved-person triage; issues panel reads `data/qa/checks.parquet` from `just qa` |
 
 ## Implementation state
@@ -113,13 +117,14 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 - **Stage 0 contract (partially done):** `STAGING.md` documents every current Parquet schema and ID conventions. Major scrapers now emit `source_url` + `cache_path` on staging rows. Question ids include meeting kind (`{session}_{plenary\|commission}_{meeting}_{seq}`) via `composite_scoped_id`, with `ensure_question_id` upgrading legacy rows at normalize/graph time; site-native refs stay in `internal_ids`. Still open: commission `meeting_id` vs `commission_id` rename, vote ids still meeting-scoped composites (not site-native), idempotent per-meeting incremental scraping.
 - **Stage 0 QA (superseded):** `just qa` now regenerates `data/qa/checks.parquet` and `summary.md` from detail rows. Stale Jul-1 artifacts replaced.
 - **Step 1 identity (working):** `just build-identity` runs `identity` + `external-identity`. Writes `persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `external_persons.parquet` (57), `external_person_aliases.parquet` (129), `external_person_contexts.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`. Last run: 175 persons, 13 parties, 1 302 memberships, 21 unresolved commission-member occurrences (placeholder `N .` only).
-- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (189 496 vote casts, 6 798 authored, 11 634 asked, 7 185 answered, 410 holds_role, 42 887 utterances; 4 695 unresolved names). Six vote reconciliation mismatches (`56_129_4`, `56_133_18`–`21`, `56_133_32`). Speaker regression checks moved to `just qa`.
-- **Step 3 graph (working):** `just build-graph` writes `data/graph/nodes.parquet` (55 282 nodes), `edges.parquet` (332 982 edges: MEMBER_OF, CAST, AUTHORED, ASKED, ANSWERED, HOLDS_ROLE, SPOKE, PART_OF, VOTED_ON, SUBMITTED, TAGGED_WITH), and `source_artifacts.parquet` (2 384 artifacts). 145 orphan `VOTED_ON` edges (partial vote-title refs). 2 576 Utterance nodes without `SPOKE`. Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; `scraped_at` on artifacts is still empty. CAST is Person→Vote (no separate VoteCast node).
+- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (196 059 vote casts, 6 790 authored, 11 765 asked, 7 291 answered, 29 interpellated, 24 interpellation responded, 414 holds_role, 43 431 utterances; 4 997 unresolved names). Six vote reconciliation mismatches remain.
+- **Step 3 graph (working):** `just build-graph` writes `data/graph/nodes.parquet` (55 993 nodes including 3 Hearing + 29 Interpellation), `edges.parquet` (355 913 edges: adds `INTERPELLED`, `RESPONDED`, `PART_OF` utterance→proceeding links), and `source_artifacts.parquet` (2 388 artifacts). 145 orphan `VOTED_ON` edges. 2 659 Utterance nodes without `SPOKE`. CAST is Person→Vote (no separate VoteCast node).
 
 ### Branch additions since 2026-07-01
 
 - **Dossier discovery (Step 4, done):** `just scrape-dossiers` unions plenary-derived ids with FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`). Graph now has 1 640 Dossier nodes.
-- **Full-session utterances (Step 4, done):** `crawl` report-block stream + agenda timeline + speaker segmentation writes staging `utterances.parquet` for plenary and commission (42 887 rows: 21 074 `general_debate`, 18 170 `question`, 3 104 `proposition`, 233 `vote`, 53 `hearing`, 16 `notice`). Normalized and graphed as Utterance nodes with `SPOKE` / `PART_OF` edges.
+- **Full-session utterances (Step 4, done):** `crawl` report-block stream + agenda timeline + speaker segmentation writes staging `utterances.parquet` for plenary and commission (43 431 rows). Normalized and graphed as Utterance nodes with `SPOKE` / `PART_OF`.
+- **Hearings & interpellations (Step 4, done):** shared `proceeding_entities` in `crawl`; staging `hearings.parquet` + `interpellations.parquet`; normalize `INTERPELLED` / `RESPONDED` / `INVITED`; graph Hearing + Interpellation nodes with utterance `PART_OF` links.
 - **External identity + ActorResolver (Step 1–2, done):** `external-identity` scans staging for non-MP actors; `ActorResolver` routes speakers, authors, and respondents to Person or ExternalPerson. `ANSWERED` edges wired (7 185). Optional `enrich-external-persons` adds LLM bios.
 - **Lobby register (Step 6 partial):** `scrape-lobby` downloads `lobbyregister.pdf`, extracts 301 orgs to `lobby.parquet` with `source_url` + `cache_path`.
 - **Commission meeting gaps:** `meeting_gaps.parquet` tracks ids in `1..=last` with no scraped row (10 gaps today).
@@ -129,7 +134,11 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 
 ### Not done yet
 
-Government/minister mandate-over-time table (portfolio titles resolve to ExternalPerson today, not dated mandates) and remaining Step 4 sources (written Q&A, Motion/Interpellation/Hearing nodes, dossier calendar edges, Beknopt verslag). Stage 0 schema-hygiene checks are partially reimplemented in `just qa` (`schema.*` tier).
+Government/minister mandate-over-time table (portfolio titles resolve to ExternalPerson today, not dated mandates) and remaining Step 4 sources (written Q&A, Motion node, dossier calendar edges, Beknopt verslag, INQO id enrichment). Stage 0 schema-hygiene checks are partially reimplemented in `just qa` (`schema.*` tier).
+
+### Commission roll-call votes (negative finding)
+
+Scanned all cached commission integraal verslag HTML (session 56): **0 files** contain plenary-style roll-call markers (`Stemming`, `DETAIL VAN DE NAAMSTEMMINGEN`, Ja/Nee member tables). `votes.parquet` and `CAST` edges are **plenary integraal only**. Commission adoption is sometimes mentioned in prose (e.g. *wordt unaniem aangenomen*); that is not modelled as Vote/CAST. Future sources: commission PDF verslag (FLWB `VERSLAG`), dossier fiche calendar, or a dedicated roll-call feed if one appears.
 
 
 ## Scrutiny
@@ -145,7 +154,7 @@ What is strong:
 What is missing:
 
 - A first-class `Membership` / `Mandate` shape. Party and commission membership need `role`, `start_date`, `end_date`, `source`, `active`, and sometimes replacement/permanent status; an edge with only a time range will become too thin.
-- `Motion`, `Interpellation`, `Hearing`, and probably `Notice` / procedural agenda entries. The plenary scraper already extracts propositions and notices, vote parsing references `motion_id`, and the commission scraper deliberately skips hearings.
+- `Motion`, `Interpellation`, `Hearing`, and probably `Notice` / procedural agenda entries. **Hearing and Interpellation nodes are now wired** (staging → normalize → graph). Remaining: Motion node, INQO id enrichment, procedural adoption tagging in commission prose.
 - A source/provenance table for raw artifacts: report HTML, dossier HTML, PDF, converted markdown, search result page. **Partially addressed:** `source_artifacts.parquet` + edge-level `source_artifact_id`/`source_url`/`cache_path` exist; staging rows now carry `source_url`/`cache_path`. Still missing: `scraped_at` on artifacts, PDF/markdown artifact registration, parser version on every source type.
 - A canonical bilingual text strategy. Many entities have NL and FR titles/topics; some source `lang` attributes are wrong. The graph should keep language-tagged text variants rather than picking one string per entity.
 - Validation gates: row counts, referential integrity, unmatched names, duplicate site ids, and expected deltas per scrape run.
@@ -211,7 +220,7 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 - ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done (2026-07-06):** 1 640 Dossier nodes in graph.
 - ~~Full-session utterance extraction from integraal verslagen.~~ **Done (2026-07-07):** staging + normalized `utterances.parquet` (42 887 rows); graph Utterance nodes with `SPOKE`/`PART_OF`.
 - Written Q&A from the QRVA bulletins (`/QRVA/pdf/{session}/…`) / search database.
-- `Motion`, `Interpellation`, `Hearing`, and procedural `Notice` handling (INQO / report sources; the commission scraper currently drops hearings).
+- `Motion`, `Interpellation`, `Hearing`, and procedural `Notice` handling (Motion node; INQO enrichment; optional commission procedural adoption tagging from prose).
 - Parse the dossier fiche calendar into `DISCUSSED_IN`, `SUBMITTED`, `AUTHORED`, and rapporteur/chair role edges.
 
 **5. Now that the architecture exists, stand up QA over it.**

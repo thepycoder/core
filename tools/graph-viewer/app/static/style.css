@@ -129,6 +129,11 @@ ul {
   color: var(--muted);
   padding-left: 0.5rem;
   cursor: pointer;
+  line-height: 1.35;
+}
+
+.sample-actionable {
+  color: var(--text);
 }
 
 #breadcrumb-bar {
@@ -289,6 +294,11 @@ ul {
   font-weight: 600;
   color: var(--info);
   margin-right: 0.35rem;
+}
+
+.link-drill-role {
+  color: var(--accent, #c9a227);
+  font-weight: 600;
 }
 
 .link-drill-label {

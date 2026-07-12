@@ -4,7 +4,9 @@ use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
 use crawl::{
-    extract_utterances_from_document, write_utterances_parquet, MeetingKind, UtteranceDraft,
+    extract_proceedings_from_document, extract_utterances_from_document, write_hearings_parquet,
+    write_interpellations_parquet, write_utterances_parquet, HearingDraft, InterpellationDraft,
+    MeetingKind, UtteranceDraft,
 };
 use identity::convert_name;
 use encoding_rs::WINDOWS_1252;
@@ -181,6 +183,8 @@ struct MeetingOutput {
     propositions: Vec<ScrapedProposition>,
     votes: Vec<ScrapedVote>,
     notices: Vec<ScrapedNotice>,
+    hearings: Vec<HearingDraft>,
+    interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
 }
 
@@ -436,6 +440,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_propositions = Vec::new();
     let mut all_notices = Vec::new();
     let mut all_votes = Vec::new();
+    let mut all_hearings = Vec::new();
+    let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
 
     let mp = MultiProgress::new();
@@ -470,6 +476,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_propositions.extend(output.propositions);
                 all_notices.extend(output.notices);
                 all_votes.extend(output.votes);
+                all_hearings.extend(output.hearings);
+                all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
             }
             Err(err) => {
@@ -499,6 +507,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     write_propositions(&session_dir.join("propositions.parquet"), &all_propositions)?;
     write_notices(&session_dir.join("notices.parquet"), &all_notices)?;
     write_votes(&session_dir.join("votes.parquet"), &all_votes)?;
+    write_hearings_parquet(&session_dir.join("hearings.parquet"), &all_hearings)?;
+    write_interpellations_parquet(
+        &session_dir.join("interpellations.parquet"),
+        &all_interpellations,
+    )?;
     write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
 
     println!(
@@ -632,6 +645,15 @@ async fn scrape_meeting(
         &cache_path,
     );
 
+    let (hearings, interpellations) = extract_proceedings_from_document(
+        &document,
+        MeetingKind::Plenary,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -647,6 +669,8 @@ async fn scrape_meeting(
         propositions,
         notices,
         votes,
+        hearings,
+        interpellations,
         utterances,
     })
 }

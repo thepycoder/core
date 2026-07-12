@@ -9,7 +9,11 @@ from app.models import (
     VoteCastMember,
     VotePositionGroup,
 )
-from app.queries.discussion_threads import fetch_meeting_thread, fetch_question_thread
+from app.queries.discussion_threads import (
+    fetch_meeting_thread,
+    fetch_proceeding_thread,
+    fetch_question_thread,
+)
 from app.queries.entity_preview import fetch_entity_preview
 
 _SPEAKER_NODE_TYPES = frozenset({"Person", "ExternalPerson"})
@@ -62,6 +66,12 @@ def _fetch_utterances(conn, node_type: str, node_id: str) -> tuple[list[dict], s
     if node_type == "Question":
         rows = fetch_question_thread(conn, node_id)
         return rows, "Question discussion"
+    if node_type == "Hearing":
+        rows = fetch_proceeding_thread(conn, "hearing", node_id)
+        return rows, "Hearing discussion"
+    if node_type == "Interpellation":
+        rows = fetch_proceeding_thread(conn, "interpellation", node_id)
+        return rows, "Interpellation discussion"
     if node_type == "Meeting":
         parts = node_id.split("_", 2)
         if len(parts) != 3:
@@ -247,12 +257,13 @@ def _edge_groups(
                 e.source_artifact_id, e.source_url, e.cache_path, e.confidence,
                 coalesce(n.label, e.to_id) AS neighbor_label,
                 e.to_type AS neighbor_type,
-                e.to_id AS neighbor_id
+                e.to_id AS neighbor_id,
+                e.role
             FROM edges e
             LEFT JOIN nodes n ON e.to_type = n.node_type AND e.to_id = n.node_id
             WHERE e.from_type = ? AND e.from_id = ?
               AND e.edge_type = ?
-            ORDER BY neighbor_label, e.to_id
+            ORDER BY neighbor_label, e.role, e.to_id
             LIMIT 8
         """
     else:
@@ -269,12 +280,13 @@ def _edge_groups(
                 e.source_artifact_id, e.source_url, e.cache_path, e.confidence,
                 coalesce(n.label, e.from_id) AS neighbor_label,
                 e.from_type AS neighbor_type,
-                e.from_id AS neighbor_id
+                e.from_id AS neighbor_id,
+                e.role
             FROM edges e
             LEFT JOIN nodes n ON e.from_type = n.node_type AND e.from_id = n.node_id
             WHERE e.to_type = ? AND e.to_id = ?
               AND e.edge_type = ?
-            ORDER BY neighbor_label, e.from_id
+            ORDER BY neighbor_label, e.role, e.from_id
             LIMIT 8
         """
 
@@ -292,8 +304,8 @@ def _edge_groups(
 
 
 def _row_to_sample(row) -> dict:
-    if len(row) < 12:
-        raise ValueError(f"expected 12 columns in edge sample row, got {len(row)}: {row!r}")
+    if len(row) < 13:
+        raise ValueError(f"expected 13 columns in edge sample row, got {len(row)}: {row!r}")
     return {
         "edge_type": row[0],
         "from_type": row[1],
@@ -307,6 +319,7 @@ def _row_to_sample(row) -> dict:
         "neighbor_label": row[9],
         "neighbor_type": row[10],
         "neighbor_id": row[11],
+        "role": row[12] or "",
     }
 
 
@@ -355,9 +368,9 @@ def fetch_node_links(
         pattern = f"%{q.strip()}%"
         text_clause = " OR u.text ILIKE ?" if utterance_join else ""
         filters.append(
-            f"({neighbor_label} ILIKE ? OR {neighbor_id} ILIKE ? OR e.edge_type ILIKE ?{text_clause})"
+            f"({neighbor_label} ILIKE ? OR {neighbor_id} ILIKE ? OR e.edge_type ILIKE ? OR e.role ILIKE ?{text_clause})"
         )
-        params.extend([pattern, pattern, pattern])
+        params.extend([pattern, pattern, pattern, pattern])
         if utterance_join:
             params.append(pattern)
 
@@ -379,6 +392,7 @@ def fetch_node_links(
         SELECT
             e.edge_type,
             e.from_type, e.from_id, e.to_type, e.to_id,
+            e.role,
             e.confidence,
             {neighbor_label} AS neighbor_label,
             {neighbor_type} AS neighbor_type,
@@ -389,7 +403,7 @@ def fetch_node_links(
         {join}
         {utterance_join}
         WHERE {where}
-        ORDER BY neighbor_label, {neighbor_id}
+        ORDER BY neighbor_label, e.role, {neighbor_id}
         LIMIT ? OFFSET ?
         """,
         [*params, limit, offset],
@@ -402,12 +416,13 @@ def fetch_node_links(
             from_id=row[2],
             to_type=row[3],
             to_id=row[4],
-            confidence=row[5] or "exact",
-            neighbor_label=row[6] or row[8],
-            neighbor_type=row[7],
-            neighbor_id=row[8],
-            source_url=row[9] or "",
-            cache_path=row[10] or "",
+            role=row[5] or "",
+            confidence=row[6] or "exact",
+            neighbor_label=row[7] or row[9],
+            neighbor_type=row[8],
+            neighbor_id=row[9],
+            source_url=row[10] or "",
+            cache_path=row[11] or "",
         )
         for row in rows
     ]
@@ -429,19 +444,28 @@ def fetch_edge_detail(
     from_id: str,
     to_type: str,
     to_id: str,
+    role: str | None = None,
 ) -> EdgeDetailResponse | None:
+    filters = [
+        "edge_type = ?",
+        "from_type = ?",
+        "from_id = ?",
+        "to_type = ?",
+        "to_id = ?",
+    ]
+    params: list = [edge_type, from_type, from_id, to_type, to_id]
+    if role:
+        filters.append("role = ?")
+        params.append(role)
+
     row = conn.execute(
-        """
-        SELECT source_artifact_id, source_url, cache_path, confidence
+        f"""
+        SELECT source_artifact_id, source_url, cache_path, confidence, role
         FROM edges
-        WHERE edge_type = ?
-          AND from_type = ?
-          AND from_id = ?
-          AND to_type = ?
-          AND to_id = ?
+        WHERE {" AND ".join(filters)}
         LIMIT 1
         """,
-        [edge_type, from_type, from_id, to_type, to_id],
+        params,
     ).fetchone()
     if not row:
         return None
@@ -472,6 +496,7 @@ def fetch_edge_detail(
         from_id=from_id,
         to_type=to_type,
         to_id=to_id,
+        role=row[4] or "",
         source_artifact_id=row[0] or "",
         source_url=row[1] or "",
         cache_path=row[2] or "",

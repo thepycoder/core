@@ -91,9 +91,15 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 
 **votes.parquet:** `vote_id`, `session_id`, `meeting_id`, `date`, `title_nl`, `title_fr`, `yes`, `no`, `abstain`, `members_yes`, `members_no`, `members_abstain`, `dossier_id`, `document_id`, `motion_id`, `source_url`, `cache_path`
 
+**Plenary only.** Commission integraal verslag HTML does not contain roll-call vote tables (`Stemming`, `DETAIL VAN DE NAAMSTEMMINGEN`, Ja/Nee member lists). Do not expect `votes.parquet` under `data/sessions/{session}/commission/`. Procedural adoption in commission prose (e.g. *wordt unaniem aangenomen*) is not modelled as Vote/CAST.
+
 **propositions.parquet:** `proposition_id`, `session_id`, `meeting_id`, `title_nl`, `title_fr`, `dossier_id`, `document_id`, `source_url`, `cache_path`
 
 **notices.parquet:** `notice_id`, `session_id`, `meeting_id`, `title_nl`, `title_fr`, `source_url`, `cache_path`
+
+**hearings.parquet:** same columns as commission hearings
+
+**interpellations.parquet:** same columns as commission interpellations
 
 Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{meeting:03}x.html`
 
@@ -104,6 +110,10 @@ Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{m
 **questions.parquet:** same columns as plenary questions (`internal_ids`, not `dossier_ids`)
 
 **utterances.parquet:** same columns as plenary utterances
+
+**hearings.parquet:** `hearing_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `title_nl`, `title_fr`, `witnesses`, `dossier_id`, `internal_ids`, `source_url`, `cache_path`
+
+**interpellations.parquet:** `interpellation_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `interpellators`, `respondents`, `topics_nl`, `topics_fr`, `internal_ids`, `dossier_id`, `source_url`, `cache_path`
 
 **meeting_gaps.parquet:** `meeting_id`, `reason` (`not_found` | `parse_failed`), `detail` — ids in `1..=last_meeting_id` with no scraped row; verify against dekamer.be
 

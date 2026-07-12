@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
+from app.static_assets import asset_version
 from app.db import get_db
 from app.models import (
     ArtifactResponse,
@@ -41,6 +42,7 @@ def health() -> HealthResponse:
         data_dir=str(db.settings.data_dir),
         cache_dir=str(db.settings.cache_dir),
         duckdb_ok=duckdb_ok,
+        viewer_version=asset_version(),
         files=files,
         warnings=db.warnings,
     )
@@ -110,9 +112,10 @@ def edge_detail(
     from_id: str,
     to_type: str,
     to_id: str,
+    role: str | None = None,
 ) -> EdgeDetailResponse:
     detail = fetch_edge_detail(
-        get_db().conn, edge_type, from_type, from_id, to_type, to_id
+        get_db().conn, edge_type, from_type, from_id, to_type, to_id, role
     )
     if detail is None:
         raise HTTPException(status_code=404, detail="Edge not found")

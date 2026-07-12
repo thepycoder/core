@@ -4,8 +4,9 @@ use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, relative_cache_path};
 use crawl::{
-    extract_utterances_from_document, read_report_html, write_utterances_parquet, MeetingKind,
-    UtteranceDraft,
+    extract_proceedings_from_document, extract_utterances_from_document, read_report_html,
+    is_non_question_proceeding_heading, write_hearings_parquet, write_interpellations_parquet,
+    write_utterances_parquet, HearingDraft, InterpellationDraft, MeetingKind, UtteranceDraft,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -102,6 +103,8 @@ struct ScrapedQuestion {
 struct MeetingOutput {
     meeting: ScrapedMeeting,
     questions: Vec<ScrapedQuestion>,
+    hearings: Vec<HearingDraft>,
+    interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
 }
 
@@ -372,6 +375,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut all_meetings = Vec::new();
     let mut all_questions = Vec::new();
+    let mut all_hearings = Vec::new();
+    let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
 
     let mp = MultiProgress::new();
@@ -398,6 +403,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(output) => {
                 all_meetings.push(output.meeting);
                 all_questions.extend(output.questions);
+                all_hearings.extend(output.hearings);
+                all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
             }
             Err(err) => {
@@ -421,6 +428,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     write_meetings(&session_dir.join("meetings.parquet"), &all_meetings)?;
     write_questions(&session_dir.join("questions.parquet"), &all_questions)?;
+    write_hearings_parquet(&session_dir.join("hearings.parquet"), &all_hearings)?;
+    write_interpellations_parquet(
+        &session_dir.join("interpellations.parquet"),
+        &all_interpellations,
+    )?;
     write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
 
     let gap_rows: Vec<MeetingGap> = gaps.into_values().collect();
@@ -575,6 +587,15 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         &cache_path,
     );
 
+    let (hearings, interpellations) = extract_proceedings_from_document(
+        &document,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -589,6 +610,8 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
             cache_path,
         },
         questions,
+        hearings,
+        interpellations,
         utterances,
     })
 }
@@ -674,10 +697,10 @@ fn extract_questions(
 
             let is_hearing = found_nl
                 .as_deref()
-                .map_or(false, |t| t.to_lowercase().contains("hoorzitting"))
+                .map_or(false, |t| is_non_question_proceeding_heading(t))
                 || found_fr
                     .as_deref()
-                    .map_or(false, |t| t.to_lowercase().contains("audition"));
+                    .map_or(false, |t| is_non_question_proceeding_heading(t));
 
             if is_hearing {
                 // Flush any pending question that came before this hearing,

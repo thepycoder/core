@@ -6,7 +6,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.models import EntityPreview, PreviewField, PreviewRelated
-from app.queries.discussion_threads import fetch_question_thread
+from app.queries.discussion_threads import fetch_proceeding_thread, fetch_question_thread
 
 
 def fetch_entity_preview(
@@ -19,6 +19,8 @@ def fetch_entity_preview(
     handlers = {
         "Utterance": _preview_utterance,
         "Question": _preview_question,
+        "Hearing": _preview_hearing,
+        "Interpellation": _preview_interpellation,
         "Document": _preview_document,
         "Dossier": _preview_dossier,
         "Vote": _preview_vote,
@@ -138,6 +140,123 @@ def _preview_question(conn, node_id: str, settings: Settings) -> EntityPreview |
         content_label="Discussion excerpt",
         related=related[:6],
     )
+
+
+def _preview_proceeding(
+    conn,
+    node_id: str,
+    settings: Settings,
+    *,
+    node_type: str,
+    item_kind: str,
+    parquet_rels: tuple[str, ...],
+    id_col: str,
+    field_specs: tuple[tuple[str, str], ...],
+    title_cols: tuple[str, str],
+    thread_label: str,
+) -> EntityPreview | None:
+    row = _fetch_proceeding_row(conn, node_id, settings, parquet_rels, id_col, field_specs, title_cols)
+    if not row:
+        return None
+
+    fields = [_field(label, row[key]) for label, key in field_specs]
+    fields.append(_field("Meeting", row.get("meeting_id", "")))
+
+    content_parts: list[str] = []
+    thread = fetch_proceeding_thread(conn, item_kind, node_id, limit=12)
+    for block in thread:
+        speaker = block.get("raw_speaker") or "?"
+        turn = block.get("turn_number")
+        prefix = f"{turn} {speaker}" if turn else speaker
+        text = _clip(block.get("text", ""), 800)
+        content_parts.append(f"{prefix}:\n{text}")
+
+    title = row.get(title_cols[0]) or row.get(title_cols[1]) or node_id
+    return EntityPreview(
+        title=title,
+        fields=fields,
+        content="\n\n—\n\n".join(content_parts) if content_parts else None,
+        content_label=thread_label,
+        related=[],
+    )
+
+
+def _preview_hearing(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    return _preview_proceeding(
+        conn,
+        node_id,
+        settings,
+        node_type="Hearing",
+        item_kind="hearing",
+        parquet_rels=(
+            "sessions/56/commission/hearings.parquet",
+            "sessions/56/plenary/hearings.parquet",
+        ),
+        id_col="hearing_id",
+        field_specs=(
+            ("Title (NL)", "title_nl"),
+            ("Title (FR)", "title_fr"),
+            ("Witnesses", "witnesses"),
+            ("Internal ids", "internal_ids"),
+            ("Dossier", "dossier_id"),
+        ),
+        title_cols=("title_nl", "title_fr"),
+        thread_label="Hearing discussion",
+    )
+
+
+def _preview_interpellation(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    return _preview_proceeding(
+        conn,
+        node_id,
+        settings,
+        node_type="Interpellation",
+        item_kind="interpellation",
+        parquet_rels=(
+            "sessions/56/plenary/interpellations.parquet",
+            "sessions/56/commission/interpellations.parquet",
+        ),
+        id_col="interpellation_id",
+        field_specs=(
+            ("Interpellators", "interpellators"),
+            ("Respondents", "respondents"),
+            ("Topic (NL)", "topics_nl"),
+            ("Topic (FR)", "topics_fr"),
+            ("Internal ids", "internal_ids"),
+            ("Dossier", "dossier_id"),
+        ),
+        title_cols=("topics_nl", "topics_fr"),
+        thread_label="Interpellation discussion",
+    )
+
+
+def _fetch_proceeding_row(
+    conn,
+    entity_id: str,
+    settings: Settings,
+    parquet_rels: tuple[str, ...],
+    id_col: str,
+    field_specs: tuple[tuple[str, str], ...],
+    title_cols: tuple[str, str],
+) -> dict[str, str] | None:
+    cols = [id_col, "meeting_id"] + [key for _, key in field_specs]
+    select = ", ".join(cols)
+    for rel in parquet_rels:
+        path = _pq(settings, rel)
+        if not path:
+            continue
+        row = conn.execute(
+            f"""
+            SELECT {select}
+            FROM read_parquet('{path}')
+            WHERE {id_col} = ?
+            LIMIT 1
+            """,
+            [entity_id],
+        ).fetchone()
+        if row:
+            return {col: (row[i] or "") for i, col in enumerate(cols)}
+    return None
 
 
 def _fetch_question_row(conn, question_id: str, settings: Settings) -> dict[str, str] | None:
@@ -614,26 +733,40 @@ def _preview_party(conn, node_id: str, _settings: Settings) -> EntityPreview | N
 
 
 def _preview_commission(conn, node_id: str, settings: Settings) -> EntityPreview | None:
-    path = _pq(settings, "identity/commissions.parquet")
-    if not path:
+    identity_path = _pq(settings, "identity/commissions.parquet")
+    if not identity_path:
         return EntityPreview(title=node_id, fields=[_field("Commission id", node_id)])
 
-    row = conn.execute(
-        f"""
-        SELECT name, chairs, permanent_members
-        FROM read_parquet('{path}')
-        WHERE commission_id = ?
-        LIMIT 1
-        """,
-        [node_id],
-    ).fetchone()
+    staging_path = _pq(settings, "commissions.parquet")
+    if staging_path:
+        row = conn.execute(
+            f"""
+            SELECT i.name, i.type, s.chairs, s.permanent_members
+            FROM read_parquet('{identity_path}') i
+            LEFT JOIN read_parquet('{staging_path}') s ON i.name = s.name
+            WHERE i.commission_id = ?
+            LIMIT 1
+            """,
+            [node_id],
+        ).fetchone()
+    else:
+        row = conn.execute(
+            f"""
+            SELECT name, type, NULL, NULL
+            FROM read_parquet('{identity_path}')
+            WHERE commission_id = ?
+            LIMIT 1
+            """,
+            [node_id],
+        ).fetchone()
     if not row:
         return EntityPreview(title=node_id, fields=[_field("Commission id", node_id)])
 
-    fields = [
-        _field("Chairs", row[1]),
-        _field("Permanent members", _clip(row[2], 500)),
-    ]
+    fields = [_field("Type", row[1])]
+    if row[2]:
+        fields.append(_field("Chairs", row[2]))
+    if row[3]:
+        fields.append(_field("Permanent members", _clip(row[3], 500)))
     return EntityPreview(title=row[0] or node_id, fields=fields)
 
 
