@@ -5,11 +5,11 @@ use crawl::paths::{cache_dir, data_dir};
 use crawl::report_blocks::read_report_html;
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
 use crawl::{
-    classify_question_heading_bilingual, classify_question_heading_text,
-    has_pending_question_text, QuestionHeadingRole,
-    extract_proceedings_from_document, extract_utterances_from_document, write_hearings_parquet,
+    appendix_marker_for_vote, classify_question_heading_bilingual, classify_question_heading_text,
+    extract_proceedings_from_document, extract_utterances_from_document, has_pending_question_text,
+    parse_compact_vote_number, parse_paragraph_vote_number, write_hearings_parquet,
     write_interpellations_parquet, write_utterances_parquet, HearingDraft, InterpellationDraft,
-    MeetingKind, UtteranceDraft,
+    MeetingKind, QuestionHeadingRole, UtteranceDraft,
 };
 use identity::convert_name;
 use encoding_rs::WINDOWS_1252;
@@ -27,7 +27,6 @@ use tokio::fs;
 
 /// REGEXES
 static PARAGRAPH_VOTE_REGEX: OnceLock<Regex> = OnceLock::new();
-static PARAGRAPH_VOTE_SECTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -43,8 +42,13 @@ fn paragraph_vote_regex() -> &'static Regex {
     })
 }
 
-fn paragraph_vote_section_regex() -> &'static Regex {
-    PARAGRAPH_VOTE_SECTION_REGEX.get_or_init(|| Regex::new(r"\(Stemming\/vote (\d+)\)").unwrap())
+fn vote_bucket_label(label: &str) -> Option<&'static str> {
+    match label.trim() {
+        "Ja" | "Oui" => Some("yes"),
+        "Nee" | "Non" => Some("no"),
+        "Onthoudingen" | "Abstentions" => Some("abstain"),
+        _ => None,
+    }
 }
 
 fn question_regex() -> &'static Regex {
@@ -91,6 +95,11 @@ static SELECTOR_TABLE: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_H1_OR_H2: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_H1_OR_H2_OR_P: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_H1_OR_H2_OR_TABLE_OR_P: OnceLock<Selector> = OnceLock::new();
+static SELECTOR_P: OnceLock<Selector> = OnceLock::new();
+
+fn selector_p() -> &'static Selector {
+    SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap())
+}
 
 fn selector_span() -> &'static Selector {
     SELECTOR_SPAN.get_or_init(|| Selector::parse("span").unwrap())
@@ -1222,9 +1231,7 @@ async fn extract_votes(
                 let text =
                     clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
 
-                if let Some(captures) = paragraph_vote_section_regex().captures(&text) {
-                    let vote_number = captures[1].to_string();
-
+                if let Some(vote_number) = parse_paragraph_vote_number(&text) {
                     // Get vote results from known results.
                     if let Some(known_vote) = known_vote_results.get(&vote_number) {
                         // Look back at last title and extract data.
@@ -1722,11 +1729,8 @@ fn extract_vote_from_table(table: ElementRef) -> VoteRecord {
         let cells: Vec<_> = row.select(selector_td()).collect();
         if i == 0 {
             let text = row.text().collect::<Vec<_>>().join(" ").trim().to_string();
-            if text.contains("Stemming/vote") {
-                vote_number = text
-                    .replace("(", "")
-                    .replace(")", "")
-                    .replace("Stemming/vote", "");
+            if let Some(number) = parse_compact_vote_number(&text) {
+                vote_number = number;
                 processing = true;
             }
             continue;
@@ -1740,10 +1744,10 @@ fn extract_vote_from_table(table: ElementRef) -> VoteRecord {
                 .to_string();
             let value_str = cells[1].text().collect::<Vec<_>>().join(" ");
             if let Ok(v) = value_str.trim().parse::<u32>() {
-                match label.as_str() {
-                    "Ja" => yes = v,
-                    "Nee" => no = v,
-                    "Onthoudingen" => abstain = v,
+                match vote_bucket_label(&label) {
+                    Some("yes") => yes = v,
+                    Some("no") => no = v,
+                    Some("abstain") => abstain = v,
                     _ => {}
                 }
             }
@@ -1759,29 +1763,25 @@ fn extract_vote_from_table(table: ElementRef) -> VoteRecord {
 
 fn extract_voter_names(document: &Html, vote_index: &str) -> (String, String, String) {
     let mut tables = Vec::new();
-    for span in document.select(selector_span()) {
-        let text = span
-            .text()
-            .flat_map(|t| t.split_whitespace())
-            .collect::<Vec<_>>()
-            .join(" ");
-        if text.contains(&format!("Vote nominatif - Naamstemming: {}", vote_index))
-            || text.contains(&format!("Naamstemming - Vote nominatif: {}", vote_index))
-        {
-            let mut node = span.parent();
-            while let Some(n) = node {
-                if let Some(el) = ElementRef::wrap(n) {
-                    if el.value().name() == "table" {
-                        tables.push(el);
-                        if tables.len() == 3 {
-                            break;
-                        }
+    for paragraph in document.select(selector_p()) {
+        let text = clean_text(&paragraph.text().collect::<Vec<_>>().join(" "));
+        if !appendix_marker_for_vote(&text, vote_index) {
+            continue;
+        }
+
+        let mut node = paragraph.next_sibling();
+        while let Some(n) = node {
+            if let Some(el) = ElementRef::wrap(n) {
+                if el.value().name() == "table" {
+                    tables.push(el);
+                    if tables.len() == 3 {
+                        break;
                     }
                 }
-                node = n.next_sibling();
             }
-            break;
+            node = n.next_sibling();
         }
+        break;
     }
 
     let mut yes_voters = String::new();
@@ -1807,7 +1807,6 @@ fn extract_voter_names(document: &Html, vote_index: &str) -> (String, String, St
             *vote_types[i] = String::new();
             continue;
         }
-        // In extract_voter_names, replace the inner while loop body for each vote_type bucket:
 
         let mut node = table.next_sibling();
         let mut collected_names = Vec::new();
@@ -1818,30 +1817,23 @@ fn extract_voter_names(document: &Html, vote_index: &str) -> (String, String, St
                     break;
                 }
                 if el.value().name() == "p" {
-                    if let Some(span_node) = el.first_child() {
-                        if let Some(span_el) = ElementRef::wrap(span_node) {
-                            if span_el.value().name() == "span" {
-                                let raw = span_el
-                                    .text()
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                                    .trim()
-                                    .to_string();
-                                let looks_like_names = raw
-                                    .chars()
-                                    .next()
-                                    .map(|c| c.is_alphabetic())
-                                    .unwrap_or(false)
-                                    && !raw.contains("Vote nominatif")
-                                    && !raw.contains("Naamstemming")
-                                    && raw.chars().any(|c| c.is_alphabetic());
-                                if looks_like_names {
-                                    // Strip trailing comma before joining paragraphs
-                                    let trimmed = raw.trim_end_matches(',').trim().to_string();
-                                    collected_names.push(trimmed);
-                                }
-                            }
-                        }
+                    let raw = el
+                        .text()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .trim()
+                        .to_string();
+                    let looks_like_names = raw
+                        .chars()
+                        .next()
+                        .map(|c| c.is_alphabetic())
+                        .unwrap_or(false)
+                        && !raw.contains("Vote nominatif")
+                        && !raw.contains("Naamstemming")
+                        && raw.chars().any(|c| c.is_alphabetic());
+                    if looks_like_names {
+                        let trimmed = raw.trim_end_matches(',').trim().to_string();
+                        collected_names.push(trimmed);
                     }
                 }
             }
@@ -1979,6 +1971,37 @@ mod question_extract_tests {
             questions.len() >= 10,
             "expected at least 10 questions, got {}",
             questions.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn plenary_60_extracts_votes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/plenary/56-60.html");
+        if !path.exists() {
+            return;
+        }
+        dotenvy::dotenv().ok();
+        let client = ScrapingClient::new();
+        let mut web_request_count = 0u32;
+        let mut encountered_dossier_ids = HashMap::new();
+        let output = scrape_meeting(
+            &client,
+            56,
+            60,
+            &mut web_request_count,
+            &mut encountered_dossier_ids,
+        )
+        .await
+        .expect("scrape meeting 60");
+        assert!(
+            output.votes.len() >= 50,
+            "expected many votes for meeting 60, got {}",
+            output.votes.len()
+        );
+        assert!(
+            output.votes.iter().any(|v| v.yes > 0 || v.no > 0),
+            "expected at least one vote with yes/no totals"
         );
     }
 

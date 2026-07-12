@@ -55,34 +55,38 @@ pub fn run_vote_source_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<d
         }
     }
 
-    // Per-meeting inventory from cache
+    // Per-meeting inventory from cached meeting reports (all plenary meetings, not only
+    // meetings that already have vote rows in parquet).
     let mut meetings_done: HashSet<String> = HashSet::new();
-    for batch in read_all_rows(&votes_path)? {
-        let meeting_ids = read_string_column(&batch, "meeting_id")?;
-        let cache_paths = read_string_column(&batch, "cache_path")?;
-        let source_urls = read_string_column(&batch, "source_url")?;
-        for i in 0..batch.num_rows() {
-            let meeting_id = meeting_ids[i].clone();
-            if !meetings_done.insert(meeting_id.clone()) {
-                continue;
+    let meetings_path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/meetings.parquet"));
+    if meetings_path.exists() {
+        for batch in read_all_rows(&meetings_path)? {
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            for i in 0..batch.num_rows() {
+                let meeting_id = meeting_ids[i].clone();
+                if !meetings_done.insert(meeting_id.clone()) {
+                    continue;
+                }
+                let cache_path = &cache_paths[i];
+                if cache_path.is_empty() {
+                    continue;
+                }
+                let full_cache = cache_dir().join(cache_path);
+                if !full_cache.exists() {
+                    continue;
+                }
+                let inv = parse_vote_inventory(&full_cache, &meeting_id)?;
+                details.extend(check_inventory_vs_parquet(
+                    &inv,
+                    &vote_rows,
+                    &source_urls[i],
+                    cache_path,
+                ));
+                details.extend(check_compact_vs_appendix(&inv, &source_urls[i], cache_path));
+                details.extend(check_vote_sequence(&inv, &source_urls[i], cache_path));
             }
-            let cache_path = &cache_paths[i];
-            if cache_path.is_empty() {
-                continue;
-            }
-            let full_cache = cache_dir().join(cache_path);
-            if !full_cache.exists() {
-                continue;
-            }
-            let inv = parse_vote_inventory(&full_cache, &meeting_id)?;
-            details.extend(check_inventory_vs_parquet(
-                &inv,
-                &vote_rows,
-                &source_urls[i],
-                cache_path,
-            ));
-            details.extend(check_compact_vs_appendix(&inv, &source_urls[i], cache_path));
-            details.extend(check_vote_sequence(&inv, &source_urls[i], cache_path));
         }
     }
 
