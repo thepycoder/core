@@ -27,22 +27,56 @@ pub struct AppendixBucket {
 
 static COMPACT_VOTE: OnceLock<Regex> = OnceLock::new();
 static APPENDIX_VOTE: OnceLock<Regex> = OnceLock::new();
+static APPENDIX_VOTE_REVERSE: OnceLock<Regex> = OnceLock::new();
 static PARAGRAPH_VOTE: OnceLock<Regex> = OnceLock::new();
 static SELECTOR_P: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_SPAN: OnceLock<Selector> = OnceLock::new();
 
-fn compact_vote_re() -> &'static Regex {
-    COMPACT_VOTE.get_or_init(|| Regex::new(r"(?i)(?:Stemming|vote)\s*/\s*vote\s*(\d+)").unwrap())
+/// Compact vote table header, e.g. `(Stemming/vote 1)` or Word split `(Stemming/ vote 1)`.
+pub fn compact_vote_re() -> &'static Regex {
+    COMPACT_VOTE.get_or_init(|| {
+        Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap()
+    })
 }
 
-fn appendix_vote_re() -> &'static Regex {
+/// Appendix marker, e.g. `Naamstemming - Vote nominatif: 1`.
+pub fn appendix_vote_re() -> &'static Regex {
     APPENDIX_VOTE.get_or_init(|| {
         Regex::new(r"(?i)Naamstemming\s*-\s*Vote\s*nominatif\s*:\s*(\d+)").unwrap()
     })
 }
 
-fn paragraph_vote_re() -> &'static Regex {
-    PARAGRAPH_VOTE.get_or_init(|| Regex::new(r"(?i)\(Stemming/vote\s+(\d+)\)").unwrap())
+fn appendix_vote_reverse_re() -> &'static Regex {
+    APPENDIX_VOTE_REVERSE.get_or_init(|| {
+        Regex::new(r"(?i)Vote\s*nominatif\s*-\s*Naamstemming\s*:\s*(\d+)").unwrap()
+    })
+}
+
+/// Inline vote reference in a paragraph, e.g. `(Stemming/vote 2)`.
+pub fn paragraph_vote_re() -> &'static Regex {
+    PARAGRAPH_VOTE.get_or_init(|| Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap())
+}
+
+pub fn parse_compact_vote_number(text: &str) -> Option<String> {
+    compact_vote_re()
+        .captures(text)
+        .map(|caps| caps[1].to_string())
+}
+
+pub fn parse_appendix_vote_number(text: &str) -> Option<String> {
+    appendix_vote_re()
+        .captures(text)
+        .or_else(|| appendix_vote_reverse_re().captures(text))
+        .map(|caps| caps[1].to_string())
+}
+
+pub fn parse_paragraph_vote_number(text: &str) -> Option<String> {
+    paragraph_vote_re()
+        .captures(text)
+        .map(|caps| caps[1].to_string())
+}
+
+pub fn appendix_marker_for_vote(text: &str, vote_index: &str) -> bool {
+    parse_appendix_vote_number(text).as_deref() == Some(vote_index)
 }
 
 pub fn parse_vote_inventory(cache_path: &Path, meeting_id: &str) -> Result<VoteInventory, Box<dyn std::error::Error>> {
@@ -66,14 +100,14 @@ pub fn parse_vote_inventory(cache_path: &Path, meeting_id: &str) -> Result<VoteI
         }
     }
 
-    for span in document.select(SELECTOR_SPAN.get_or_init(|| Selector::parse("span").unwrap())) {
-        let text = span.text().collect::<String>();
-        if let Some(caps) = appendix_vote_re().captures(&text) {
-            appendix_vote_numbers.insert(caps[1].to_string());
+    for p in document.select(SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap())) {
+        let text = p.text().collect::<String>();
+        if let Some(num) = parse_appendix_vote_number(&text) {
+            appendix_vote_numbers.insert(num);
         }
     }
 
-    let appendix_buckets = parse_appendix_buckets(&html);
+    let appendix_buckets = parse_appendix_buckets(&document);
 
     Ok(VoteInventory {
         meeting_id: meeting_id.to_string(),
@@ -84,31 +118,38 @@ pub fn parse_vote_inventory(cache_path: &Path, meeting_id: &str) -> Result<VoteI
     })
 }
 
-fn parse_appendix_buckets(html: &str) -> Vec<AppendixBucket> {
+fn parse_appendix_buckets(document: &Html) -> Vec<AppendixBucket> {
+    let selector_p = SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap());
+    let paragraphs: Vec<_> = document.select(selector_p).collect();
+    let mut seen = std::collections::HashSet::new();
     let mut buckets = Vec::new();
-    for caps in appendix_vote_re().captures_iter(html) {
-        let vote_number = caps[1].to_string();
-        let name_paragraph_count = count_name_paragraphs_after(html, &vote_number);
+
+    for (idx, paragraph) in paragraphs.iter().enumerate() {
+        let text = paragraph.text().collect::<String>();
+        let Some(vote_number) = parse_appendix_vote_number(&text) else {
+            continue;
+        };
+        if !seen.insert(vote_number.clone()) {
+            continue;
+        }
         buckets.push(AppendixBucket {
             vote_number,
             yes_count: 0,
             no_count: 0,
             abstain_count: 0,
-            name_paragraph_count,
+            name_paragraph_count: count_name_paragraphs_after(&paragraphs, idx),
         });
     }
     buckets
 }
 
-fn count_name_paragraphs_after(html: &str, vote_number: &str) -> usize {
-    let marker = format!("Vote nominatif: {vote_number}");
-    let Some(pos) = html.find(&marker) else {
-        return 0;
-    };
-    let tail: String = html[pos..].chars().take(8000).collect();
+fn count_name_paragraphs_after(paragraphs: &[scraper::ElementRef], start_idx: usize) -> usize {
     let mut count = 0usize;
-    for p in Html::parse_fragment(&tail).select(SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap())) {
-        let text = p.text().collect::<String>();
+    for paragraph in paragraphs.iter().skip(start_idx + 1) {
+        let text = paragraph.text().collect::<String>();
+        if parse_appendix_vote_number(&text).is_some() {
+            break;
+        }
         let trimmed = text.trim();
         if trimmed.len() > 3 && trimmed.chars().any(|c| c.is_alphabetic()) {
             count += 1;
@@ -162,5 +203,43 @@ mod tests {
         }
         let inv = parse_vote_inventory(&path, "129").expect("inventory");
         assert!(!inv.appendix_vote_numbers.is_empty());
+    }
+
+    #[test]
+    fn parse_compact_vote_number_accepts_word_split_span_text() {
+        assert_eq!(
+            parse_compact_vote_number("(Stemming/ vote  1)"),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            parse_compact_vote_number("(Stemming/vote 2)"),
+            Some("2".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_appendix_vote_number_accepts_word_split_span_text() {
+        assert_eq!(
+            parse_appendix_vote_number("Naamstemming - Vote nominatif: 3"),
+            Some("3".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_vote_inventory_meeting_60() {
+        let path = cache_dir().join("sessions/56/meetings/plenary/56-60.html");
+        if !path.exists() {
+            return;
+        }
+        let inv = parse_vote_inventory(&path, "60").expect("inventory");
+        assert!(
+            inv.compact_vote_numbers.len() >= 50,
+            "expected many compact votes, got {:?}",
+            inv.compact_vote_numbers.len()
+        );
+        assert!(
+            !inv.appendix_vote_numbers.is_empty(),
+            "expected appendix vote markers"
+        );
     }
 }

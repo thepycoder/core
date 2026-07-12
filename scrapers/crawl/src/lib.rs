@@ -39,5 +39,7 @@ pub use qa_coverage::{count_document_words, count_document_words_from_cache, wor
 pub use utterance_io::write_utterances_parquet;
 pub use utterance_segment::{segment_utterances, UtteranceDraft};
 pub use vote_inventory::{
-    inventory_vote_numbers, parse_vote_inventory, vote_number_gaps, VoteInventory,
+    appendix_marker_for_vote, inventory_vote_numbers, parse_appendix_vote_number,
+    parse_compact_vote_number, parse_paragraph_vote_number, parse_vote_inventory,
+    vote_number_gaps, VoteInventory,
 };
