@@ -636,6 +636,69 @@ function renderVoteReconciliation(v) {
   return section;
 }
 
+function proceedingNodeType(itemKind) {
+  const map = {
+    question: "Question",
+    hearing: "Hearing",
+    interpellation: "Interpellation",
+  };
+  return map[itemKind] || null;
+}
+
+function appendUtteranceActionButton(actions, label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "link-action-btn";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  actions.appendChild(btn);
+}
+
+function appendUtteranceActions(block, u) {
+  const actions = document.createElement("div");
+  actions.className = "utterance-actions";
+
+  if (u.utterance_id) {
+    appendUtteranceActionButton(actions, "Open utterance", () =>
+      drillTo("Utterance", u.utterance_id)
+    );
+  }
+
+  const proceedingType = proceedingNodeType(u.item_kind);
+  if (
+    proceedingType &&
+    u.item_id &&
+    !(inspectorNode?.type === proceedingType && inspectorNode?.id === u.item_id)
+  ) {
+    appendUtteranceActionButton(actions, `Open ${proceedingType}`, () =>
+      drillTo(proceedingType, u.item_id)
+    );
+  } else if (
+    u.meeting_node_id &&
+    !(inspectorNode?.type === "Meeting" && inspectorNode?.id === u.meeting_node_id)
+  ) {
+    appendUtteranceActionButton(actions, "Open meeting", () =>
+      drillTo("Meeting", u.meeting_node_id)
+    );
+  }
+
+  if (u.speaker_person_id) {
+    appendUtteranceActionButton(actions, "Open Person", () =>
+      drillTo("Person", u.speaker_person_id)
+    );
+  } else if (u.speaker_entity_id && u.speaker_entity_type) {
+    appendUtteranceActionButton(actions, `Open ${u.speaker_entity_type}`, () =>
+      drillTo(u.speaker_entity_type, u.speaker_entity_id)
+    );
+  } else if (u.raw_speaker) {
+    appendUtteranceActionButton(actions, "Trace speaker", () => showUnresolved(u.raw_speaker));
+  }
+
+  if (actions.childElementCount) {
+    block.appendChild(actions);
+  }
+}
+
 function renderUtterances(utterances, sectionTitle) {
   const section = document.createElement("div");
   section.className = "detail-section";
@@ -646,11 +709,7 @@ function renderUtterances(utterances, sectionTitle) {
     block.className = "utterance-block";
     const turnPrefix = u.turn_number ? `${u.turn_number} · ` : "";
     const roleSuffix = u.speaker_role ? ` (${u.speaker_role})` : "";
-    const speaker = u.speaker_person_id
-      ? `${u.raw_speaker}${roleSuffix} → ${u.speaker_person_id}`
-      : u.speaker_entity_id
-        ? `${u.raw_speaker}${roleSuffix} → ${u.speaker_entity_type} ${u.speaker_entity_id}`
-        : `${u.raw_speaker || "?"}${roleSuffix}`;
+    const speaker = `${u.raw_speaker || "?"}${roleSuffix}`;
     block.innerHTML = `
       <div class="speaker">${escapeHtml(turnPrefix + speaker)}</div>
       <div class="text">${escapeHtml(truncate(u.text, 1500))}</div>
@@ -667,23 +726,7 @@ function renderUtterances(utterances, sectionTitle) {
       });
       block.appendChild(btn);
     }
-    if (!u.speaker_person_id && !u.speaker_entity_id && u.raw_speaker) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "link-action-btn";
-      btn.textContent = "Trace speaker";
-      btn.style.marginTop = "0.35rem";
-      btn.addEventListener("click", () => showUnresolved(u.raw_speaker));
-      block.appendChild(btn);
-    } else if (u.speaker_entity_id && u.speaker_entity_type) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "link-action-btn";
-      btn.textContent = `Open ${u.speaker_entity_type}`;
-      btn.style.marginTop = "0.35rem";
-      btn.addEventListener("click", () => drillTo(u.speaker_entity_type, u.speaker_entity_id));
-      block.appendChild(btn);
-    }
+    appendUtteranceActions(block, u);
     section.appendChild(block);
   }
   return section;

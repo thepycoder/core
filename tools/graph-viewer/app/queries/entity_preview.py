@@ -6,7 +6,12 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.models import EntityPreview, PreviewField, PreviewRelated
-from app.queries.discussion_threads import fetch_proceeding_thread, fetch_question_thread
+from app.queries.discussion_threads import (
+    fetch_proceeding_thread,
+    fetch_question_thread,
+    meeting_node_id,
+    proceeding_node_type,
+)
 
 
 def fetch_entity_preview(
@@ -66,7 +71,8 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         """
         SELECT session_id, meeting_id, meeting_kind, seq, turn_number,
                raw_speaker, speaker_person_id, speaker_role,
-               speaker_entity_type, speaker_entity_id, text, confidence, item_id
+               speaker_entity_type, speaker_entity_id, text, confidence,
+               item_id, item_kind
         FROM utterances
         WHERE utterance_id = ?
         LIMIT 1
@@ -90,12 +96,22 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         fields.append(_field("Entity", f"{row[8]} → {row[9]}"))
     if row[12]:
         fields.append(_field("Item", row[12]))
+    if row[13]:
+        fields.append(_field("Item kind", row[13]))
 
     related: list[PreviewRelated] = []
-    if row[12]:
-        related.append(_related("Question", row[12], f"Question {row[12]}"))
+    meeting_id = meeting_node_id(row[0], row[2], row[1])
+    if meeting_id:
+        related.append(_related("Meeting", meeting_id, f"{row[2]} {row[1]}"))
+
+    proceeding_type = proceeding_node_type(row[13])
+    if row[12] and proceeding_type:
+        related.append(_related(proceeding_type, row[12], f"{proceeding_type} {row[12]}"))
+
     if row[9] and row[8]:
         related.append(_related(row[8], row[9], row[5] or row[9]))
+    elif row[6]:
+        related.append(_related("Person", row[6], row[5] or row[6]))
 
     return EntityPreview(
         title=row[5] or node_id,

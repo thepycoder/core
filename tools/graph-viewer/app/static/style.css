@@ -363,6 +363,13 @@ ul {
   white-space: pre-wrap;
 }
 
+.utterance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
