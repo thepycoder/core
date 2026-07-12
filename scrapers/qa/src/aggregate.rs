@@ -1,4 +1,5 @@
 use crate::check_catalog::check_doc;
+use crate::stats::{corpus_overview, format_all_issue_stats, QaStatsContext};
 use crate::types::{table_for_check_id, worst_status, CheckDetail, CheckSummary};
 use std::collections::HashMap;
 use std::error::Error;
@@ -93,7 +94,12 @@ pub fn aggregate_details(details: &[CheckDetail]) -> Result<Vec<CheckSummary>, B
     Ok(summaries)
 }
 
-pub fn write_summary_md(path: &Path, summaries: &[CheckSummary]) -> Result<(), Box<dyn Error>> {
+pub fn write_summary_md(
+    path: &Path,
+    summaries: &[CheckSummary],
+    details: &[CheckDetail],
+    stats_ctx: &QaStatsContext<'_>,
+) -> Result<(), Box<dyn Error>> {
     let issues: Vec<_> = summaries
         .iter()
         .filter(|s| s.status != "pass" && s.check != META_CHECK_ID)
@@ -112,6 +118,14 @@ pub fn write_summary_md(path: &Path, summaries: &[CheckSummary]) -> Result<(), B
     out.push_str(&format!("- **Issues:** {}\n", issues.len()));
     out.push_str(&format!("- **Passes:** {}\n\n", passes.len()));
 
+    if let Some(overview) = corpus_overview(stats_ctx) {
+        out.push_str("## Corpus overview\n\n");
+        out.push_str(&overview);
+        out.push_str("\n\n");
+    }
+
+    let issue_stats = format_all_issue_stats(summaries, details, stats_ctx);
+
     if !issues.is_empty() {
         out.push_str("## Issues\n\n");
         for s in issues {
@@ -129,6 +143,26 @@ pub fn write_summary_md(path: &Path, summaries: &[CheckSummary]) -> Result<(), B
                 for ex in s.examples.split("; ") {
                     if !ex.is_empty() {
                         out.push_str(&format!("    - `{ex}`\n"));
+                    }
+                }
+            }
+            if let Some(stats) = issue_stats.get(&s.check) {
+                // Skip duplicate corpus overview for coverage when already in Corpus overview.
+                if s.check != "utterance.speech_char_coverage" {
+                    out.push_str("  - **Stats:**\n");
+                    for line in stats.lines() {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        out.push_str(&format!("    {line}\n"));
+                    }
+                } else if !stats.contains("Document word coverage") {
+                    out.push_str("  - **Stats:**\n");
+                    for line in stats.lines() {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        out.push_str(&format!("    {line}\n"));
                     }
                 }
             }

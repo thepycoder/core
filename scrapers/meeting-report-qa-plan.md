@@ -176,6 +176,14 @@ Strong crosschecks that catch parser drift, bilingual pairing errors, and roundt
 - **Compares:** Rebuild `questions.discussion` JSON from `utterances.parquet` per question; hash/compare to staging `discussion`.
 - **Why:** Proves utterance layer is a superset of current Q&A extraction before replacing `discussion` in production.
 
+#### Speech character coverage (tier A — bridge QA)
+- **Check id:** `utterance.speech_char_coverage`
+- **Compares:** Per meeting: whole cached HTML word count (all `h1`/`h2`/`p`/`table` block text via `parse_report_blocks`) vs one saved word total (utterances + questions + plenary votes/propositions/notices + commission chair).
+- **Why:** Single symmetric ratio — “how much of the report did we persist anywhere?” Flags volume loss from dropped paragraphs, missed sections, or parser regressions.
+- **Signals today:** Cached HTML + staging `utterances.parquet`, `questions.parquet`, `votes.parquet`, `propositions.parquet`, `notices.parquet`, `meetings.parquet` (commission chair).
+- **Thresholds:** `warn` on kind p5 outlier (≥10 meetings) or ratio &lt; 85% of committed per-meeting baseline (`speech_coverage_baseline.parquet`). No absolute fail threshold in v1.
+- **Blind spots:** Bilingual duplication in source widens denominator; wrong speaker with valid label (ratio stays high); label drift merged into prior open turn (S6 better).
+
 #### A12. Web `allVotes` assembly
 - **Check id:** `web.allVotes_vs_staging`
 - **Compares:** `meeting.allVotes.length` in `web/src/_data/meetings.js` assembly vs staging vote rows per meeting; votes attached to propositions must still appear in `allVotes`.

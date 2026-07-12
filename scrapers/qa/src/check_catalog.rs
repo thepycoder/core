@@ -74,6 +74,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "Speaker-turn markers in cached meeting HTML do not align with extracted utterance row counts.",
             measures: "Runs S6 marker crosscheck per meeting: `count_source_markers` vs `extract_utterances_from_document` (allows bilingual dedup).",
         },
+        "utterance.speech_char_coverage" => CheckDoc {
+            what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
+            measures: "Per meeting: ratio of saved word count (all staging text: utterances, questions, votes, propositions, notices, commission chair) vs whole-document word count from cached HTML (all h1/h2/p/table blocks). Warns on kind p5 outlier or >15% drop vs committed `speech_coverage_baseline.parquet`.",
+        },
         "utterance.roundtrip_discussion" => CheckDoc {
             what: "Normalized utterances exist for a question but its staging `discussion` JSON is empty.",
             measures: "Counts utterances per question id in normalized layer vs `discussion` field on staging question rows.",

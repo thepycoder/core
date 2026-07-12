@@ -173,11 +173,13 @@ Produced by `just qa` (`scrapers/qa`). Detail-first: summary artifacts are alway
 
 **checks_baseline.parquet:** committed snapshot for `just qa-strict` regression detection. Update with `just qa-update-baseline` after reviewed changes.
 
+**speech_coverage_baseline.parquet:** per-meeting document word coverage ratios for `utterance.speech_char_coverage`. Columns: `meeting_kind`, `meeting_id`, `source_words`, `saved_words`, `ratio`, `updated_at`. Updated alongside `checks_baseline.parquet` via `just qa-update-baseline`.
+
 **alias_candidates.parquet:** `raw_name`, `cleaned_name`, `matched_person_id`, `source_bucket`, `context_id`, `check_id`, `confidence`
 
 **row_counts.json:** per-table row counts for `schema.row_count_delta` checks.
 
-**summary.md:** human-readable rollup of `checks.parquet`.
+**summary.md:** human-readable rollup of `checks.parquet`. Includes a **Corpus overview** section (document word coverage distribution, staging table row counts) and per-check **Stats** where applicable.
 
 Commands: `just qa` (soft, exit 0), `just qa-strict` (exit 1 on baseline regression), `just qa-update-baseline`.
 
