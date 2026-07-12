@@ -1,4 +1,8 @@
-use crate::proceeding_entities::classify_heading_kind;
+use crate::proceeding_entities::{
+    classify_heading_kind, extract_interpellation_ids_from_text, is_french_interpellation_bullet,
+    is_interpellation_bullet_line, is_interpellation_section, is_joint_interpellation_fr_header,
+    is_joint_interpellation_group_start,
+};
 use crate::question_boundaries::{
     classify_question_heading_text, extends_open_question, is_questions_section,
     starts_new_question_unit, QuestionHeadingRole,
@@ -184,12 +188,16 @@ pub fn build_agenda_timeline(
     let mut question_seq = 0i32;
     let mut hearing_seq = 0i32;
     let mut interpellation_seq = 0i32;
+    let mut interpellation_group_agenda_id = String::new();
+    let mut interpellation_fr_phase = false;
     let mut pending_nl: Option<(u32, String)> = None;
     let mut open_question_idx: Option<usize> = None;
 
     for block in blocks.iter() {
         if block.tag == BlockTag::H1 {
             current_section = block.text.to_lowercase();
+            interpellation_group_agenda_id.clear();
+            interpellation_fr_phase = false;
             continue;
         }
 
@@ -219,6 +227,78 @@ pub fn build_agenda_timeline(
 
         let heading_role = classify_question_heading_text(&block.text);
         let agenda_id = extract_agenda_number(&block.text);
+
+        if is_interpellation_section(&current_section) {
+            if is_joint_interpellation_group_start(&block.text) {
+                if !is_joint_interpellation_fr_header(&block.text) {
+                    close_item_range(&mut items, block.index);
+                }
+                open_question_idx = None;
+                if let Some(id) = agenda_id.as_ref() {
+                    interpellation_group_agenda_id = id.clone();
+                }
+                interpellation_fr_phase = is_joint_interpellation_fr_header(&block.text);
+                pending_nl = Some((block.index, block.text.clone()));
+                continue;
+            }
+
+            if is_interpellation_bullet_line(&block.text) {
+                open_question_idx = None;
+
+                let internal_ids = extract_interpellation_ids_from_text(&block.text);
+                let is_fr =
+                    interpellation_fr_phase || is_french_interpellation_bullet(&block.text);
+
+                if is_fr {
+                    if let Some(site_id) = internal_ids.first() {
+                        if let Some(item) = items.iter_mut().find(|it| {
+                            it.item_kind == ItemKind::Interpellation
+                                && it.internal_ids.iter().any(|id| id == site_id)
+                        }) {
+                            item.title_fr = block.text.clone();
+                            item.end_block = blocks.len() as u32;
+                            pending_nl = Some((block.index, block.text.clone()));
+                            continue;
+                        }
+                    }
+                }
+
+                close_item_range(&mut items, block.index);
+
+                let item_id = composite_scoped_id(
+                    session_id,
+                    meeting_kind.as_str(),
+                    meeting_id,
+                    interpellation_seq,
+                );
+                interpellation_seq += 1;
+                let (dossier_id, document_id) = extract_dossier_refs(session_id, &block.text);
+
+                pending_nl = Some((block.index, block.text.clone()));
+                items.push(AgendaItem {
+                    agenda_id: interpellation_group_agenda_id.clone(),
+                    item_kind: ItemKind::Interpellation,
+                    start_block: block.index,
+                    end_block: blocks.len() as u32,
+                    title_nl: if is_fr {
+                        String::new()
+                    } else {
+                        block.text.clone()
+                    },
+                    title_fr: if is_fr {
+                        block.text.clone()
+                    } else {
+                        String::new()
+                    },
+                    dossier_id,
+                    document_id,
+                    internal_ids,
+                    item_id,
+                    source_section: current_section.clone(),
+                });
+                continue;
+            }
+        }
 
         if agenda_id.is_none() {
             if extends_open_question(heading_role) {
@@ -447,6 +527,47 @@ mod tests {
             class: None,
             has_oraspr: false,
         }
+    }
+
+    #[test]
+    fn plenary_joint_interpellation_bullets_become_agenda_items() {
+        let blocks = vec![
+            block(0, BlockTag::H1, "Interpellaties"),
+            block(1, BlockTag::H2, "01 Samengevoegde interpellaties van"),
+            block(
+                2,
+                BlockTag::H2,
+                r#"- Vincent Van Quickenborne aan Jan Jambon over "De meerwaardetaks" (56000109I)"#,
+            ),
+            block(3, BlockTag::H2, "01 Interpellations jointes de"),
+            block(
+                4,
+                BlockTag::H2,
+                r#"- Vincent Van Quickenborne à Jan Jambon sur "La taxe sur les plus-values" (56000109I)"#,
+            ),
+            block(5, BlockTag::P, "01.01 Vincent Van Quickenborne: speech"),
+        ];
+        let document = Html::parse_document("<html></html>");
+        let items = build_agenda_timeline(
+            &document,
+            &blocks,
+            MeetingKind::Plenary,
+            56,
+            60,
+        );
+        let interpellations: Vec<_> = items
+            .iter()
+            .filter(|i| i.item_kind == ItemKind::Interpellation)
+            .collect();
+        assert_eq!(interpellations.len(), 1);
+        assert_eq!(interpellations[0].agenda_id, "01");
+        assert!(interpellations[0].title_nl.contains("Van Quickenborne"));
+        assert!(interpellations[0].title_fr.contains("Van Quickenborne"));
+        assert!(interpellations[0]
+            .internal_ids
+            .iter()
+            .any(|id| id == "56000109I"));
+        assert_eq!(interpellations[0].end_block, blocks.len() as u32);
     }
 
     #[test]

@@ -58,3 +58,4 @@ Assume the reader lacks a mental model of this codebase. Before code-level detai
 - New nodes/edges: update `DATA_GRAPH.md` and wire through identity + graph builder.
 - **Data graph canvas:** keep `canvases/data-graph-overview.canvas.tsx` in sync with `DATA_GRAPH.md` whenever you add or change node types, edge types, implementation status, coverage counts, or pipeline stages. Update the inline `NODES` and `EDGES` catalogs (labels, domains, status, id keys, notes) and any summary stats shown in the canvas (built node/edge counts, coverage bar). The repo copy is canonical; if you use the live Cursor canvas beside chat, sync the same file there too.
 - Minimize scope for small fixes; for structural problems, refactor properly instead of patching around them.
+- When adding exceptions or regexes or other case-specific logic, always add and example reference to a document in comments
