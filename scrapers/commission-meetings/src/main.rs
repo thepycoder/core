@@ -3,6 +3,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, relative_cache_path};
+use crawl::{classify_question_heading_bilingual, classify_question_heading_text, has_pending_question_text, QuestionHeadingRole};
 use crawl::{
     extract_proceedings_from_document, extract_utterances_from_document, read_report_html,
     is_non_question_proceeding_heading, write_hearings_parquet, write_interpellations_parquet,
@@ -695,17 +696,38 @@ fn extract_questions(
                 }
             }
 
-            let is_hearing = found_nl
-                .as_deref()
-                .map_or(false, |t| is_non_question_proceeding_heading(t))
-                || found_fr
-                    .as_deref()
-                    .map_or(false, |t| is_non_question_proceeding_heading(t));
+            if found_nl.is_none() && found_fr.is_none() {
+                let full = clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+                if !full.is_empty() {
+                    found_nl = Some(full);
+                }
+            }
 
-            if is_hearing {
-                // Flush any pending question that came before this hearing,
-                // then reset state so the hearing's discussion doesn't bleed in.
-                if !previous_nl.is_empty() && !previous_fr.is_empty() {
+            let full_heading =
+                clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+            let is_non_question_proceeding = is_non_question_proceeding_heading(&full_heading);
+            if classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref())
+                == QuestionHeadingRole::Unrelated
+            {
+                let role = classify_question_heading_text(&full_heading);
+                if role != QuestionHeadingRole::Unrelated {
+                    if full_heading.to_lowercase().contains("question de")
+                        || full_heading.to_lowercase().contains("questions jointes")
+                    {
+                        found_fr = Some(full_heading);
+                    } else {
+                        found_nl = Some(full_heading);
+                    }
+                }
+            }
+
+            let heading_role = classify_question_heading_bilingual(
+                found_nl.as_deref(),
+                found_fr.as_deref(),
+            );
+
+            if heading_role == QuestionHeadingRole::Hearing || is_non_question_proceeding {
+                if has_pending_question_text(&previous_nl, &previous_fr) {
                     if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
                         questions.push(q);
                         question_seq += 1;
@@ -716,21 +738,13 @@ fn extract_questions(
                 continue;
             }
 
-            // NOTE: ic017x.html uses "toegevoegde vragen" instead of "Samengevoegde" for grouped questions.
-            let is_group_start = found_nl.as_deref().map_or(false, |t| {
-                t.starts_with("Samengevoegde") || t.contains("toegevoegde vragen")
-            }) || found_fr.as_deref().map_or(false, |t| t.contains("jointes"));
-            let is_subquestion = found_nl.as_deref().map_or(false, |t| t.starts_with("-"))
-                || found_fr.as_deref().map_or(false, |t| t.starts_with("-"));
-            let is_single = found_nl
-                .as_deref()
-                .map_or(false, |t| t.starts_with("Vraag van"))
-                || found_fr
-                    .as_deref()
-                    .map_or(false, |t| t.starts_with("Question de"));
+            let is_group_start = matches!(heading_role, QuestionHeadingRole::GroupStart);
+            let is_subquestion = matches!(heading_role, QuestionHeadingRole::SubQuestion);
+            let is_single = matches!(heading_role, QuestionHeadingRole::Single);
+            let is_fr_group_header = matches!(heading_role, QuestionHeadingRole::FrGroupHeader);
 
             if is_group_start || is_single {
-                if !previous_nl.is_empty() && !previous_fr.is_empty() {
+                if has_pending_question_text(&previous_nl, &previous_fr) {
                     if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
                         questions.push(q);
                         question_seq += 1;
@@ -753,6 +767,12 @@ fn extract_questions(
                     previous_fr.push('\n');
                     previous_fr.push_str(&t);
                 }
+            } else if is_fr_group_header {
+                if let Some(t) = found_fr.or(found_nl) {
+                    if previous_fr.is_empty() {
+                        previous_fr = t;
+                    }
+                }
             }
         }
 
@@ -767,7 +787,7 @@ fn extract_questions(
     }
 
     // Flush the last question.
-    if !previous_nl.is_empty() && !previous_fr.is_empty() {
+    if has_pending_question_text(&previous_nl, &previous_fr) {
         if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
             questions.push(q);
         }

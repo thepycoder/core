@@ -156,3 +156,78 @@ pub fn parquet_row_count(path: &Path) -> Result<usize, Box<dyn Error>> {
     }
     Ok(total)
 }
+
+pub fn write_coverage_baselines(
+    path: &Path,
+    rows: &[crate::types::CoverageBaselineRow],
+) -> Result<(), Box<dyn Error>> {
+    use crate::types::CoverageBaselineRow;
+
+    let schema = Schema::new(vec![
+        utf8_field("meeting_kind", false),
+        utf8_field("meeting_id", false),
+        utf8_field("source_words", false),
+        utf8_field("saved_words", false),
+        utf8_field("ratio", false),
+        utf8_field("updated_at", false),
+    ]);
+
+    macro_rules! col {
+        ($f:expr) => {
+            Arc::new(StringArray::from(rows.iter().map($f).collect::<Vec<_>>())) as ArrayRef
+        };
+    }
+
+    write_parquet(
+        path,
+        schema,
+        vec![
+            col!(|r: &CoverageBaselineRow| r.meeting_kind.clone()),
+            col!(|r: &CoverageBaselineRow| r.meeting_id.clone()),
+            col!(|r: &CoverageBaselineRow| r.source_words.to_string()),
+            col!(|r: &CoverageBaselineRow| r.saved_words.to_string()),
+            col!(|r: &CoverageBaselineRow| format!("{:.6}", r.ratio)),
+            col!(|r: &CoverageBaselineRow| r.updated_at.clone()),
+        ],
+    )
+}
+
+pub fn read_coverage_baselines(
+    path: &Path,
+) -> Result<Vec<crate::types::CoverageBaselineRow>, Box<dyn Error>> {
+    use crate::types::CoverageBaselineRow;
+
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut rows = Vec::new();
+    for batch in read_all_rows(path)? {
+        let kinds = read_string_column(&batch, "meeting_kind")?;
+        let ids = read_string_column(&batch, "meeting_id")?;
+        let has_words = batch.schema().fields().iter().any(|f| f.name() == "source_words");
+        let (source_vals, saved_vals) = if has_words {
+            (
+                read_string_column(&batch, "source_words")?,
+                read_string_column(&batch, "saved_words")?,
+            )
+        } else {
+            (
+                read_string_column(&batch, "source_chars")?,
+                read_string_column(&batch, "saved_chars")?,
+            )
+        };
+        let ratios = read_string_column(&batch, "ratio")?;
+        let updated_at = read_string_column(&batch, "updated_at")?;
+        for i in 0..batch.num_rows() {
+            rows.push(CoverageBaselineRow {
+                meeting_kind: kinds[i].clone(),
+                meeting_id: ids[i].clone(),
+                source_words: source_vals[i].parse().unwrap_or(0),
+                saved_words: saved_vals[i].parse().unwrap_or(0),
+                ratio: ratios[i].parse().unwrap_or(0.0),
+                updated_at: updated_at[i].clone(),
+            });
+        }
+    }
+    Ok(rows)
+}

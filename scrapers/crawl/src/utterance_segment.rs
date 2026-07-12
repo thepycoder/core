@@ -3,8 +3,7 @@ use crate::report_blocks::{BlockTag, ReportBlock};
 use crate::speaker_parse::{
     detect_turn_start, language_from_class, parse_turn_start, SpeakerRole, TurnStart,
 };
-use regex::Regex;
-use std::sync::OnceLock;
+use crate::speech_zones::{is_hard_boundary, is_stage_direction, is_vote_appendix_heading};
 
 #[derive(Debug, Clone)]
 pub struct UtteranceDraft {
@@ -50,26 +49,6 @@ struct OpenTurn {
     source_section: String,
 }
 
-static HARD_BOUNDARY: OnceLock<Regex> = OnceLock::new();
-static VOTE_APPENDIX: OnceLock<Regex> = OnceLock::new();
-static STAGE_DIRECTION: OnceLock<Regex> = OnceLock::new();
-
-fn hard_boundary_regex() -> &'static Regex {
-    HARD_BOUNDARY.get_or_init(|| {
-        Regex::new(r"(?i)(?:Het incident is gesloten|L'incident est clos|DETAIL VAN DE NAAMSTEMMINGEN)").unwrap()
-    })
-}
-
-fn vote_appendix_regex() -> &'static Regex {
-    VOTE_APPENDIX.get_or_init(|| Regex::new(r"(?i)DETAIL VAN DE NAAMSTEMMINGEN").unwrap())
-}
-
-fn stage_direction_regex() -> &'static Regex {
-    STAGE_DIRECTION.get_or_init(|| {
-        Regex::new(r"(?i)^(?:Hervatting van de algemene bespreking|Reprise de la discussion générale)$").unwrap()
-    })
-}
-
 pub fn segment_utterances(
     blocks: &[ReportBlock],
     agenda: &[AgendaItem],
@@ -98,7 +77,7 @@ pub fn segment_utterances(
                     &mut seq,
                 );
             }
-            if block.tag == BlockTag::H1 && vote_appendix_regex().is_match(&block.text) {
+            if block.tag == BlockTag::H1 && is_vote_appendix_heading(&block.text) {
                 in_vote_appendix = true;
             }
             continue;
@@ -108,7 +87,7 @@ pub fn segment_utterances(
             continue;
         }
 
-        if in_vote_appendix || vote_appendix_regex().is_match(&block.text) {
+        if in_vote_appendix || is_vote_appendix_heading(&block.text) {
             in_vote_appendix = true;
             if let Some(turn) = open.take() {
                 push_turn(
@@ -125,7 +104,7 @@ pub fn segment_utterances(
             continue;
         }
 
-        if hard_boundary_regex().is_match(&block.text) {
+        if is_hard_boundary(&block.text) {
             if let Some(turn) = open.take() {
                 push_turn(
                     &mut utterances,
@@ -141,7 +120,7 @@ pub fn segment_utterances(
             continue;
         }
 
-        if stage_direction_regex().is_match(block.text.trim()) {
+        if is_stage_direction(block.text.trim()) {
             continue;
         }
 

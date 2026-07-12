@@ -2,8 +2,11 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
+use crawl::report_blocks::read_report_html;
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
 use crawl::{
+    classify_question_heading_bilingual, classify_question_heading_text,
+    has_pending_question_text, QuestionHeadingRole,
     extract_proceedings_from_document, extract_utterances_from_document, write_hearings_parquet,
     write_interpellations_parquet, write_utterances_parquet, HearingDraft, InterpellationDraft,
     MeetingKind, UtteranceDraft,
@@ -17,7 +20,7 @@ use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs::{File, read_to_string};
+use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 use tokio::fs;
@@ -582,7 +585,7 @@ async fn scrape_meeting(
     }
 
     let cache_path = relative_cache_path(&filepath, &cache_dir());
-    let content = read_to_string(&filepath)?;
+    let content = read_report_html(&filepath)?;
     let document = Html::parse_document(&content);
 
     let date = extract_date_from_document(&document)?;
@@ -715,13 +718,8 @@ async fn extract_questions(
     };
 
     // The keywords that indicate the questions section has started.
-    let questions_section_keywords = [
-        "mondelinge vragen",
-        "vragen",
-        "questions orales",
-        "question orales",
-        "questions",
-    ];
+    let questions_section_keywords =
+        crawl::question_boundaries::QUESTIONS_SECTION_KEYWORDS;
 
     for element in document.select(selector_h1_or_h2_or_p()) {
         let tag = element.value().name();
@@ -760,36 +758,41 @@ async fn extract_questions(
         }
 
         if tag == "h2" {
-            let (found_nl, found_fr) = extract_bilingual_spans(&element);
-
-            let is_group_start = found_nl
-                .as_deref()
-                .map_or(false, |t| t.starts_with("Samengevoegde"))
-                || found_fr.as_deref().map_or(false, |t| t.contains("jointes"));
-            let is_subquestion = found_nl.as_deref().map_or(false, |t| t.starts_with("-"))
-                || found_fr.as_deref().map_or(false, |t| t.starts_with("-"));
-            let is_single = found_nl
-                .as_deref()
-                .map_or(false, |t| t.starts_with("Vraag van"))
-                || found_fr
-                    .as_deref()
-                    .map_or(false, |t| t.starts_with("Question de"));
-
-            // If it's none of the above, it's a non-question h2 — flush and stop.
-            if !is_group_start && !is_subquestion && !is_single {
-                if let Some(q) = flush_question(
-                    question_seq,
-                    &previous_nl,
-                    &previous_fr,
-                    typo_map,
-                )? {
-                    questions.push(q);
+            let (mut found_nl, mut found_fr) = extract_bilingual_spans(&element);
+            let full_heading =
+                clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+            if classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref())
+                == QuestionHeadingRole::Unrelated
+            {
+                let role = classify_question_heading_text(&full_heading);
+                if role != QuestionHeadingRole::Unrelated {
+                    if is_likely_french(&full_heading) {
+                        found_fr = Some(full_heading);
+                    } else {
+                        found_nl = Some(full_heading);
+                    }
                 }
-                break;
             }
 
+            let heading_role = classify_question_heading_bilingual(
+                found_nl.as_deref(),
+                found_fr.as_deref(),
+            );
+
+            if matches!(
+                heading_role,
+                QuestionHeadingRole::Unrelated | QuestionHeadingRole::Hearing
+            ) {
+                continue;
+            }
+
+            let is_group_start = matches!(heading_role, QuestionHeadingRole::GroupStart);
+            let is_subquestion = matches!(heading_role, QuestionHeadingRole::SubQuestion);
+            let is_single = matches!(heading_role, QuestionHeadingRole::Single);
+            let is_fr_group_header = matches!(heading_role, QuestionHeadingRole::FrGroupHeader);
+
             if is_group_start || is_single {
-                if !previous_nl.is_empty() && !previous_fr.is_empty() {
+                if has_pending_question_text(&previous_nl, &previous_fr) {
                     if let Some(q) = flush_question(
                         question_seq,
                         &previous_nl,
@@ -816,6 +819,12 @@ async fn extract_questions(
                 if let Some(t) = found_fr {
                     previous_fr.push('\n');
                     previous_fr.push_str(&t);
+                }
+            } else if is_fr_group_header {
+                if let Some(t) = found_fr.or(found_nl) {
+                    if previous_fr.is_empty() {
+                        previous_fr = t;
+                    }
                 }
             }
         }
@@ -844,6 +853,18 @@ async fn extract_questions(
             }
         }
     }
+
+    if has_pending_question_text(&previous_nl, &previous_fr) {
+        if let Some(q) = flush_question(
+            question_seq,
+            &previous_nl,
+            &previous_fr,
+            typo_map,
+        )? {
+            questions.push(q);
+        }
+    }
+
     Ok(questions)
 }
 
@@ -1562,6 +1583,12 @@ fn extract_bilingual_spans(element: &ElementRef) -> (Option<String>, Option<Stri
             fr = Some(text);
         }
     }
+    if nl.is_none() && fr.is_none() {
+        let full = clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+        if !full.is_empty() {
+            nl = Some(full);
+        }
+    }
     (nl, fr)
 }
 
@@ -1919,4 +1946,70 @@ fn extract_time_from_document(document: &Html, keyword: &str) -> Result<String, 
         })
         .last()
         .ok_or_else(|| "Could not extract time from the document".into())
+}
+
+#[cfg(test)]
+mod question_extract_tests {
+    use super::*;
+    use scraper::Html;
+    use std::collections::HashMap;
+    use std::fs::read_to_string;
+
+    #[tokio::test]
+    async fn plenary_82_extracts_questions() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/plenary/56-82.html");
+        if !path.exists() {
+            return;
+        }
+        let content = read_to_string(&path).unwrap();
+        let document = Html::parse_document(&content);
+        let typo_map = HashMap::new();
+        let questions = extract_questions(
+            &document,
+            56,
+            82,
+            &typo_map,
+            "http://example.test",
+            "sessions/56/meetings/plenary/56-82.html",
+        )
+        .await
+        .unwrap();
+        assert!(
+            questions.len() >= 10,
+            "expected at least 10 questions, got {}",
+            questions.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn scrape_meeting_82_after_prior_meetings_returns_questions() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/plenary/56-82.html");
+        if !path.exists() {
+            return;
+        }
+        dotenvy::dotenv().ok();
+        let client = ScrapingClient::new();
+        let mut web_request_count = 0u32;
+        let mut encountered_dossier_ids = HashMap::new();
+        for meeting_id in 1..=81u32 {
+            let _ = scrape_meeting(
+                &client,
+                56,
+                meeting_id,
+                &mut web_request_count,
+                &mut encountered_dossier_ids,
+            )
+            .await;
+        }
+        let output = scrape_meeting(&client, 56, 82, &mut web_request_count, &mut encountered_dossier_ids)
+            .await
+            .expect("scrape_meeting should succeed");
+        assert!(
+            output.questions.len() >= 10,
+            "after 81 meetings, meeting 82 returned {} questions",
+            output.questions.len()
+        );
+    }
 }

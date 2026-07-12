@@ -97,6 +97,16 @@ impl CheckDetail {
 }
 
 #[derive(Debug, Clone)]
+pub struct CoverageBaselineRow {
+    pub meeting_kind: String,
+    pub meeting_id: String,
+    pub source_words: usize,
+    pub saved_words: usize,
+    pub ratio: f64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct CheckSummary {
     pub table: String,
     pub check: String,

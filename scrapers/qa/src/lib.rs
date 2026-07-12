@@ -2,6 +2,7 @@ pub mod aggregate;
 pub mod agenda_checks;
 pub mod baseline;
 pub mod check_catalog;
+pub mod coverage_baseline;
 pub mod graph;
 pub mod infrastructure;
 pub mod io;
@@ -9,6 +10,7 @@ pub mod remaining;
 pub mod schema;
 pub mod speakers;
 pub mod speech;
+pub mod stats;
 pub mod types;
 pub mod vote_source;
 pub mod votes;
@@ -20,6 +22,7 @@ use identity::resolver::Resolver;
 use io::{write_alias_candidates, write_check_details, write_check_summaries};
 use normalize::common::UnresolvedRow;
 use normalize::normalize_utterances;
+use stats::{coverage_console_lines, format_all_issue_stats, QaStatsContext};
 use std::error::Error;
 use std::path::Path;
 use types::{AliasCandidate, CheckDetail, CheckSummary};
@@ -71,7 +74,8 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(infrastructure::run_infrastructure_checks(&data_root)?);
     details.extend(vote_source::run_vote_source_checks(&data_root)?);
     details.extend(agenda_checks::run_agenda_checks(&data_root)?);
-    details.extend(speech::run_speech_checks(&data_root)?);
+    let speech_out = speech::run_speech_checks(&data_root)?;
+    details.extend(speech_out.details);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
 
@@ -86,7 +90,15 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
 
     if opts.update_baseline {
         baseline::update_baseline(&summaries, &qa_dir.join("checks_baseline.parquet"))?;
+        coverage_baseline::update_coverage_baseline(
+            &speech_out.coverage_snapshots,
+            &qa_dir.join("speech_coverage_baseline.parquet"),
+        )?;
         eprintln!("[qa] baseline updated at {}", qa_dir.join("checks_baseline.parquet").display());
+        eprintln!(
+            "[qa] coverage baseline updated at {}",
+            qa_dir.join("speech_coverage_baseline.parquet").display()
+        );
     }
 
     write_check_details(
@@ -95,7 +107,18 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     )?;
     write_check_summaries(&qa_dir.join("checks.parquet"), &summaries)?;
     write_alias_candidates(&qa_dir.join("alias_candidates.parquet"), &alias_candidates)?;
-    write_summary_md(&qa_dir.join("summary.md"), &summaries)?;
+
+    let row_counts_path = qa_dir.join("row_counts.json");
+    let stats_ctx = QaStatsContext {
+        coverage_snapshots: &speech_out.coverage_snapshots,
+        row_counts_path: Some(row_counts_path.as_path()),
+    };
+    write_summary_md(
+        &qa_dir.join("summary.md"),
+        &summaries,
+        &details,
+        &stats_ctx,
+    )?;
 
     let regressions = if qa_dir.join("checks_baseline.parquet").exists() {
         baseline::compare_to_baseline(&summaries, &qa_dir.join("checks_baseline.parquet"))?
@@ -106,7 +129,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
 
     let strict_failed = opts.strict && !regressions.is_empty();
 
-    print_summary(&summaries, details.len(), &regressions);
+    print_summary(&summaries, &details, &stats_ctx, details.len(), &regressions);
 
     Ok(QaRunResult {
         details,
@@ -156,7 +179,13 @@ fn load_unresolved(data_dir: &Path) -> Result<Vec<UnresolvedRow>, Box<dyn Error>
     Ok(rows)
 }
 
-fn print_summary(summaries: &[CheckSummary], detail_count: usize, regressions: &[String]) {
+fn print_summary(
+    summaries: &[CheckSummary],
+    details: &[CheckDetail],
+    stats_ctx: &QaStatsContext<'_>,
+    detail_count: usize,
+    regressions: &[String],
+) {
     let issues: Vec<_> = summaries
         .iter()
         .filter(|s| s.status != "pass" && s.check != "qa.summary_vs_detail")
@@ -169,8 +198,23 @@ fn print_summary(summaries: &[CheckSummary], detail_count: usize, regressions: &
         issues.len(),
         passes.len()
     );
+
+    for line in coverage_console_lines(stats_ctx.coverage_snapshots) {
+        eprintln!("{line}");
+    }
+
+    let issue_stats = format_all_issue_stats(summaries, details, stats_ctx);
     for s in issues.iter().take(20) {
         eprintln!("[qa] {} {}: {} ({})", s.table, s.check, s.status, s.detail);
+        if let Some(stats) = issue_stats.get(&s.check) {
+            if s.check == "utterance.speech_char_coverage" {
+                continue;
+            }
+            // Print first non-empty stat line as a one-liner hint.
+            if let Some(first) = stats.lines().find(|l| !l.is_empty() && !l.starts_with('|')) {
+                eprintln!("[qa]   stats: {first}");
+            }
+        }
     }
     if !regressions.is_empty() {
         eprintln!("[qa] {} baseline regression(s):", regressions.len());
@@ -196,6 +240,7 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "graph.orphan_external_person",
         "utterance.unique_ids",
         "utterance.source_markers_vs_normalized",
+        "utterance.speech_char_coverage",
         "utterance.roundtrip_discussion",
         "speaker.cleaned_re_resolves",
         "speaker.utterance_id_duplicates",
