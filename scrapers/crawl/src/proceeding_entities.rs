@@ -332,7 +332,7 @@ fn interpellation_from_agenda_item(
     let topics_fr = fr.as_ref().map(|p| p.topics.join(";")).unwrap_or_default();
     let parsed = merge_interpellation_parsed(nl.as_ref(), fr.as_ref());
 
-    if parsed.interpellators.is_empty() && parsed.topics.is_empty() {
+    if parsed.interpellators.is_empty() && parsed.topics.is_empty() && item.internal_ids.is_empty() {
         return None;
     }
 
@@ -341,14 +341,25 @@ fn interpellation_from_agenda_item(
     internal_ids.sort();
     internal_ids.dedup();
 
+    let interpellators = if parsed.interpellators.is_empty() {
+        String::new()
+    } else {
+        parsed.interpellators.join(",")
+    };
+    let respondents = if parsed.respondents.is_empty() {
+        String::new()
+    } else {
+        parsed.respondents.join(",")
+    };
+
     Some(InterpellationDraft {
         interpellation_id: item.item_id.clone(),
         session_id,
         meeting_id,
         meeting_kind,
         agenda_id: item.agenda_id.clone(),
-        interpellators: parsed.interpellators.join(","),
-        respondents: parsed.respondents.join(","),
+        interpellators,
+        respondents,
         topics_nl,
         topics_fr,
         internal_ids: internal_ids.join(","),
@@ -468,6 +479,10 @@ fn merge_interpellation_drafts(existing: &mut InterpellationDraft, incoming: &In
     }
     if existing.internal_ids.is_empty() {
         existing.internal_ids = incoming.internal_ids.clone();
+    }
+    // Keep the lowest-seq agenda item_id so utterance PART_OF matches graph nodes.
+    if incoming.interpellation_id < existing.interpellation_id {
+        existing.interpellation_id = incoming.interpellation_id.clone();
     }
 }
 

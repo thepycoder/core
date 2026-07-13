@@ -1,7 +1,8 @@
 use crate::proceeding_entities::{
-    classify_heading_kind, extract_interpellation_ids_from_text, is_french_interpellation_bullet,
-    is_interpellation_bullet_line, is_interpellation_section, is_joint_interpellation_fr_header,
-    is_joint_interpellation_group_start,
+    classify_heading_kind, extract_interpellation_ids_from_text,
+    is_french_interpellation_bullet, is_interpellation_bullet_line, is_interpellation_section,
+    is_joint_interpellation_fr_header, is_joint_interpellation_group_start,
+    is_non_question_proceeding_heading,
 };
 use crate::question_boundaries::{
     classify_question_heading_text, extends_open_question, is_questions_section,
@@ -87,7 +88,7 @@ fn agenda_num_regex() -> &'static Regex {
 }
 
 fn internal_id_regex() -> &'static Regex {
-    INTERNAL_ID.get_or_init(|| Regex::new(r"\(Q(\d{6,8}[A-Za-z])\)").unwrap())
+    INTERNAL_ID.get_or_init(|| Regex::new(r"\(Q?(\d{6,8}[A-Za-z])\)").unwrap())
 }
 
 fn dossier_ref_regex() -> &'static Regex {
@@ -108,13 +109,23 @@ fn is_bilingual_fr_heading(block: &ReportBlock, item: &AgendaItem) -> bool {
     looks_like_fr_heading(&block.text)
 }
 
-fn extend_open_question(item: &mut AgendaItem, text: &str, role: QuestionHeadingRole) {
+fn extend_open_question(
+    item: &mut AgendaItem,
+    document: &Html,
+    text: &str,
+    role: QuestionHeadingRole,
+) {
     match role {
         QuestionHeadingRole::SubQuestion => {
             if !item.title_nl.is_empty() {
                 item.title_nl.push('\n');
             }
             item.title_nl.push_str(text);
+            for id in extract_internal_ids(document, text) {
+                if !item.internal_ids.contains(&id) {
+                    item.internal_ids.push(id);
+                }
+            }
         }
         QuestionHeadingRole::FrGroupHeader if item.title_fr.is_empty() => {
             item.title_fr = text.to_string();
@@ -133,7 +144,11 @@ fn should_emit_question_item(
     meeting_kind: MeetingKind,
     section: &str,
     heading_role: QuestionHeadingRole,
+    heading_text: &str,
 ) -> bool {
+    if is_non_question_proceeding_heading(heading_text) {
+        return false;
+    }
     if !starts_new_question_unit(heading_role) {
         return false;
     }
@@ -303,10 +318,14 @@ pub fn build_agenda_timeline(
         if agenda_id.is_none() {
             if extends_open_question(heading_role) {
                 if let Some(idx) = open_question_idx {
-                    close_item_range(&mut items, block.index);
-                    extend_open_question(&mut items[idx], &block.text, heading_role);
+                    extend_open_question(&mut items[idx], document, &block.text, heading_role);
                 }
-            } else if should_emit_question_item(meeting_kind, &current_section, heading_role) {
+            } else if should_emit_question_item(
+                meeting_kind,
+                &current_section,
+                heading_role,
+                &block.text,
+            ) {
                 close_item_range(&mut items, block.index);
                 push_question_item(
                     &mut items,
@@ -327,7 +346,9 @@ pub fn build_agenda_timeline(
         }
 
         let agenda_id = agenda_id.unwrap();
-        close_item_range(&mut items, block.index);
+        if !extends_open_question(heading_role) {
+            close_item_range(&mut items, block.index);
+        }
 
         if heading_role == QuestionHeadingRole::Hearing {
             open_question_idx = None;
@@ -335,7 +356,7 @@ pub fn build_agenda_timeline(
 
         if extends_open_question(heading_role) {
             if let Some(idx) = open_question_idx {
-                extend_open_question(&mut items[idx], &block.text, heading_role);
+                extend_open_question(&mut items[idx], document, &block.text, heading_role);
             }
             pending_nl = Some((block.index, block.text.clone()));
             continue;
@@ -343,7 +364,10 @@ pub fn build_agenda_timeline(
 
         let item_kind = classify_item_kind(meeting_kind, &current_section, &block.text, heading_role);
 
-        if item_kind == ItemKind::Question && starts_new_question_unit(heading_role) {
+        if item_kind == ItemKind::Question
+            && starts_new_question_unit(heading_role)
+            && !is_non_question_proceeding_heading(&block.text)
+        {
             push_question_item(
                 &mut items,
                 &mut open_question_idx,
@@ -405,6 +429,15 @@ pub fn build_agenda_timeline(
     if let Some((start, nl_title)) = pending_nl {
         if let Some(item) = items.iter_mut().find(|it| it.start_block == start) {
             item.title_nl = nl_title;
+        }
+    }
+
+    // Group headers and other non-bullet interpellation headings must not carry
+    // interpellation item_kind without site-native ids (commission 156/128).
+    for item in &mut items {
+        if item.item_kind == ItemKind::Interpellation && item.internal_ids.is_empty() {
+            item.item_kind = ItemKind::GeneralDebate;
+            item.item_id.clear();
         }
     }
 
@@ -657,6 +690,41 @@ mod tests {
         assert_eq!(questions.len(), 1, "expected one question item");
         assert_eq!(questions[0].item_id, "56_commission_105_0");
         assert_eq!(questions[0].agenda_id, "01");
+        assert_eq!(
+            questions[0].internal_ids,
+            vec!["Q56002540C", "Q56003576C", "Q56003581C"],
+            "sub-question lines must contribute internal_ids for graph linkage"
+        );
+    }
+
+    #[test]
+    fn commission_fixture_utterance_item_ids_match_question_nodes() {
+        use crate::meeting_report::extract_utterances_from_cache;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/commission/56-105.html");
+        if !path.exists() {
+            return;
+        }
+        let utterances = extract_utterances_from_cache(
+            &path,
+            MeetingKind::Commission,
+            56,
+            105,
+            "url",
+            "cache",
+        )
+        .unwrap();
+        let question_item_ids: std::collections::HashSet<_> = utterances
+            .iter()
+            .filter(|u| u.item_kind == "question")
+            .map(|u| u.item_id.as_str())
+            .collect();
+        assert_eq!(
+            question_item_ids,
+            std::collections::HashSet::from(["56_commission_105_0"]),
+            "utterance PART_OF targets must match agenda/scraper question seq"
+        );
     }
 
     #[test]

@@ -33,6 +33,10 @@ just build-identity → just normalize-edges → just build-graph
 
 Optional LLM enrichment (`just enrich-external-persons`, summarizers) runs after core graph; Mistral token in `.env`.
 
+## QA triage
+
+After `just qa`, run `just qa-triage` to cluster warn/fail detail rows and write LLM root-cause reports under `data/qa/reports/` (fix-agent briefs — identify only, no patches). Use `just qa-triage -- --dry-run` to validate clustering without API calls.
+
 ## Source data reality
 
 Meeting reports are **handwritten by note-takers** — HTML structure, names, and labels are unreliable. Mistakes are normal.

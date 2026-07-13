@@ -9,6 +9,7 @@
 /data/qa/*
 !/data/qa/checks_baseline.parquet
 !/data/qa/speech_coverage_baseline.parquet
+/data/qa/reports/
 /cache
 
 # PDF summarizers

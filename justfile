@@ -44,6 +44,9 @@ qa-strict:
 qa-update-baseline:
     cargo run --bin qa -- --update-baseline
 
+qa-triage *ARGS:
+    cd tools/qa-triage && uv sync && uv run python -m qa_triage {{ARGS}}
+
 enrich-external-persons:
     cargo run --bin external-person-enricher
 

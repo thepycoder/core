@@ -13,6 +13,19 @@ pub fn composite_scoped_id(session_id: u32, scope: &str, meeting_id: u32, seq: i
     format!("{}_{}_{}_{}", session_id, scope, meeting_id, seq)
 }
 
+/// True when `id` looks like a site-native FLWB document key (e.g. `56K1280004`), not a
+/// dossier sub-number from vote title parentheses like `(297/10)`.
+pub fn is_flwb_document_id(id: &str) -> bool {
+    let id = id.trim();
+    id.len() >= 8 && id.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// Normalize oral-question / interpellation site refs for lookup (`Q56001216P` or `56001216P`).
+pub fn normalize_site_ref(raw: &str) -> String {
+    let trimmed = raw.trim().trim_start_matches('Q').trim_start_matches('q');
+    trimmed.to_uppercase().replace('i', "I")
+}
+
 /// Upgrade legacy question ids (`{session}_{meeting}_{seq}`) using meeting kind from context.
 pub fn ensure_question_id(
     session_id: &str,
@@ -61,6 +74,19 @@ mod tests {
             ensure_question_id("56", "plenary", "56_plenary_10_0"),
             "56_plenary_10_0"
         );
+    }
+
+    #[test]
+    fn is_flwb_document_id_rejects_dossier_subnumbers() {
+        assert!(!is_flwb_document_id("1"));
+        assert!(!is_flwb_document_id("10"));
+        assert!(is_flwb_document_id("56K1280004"));
+    }
+
+    #[test]
+    fn normalize_site_ref_strips_q_prefix() {
+        assert_eq!(normalize_site_ref("Q56001216P"), "56001216P");
+        assert_eq!(normalize_site_ref("56000109I"), "56000109I");
     }
 }
 

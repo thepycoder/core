@@ -1,7 +1,7 @@
 use crate::provenance::register_artifact;
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
-use crawl::utils::ensure_question_id;
+use crawl::utils::{ensure_question_id, is_flwb_document_id, normalize_site_ref};
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use std::collections::HashMap;
 use std::error::Error;
@@ -114,7 +114,8 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     load_invited_edges(data_dir, &mut add_edge)?;
     load_proceeding_meeting_edges(data_dir, &mut add_edge)?;
     load_holds_role_edges(data_dir, &mut add_edge)?;
-    load_spoke_and_part_of_edges(data_dir, &mut add_edge)?;
+    let site_ref_nodes = build_site_ref_node_lookup(data_dir, &node_seen)?;
+    load_spoke_and_part_of_edges(data_dir, &site_ref_nodes, &node_seen, &mut add_edge)?;
 
     nodes.sort_by(|a, b| a.node_type.cmp(&b.node_type).then(a.node_id.cmp(&b.node_id)));
     edges.sort_by(|a, b| {
@@ -474,7 +475,7 @@ fn load_voted_on_edges(
                     "exact",
                 );
             }
-            if !document_ids[i].is_empty() {
+            if !document_ids[i].is_empty() && is_flwb_document_id(&document_ids[i]) {
                 add_edge(
                     "VOTED_ON",
                     "Vote",
@@ -876,8 +877,126 @@ fn load_proceeding_meeting_edges(
     Ok(())
 }
 
+fn build_site_ref_node_lookup(
+    data_dir: &Path,
+    node_seen: &HashMap<(String, String), ()>,
+) -> Result<HashMap<String, (String, String)>, Box<dyn Error>> {
+    let mut lookup: HashMap<String, (String, String)> = HashMap::new();
+    let session = data_dir.join(format!("sessions/{SESSION_ID}"));
+
+    for (kind, rel, node_type, id_col, internal_col) in [
+        ("plenary", "plenary/questions.parquet", "Question", "question_id", "internal_ids"),
+        (
+            "commission",
+            "commission/questions.parquet",
+            "Question",
+            "question_id",
+            "internal_ids",
+        ),
+        (
+            "plenary",
+            "plenary/hearings.parquet",
+            "Hearing",
+            "hearing_id",
+            "internal_ids",
+        ),
+        (
+            "commission",
+            "commission/hearings.parquet",
+            "Hearing",
+            "hearing_id",
+            "internal_ids",
+        ),
+        (
+            "plenary",
+            "plenary/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+            "internal_ids",
+        ),
+        (
+            "commission",
+            "commission/interpellations.parquet",
+            "Interpellation",
+            "interpellation_id",
+            "internal_ids",
+        ),
+    ] {
+        let path = session.join(rel);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let entity_ids = read_string_column(&batch, id_col)?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let internal_ids = read_string_column(&batch, internal_col)?;
+            for i in 0..batch.num_rows() {
+                let node_id = ensure_question_id(&session_ids[i], kind, &entity_ids[i]);
+                if !node_seen.contains_key(&(node_type.to_string(), node_id.clone())) {
+                    continue;
+                }
+                for token in internal_ids[i].split(',') {
+                    let key = normalize_site_ref(token);
+                    if key.is_empty() {
+                        continue;
+                    }
+                    lookup
+                        .entry(key)
+                        .or_insert((node_type.to_string(), node_id.clone()));
+                }
+            }
+        }
+    }
+
+    Ok(lookup)
+}
+
+fn resolve_proceeding_target_id(
+    session_id: &str,
+    meeting_kind: &str,
+    raw_item_id: &str,
+    site_refs_csv: &str,
+    node_type: &str,
+    site_ref_nodes: &HashMap<String, (String, String)>,
+    node_seen: &HashMap<(String, String), ()>,
+) -> Option<String> {
+    let scoped = ensure_question_id(session_id, meeting_kind, raw_item_id);
+    if node_seen.contains_key(&(node_type.to_string(), scoped.clone())) {
+        return Some(scoped);
+    }
+    for token in site_refs_csv.split(',') {
+        let key = normalize_site_ref(token);
+        if key.is_empty() {
+            continue;
+        }
+        if let Some((ntype, node_id)) = site_ref_nodes.get(&key) {
+            if ntype == node_type && node_seen.contains_key(&(node_type.to_string(), node_id.clone())) {
+                return Some(node_id.clone());
+            }
+        }
+    }
+    let meeting_prefix = format!("{session_id}_{meeting_kind}_");
+    let rest = raw_item_id.strip_prefix(&meeting_prefix).unwrap_or(raw_item_id);
+    let meeting_id = rest.split('_').next().unwrap_or("");
+    if !meeting_id.is_empty() {
+        let node_prefix = format!("{meeting_prefix}{meeting_id}_");
+        let mut candidates: Vec<String> = node_seen
+            .keys()
+            .filter(|(ntype, node_id)| ntype == node_type && node_id.starts_with(&node_prefix))
+            .map(|(_, node_id)| node_id.clone())
+            .collect();
+        candidates.sort();
+        if candidates.len() == 1 {
+            return Some(candidates[0].clone());
+        }
+    }
+    None
+}
+
 fn load_spoke_and_part_of_edges(
     data_dir: &Path,
+    site_ref_nodes: &HashMap<String, (String, String)>,
+    node_seen: &HashMap<(String, String), ()>,
     add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/utterances.parquet");
@@ -891,6 +1010,7 @@ fn load_spoke_and_part_of_edges(
         let meeting_kinds = read_string_column(&batch, "meeting_kind")?;
         let item_kinds = read_string_column(&batch, "item_kind")?;
         let item_ids = read_string_column(&batch, "item_id")?;
+        let question_ids = read_string_column(&batch, "question_ids")?;
         let speaker_ids = read_string_column(&batch, "speaker_person_id")?;
         let entity_types = read_string_column(&batch, "speaker_entity_type")?;
         let entity_ids = read_string_column(&batch, "speaker_entity_id")?;
@@ -914,41 +1034,71 @@ fn load_spoke_and_part_of_edges(
                 "exact",
             );
             if item_kinds[i] == "question" && !item_ids[i].is_empty() {
-                add_edge(
-                    "PART_OF",
-                    "Utterance",
-                    &utterance_ids[i],
+                if let Some(target_id) = resolve_proceeding_target_id(
+                    &session_ids[i],
+                    &meeting_kinds[i],
+                    &item_ids[i],
+                    &question_ids[i],
                     "Question",
-                    &item_ids[i],
-                    "",
-                    &source_urls[i],
-                    &cache_paths[i],
-                    "exact",
-                );
+                    site_ref_nodes,
+                    node_seen,
+                ) {
+                    add_edge(
+                        "PART_OF",
+                        "Utterance",
+                        &utterance_ids[i],
+                        "Question",
+                        &target_id,
+                        "",
+                        &source_urls[i],
+                        &cache_paths[i],
+                        "exact",
+                    );
+                }
             } else if item_kinds[i] == "hearing" && !item_ids[i].is_empty() {
-                add_edge(
-                    "PART_OF",
-                    "Utterance",
-                    &utterance_ids[i],
+                if let Some(target_id) = resolve_proceeding_target_id(
+                    &session_ids[i],
+                    &meeting_kinds[i],
+                    &item_ids[i],
+                    &question_ids[i],
                     "Hearing",
-                    &item_ids[i],
-                    "",
-                    &source_urls[i],
-                    &cache_paths[i],
-                    "exact",
-                );
+                    site_ref_nodes,
+                    node_seen,
+                ) {
+                    add_edge(
+                        "PART_OF",
+                        "Utterance",
+                        &utterance_ids[i],
+                        "Hearing",
+                        &target_id,
+                        "",
+                        &source_urls[i],
+                        &cache_paths[i],
+                        "exact",
+                    );
+                }
             } else if item_kinds[i] == "interpellation" && !item_ids[i].is_empty() {
-                add_edge(
-                    "PART_OF",
-                    "Utterance",
-                    &utterance_ids[i],
-                    "Interpellation",
+                if let Some(target_id) = resolve_proceeding_target_id(
+                    &session_ids[i],
+                    &meeting_kinds[i],
                     &item_ids[i],
-                    "",
-                    &source_urls[i],
-                    &cache_paths[i],
-                    "exact",
-                );
+                    &question_ids[i],
+                    "Interpellation",
+                    site_ref_nodes,
+                    node_seen,
+                ) {
+                    add_edge(
+                        "PART_OF",
+                        "Utterance",
+                        &utterance_ids[i],
+                        "Interpellation",
+                        &target_id,
+                        "",
+                        &source_urls[i],
+                        &cache_paths[i],
+                        "exact",
+                    );
+                }
             }
             let (from_type, from_id) = if !entity_ids[i].is_empty() {
                 (entity_types[i].as_str(), entity_ids[i].as_str())
