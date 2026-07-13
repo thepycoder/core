@@ -1,10 +1,14 @@
 use crate::types::CheckDetail;
-use crawl::agenda_timeline::{MeetingKind, count_agenda_questions_from_cache};
+use crawl::agenda_timeline::{
+    MeetingKind, build_agenda_timeline, count_agenda_questions_from_cache, distinct_agenda_numbers,
+};
 use crawl::paths::cache_dir;
 use crawl::proceeding_entities::{is_hearing_heading, is_interpellation_heading};
-use crawl::report_blocks::read_report_html;
+use crawl::report_blocks::{parse_report_blocks, read_report_html};
+use crawl::vote_inventory::numeric_sequence_gaps_from_one;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
+use scraper::Html;
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
@@ -12,6 +16,7 @@ use std::path::Path;
 pub fn run_agenda_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
     let mut details = Vec::new();
     details.extend(check_entity_counts(data_dir)?);
+    details.extend(check_agenda_number_sequence(data_dir)?);
     details.extend(check_dossier_refs(data_dir)?);
     details.extend(check_hearing_headings(data_dir)?);
     details.extend(check_interpellation_headings(data_dir)?);
@@ -83,6 +88,65 @@ fn check_entity_counts(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Erro
                         )
                         .with_meeting(kind.as_str(), meeting_id)
                         .with_values(source_questions.to_string(), parquet_questions.to_string())
+                        .with_source(&source_urls[i], cache_path),
+                    );
+                }
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_agenda_number_sequence(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut details = Vec::new();
+    let session_id: u32 = SESSION_ID.parse().unwrap_or(56);
+    for (kind, meetings_rel) in [
+        (
+            MeetingKind::Plenary,
+            format!("sessions/{SESSION_ID}/plenary/meetings.parquet"),
+        ),
+        (
+            MeetingKind::Commission,
+            format!("sessions/{SESSION_ID}/commission/meetings.parquet"),
+        ),
+    ] {
+        let meetings_path = data_dir.join(&meetings_rel);
+        if !meetings_path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&meetings_path)? {
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            for i in 0..batch.num_rows() {
+                let cache_path = &cache_paths[i];
+                if cache_path.is_empty() {
+                    continue;
+                }
+                let full = cache_dir().join(cache_path);
+                if !full.exists() {
+                    continue;
+                }
+                let meeting_num: u32 = meeting_ids[i].parse().unwrap_or(0);
+                let html = read_report_html(&full)?;
+                let document = Html::parse_document(&html);
+                let blocks = parse_report_blocks(&document);
+                let items = build_agenda_timeline(&blocks, kind, session_id, meeting_num);
+                let numbers = distinct_agenda_numbers(&items);
+                for gap in numeric_sequence_gaps_from_one(&numbers) {
+                    let gap_id = format!("{gap:02}");
+                    details.push(
+                        CheckDetail::new(
+                            "agenda.number_sequence",
+                            "warn",
+                            "warn",
+                            format!(
+                                "meeting {} missing agenda item {gap_id} in sequence 1..max",
+                                meeting_ids[i]
+                            ),
+                        )
+                        .with_meeting(kind.as_str(), &meeting_ids[i])
+                        .with_entity("agenda", &gap_id)
                         .with_source(&source_urls[i], cache_path),
                     );
                 }

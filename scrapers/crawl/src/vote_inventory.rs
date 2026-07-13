@@ -344,17 +344,29 @@ pub fn inventory_vote_numbers(inv: &VoteInventory) -> BTreeSet<String> {
     all
 }
 
+pub fn numeric_sequence_gaps_from_one(numbers: &BTreeSet<u32>) -> Vec<u32> {
+    let Some(max) = numbers.iter().max().copied() else {
+        return Vec::new();
+    };
+    if max == 0 {
+        return Vec::new();
+    }
+    (1..=max)
+        .filter(|number| !numbers.contains(number))
+        .collect()
+}
+
 pub fn vote_number_gaps(numbers: &BTreeSet<String>) -> Vec<String> {
-    let parsed = numbers
+    let parsed: BTreeSet<u32> = numbers
         .iter()
         .filter_map(|number| number.parse::<u32>().ok())
-        .collect::<Vec<_>>();
+        .collect();
     let Some(min) = parsed.iter().min().copied() else {
         return Vec::new();
     };
     let max = parsed.iter().max().copied().unwrap_or(min);
     (min..=max)
-        .filter(|number| !numbers.contains(&number.to_string()))
+        .filter(|number| !parsed.contains(number))
         .map(|number| number.to_string())
         .collect()
 }
@@ -437,5 +449,21 @@ mod tests {
     #[test]
     fn debate_vote_shaped_table_is_not_a_formal_event() {
         assert!(fixture("debate").formal_events.is_empty());
+    }
+
+    #[test]
+    fn numeric_sequence_gaps_from_one_flags_missing_low_numbers() {
+        use std::collections::BTreeSet;
+
+        let numbers = BTreeSet::from([1, 2, 4, 10]);
+        assert_eq!(numeric_sequence_gaps_from_one(&numbers), vec![3, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn vote_number_gaps_uses_parsed_values() {
+        use std::collections::BTreeSet;
+
+        let numbers = BTreeSet::from(["01".into(), "03".into(), "04".into()]);
+        assert_eq!(vote_number_gaps(&numbers), vec!["2"]);
     }
 }

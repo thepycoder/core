@@ -110,6 +110,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "Speaker-turn markers in cached meeting HTML do not align with extracted utterance row counts.",
             measures: "Runs S6 marker crosscheck per meeting: `count_source_markers` vs `extract_utterances_from_document` (allows bilingual dedup).",
         },
+        "utterance.turn_number_sequence" => CheckDoc {
+            what: "Speaker turn numbers within an agenda item skip a value in the expected 1..N sequence.",
+            measures: "Scans cached HTML for `DD.MM` turn markers (ignoring optional intervention digits) and reports gaps per agenda item.",
+        },
         "utterance.speech_char_coverage" => CheckDoc {
             what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
             measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind).",
@@ -149,6 +153,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         "agenda.entity_count_vs_parquet" => CheckDoc {
             what: "Cached meeting HTML has question/agenda headings but no matching question rows were written for that meeting.",
             measures: "Counts agenda question headings in cache HTML vs question rows per `meeting_id` in staging parquet.",
+        },
+        "agenda.number_sequence" => CheckDoc {
+            what: "Agenda item numbers in a meeting report skip a value in the expected 1..N sequence.",
+            measures: "Builds the agenda timeline from cached HTML and reports missing agenda numbers between 1 and the highest seen.",
         },
         "agenda.hearing_not_extracted" => CheckDoc {
             what: "Commission meeting HTML contains a formal hearing heading but no matching rows in hearings.parquet.",

@@ -5,8 +5,12 @@ use crawl::agenda_timeline::MeetingKind;
 use crawl::paths::cache_dir;
 use crawl::qa_coverage::{count_document_words_from_cache, word_count};
 use crawl::qa_markers::check_markers_vs_utterances;
+use crawl::report_blocks::{parse_report_blocks, read_report_html};
+use crawl::speaker_parse::collect_base_turns_by_agenda;
+use crawl::vote_inventory::numeric_sequence_gaps_from_one;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
+use scraper::Html;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
@@ -31,6 +35,7 @@ pub fn run_speech_checks(data_dir: &Path) -> Result<SpeechCheckResult, Box<dyn E
     let coverage = check_speech_char_coverage(data_dir, &saved)?;
     let mut details = Vec::new();
     details.extend(check_source_markers(data_dir)?);
+    details.extend(check_turn_number_sequence(data_dir)?);
     details.extend(check_roundtrip_discussion(data_dir)?);
     details.extend(coverage.details);
     Ok(SpeechCheckResult {
@@ -515,6 +520,64 @@ fn check_source_markers(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
                         )
                         .with_source(&source_urls[i], cache_path),
                     );
+                }
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_turn_number_sequence(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut details = Vec::new();
+    for (kind, meetings_rel) in [
+        (
+            MeetingKind::Plenary,
+            format!("sessions/{SESSION_ID}/plenary/meetings.parquet"),
+        ),
+        (
+            MeetingKind::Commission,
+            format!("sessions/{SESSION_ID}/commission/meetings.parquet"),
+        ),
+    ] {
+        let meetings_path = data_dir.join(&meetings_rel);
+        if !meetings_path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&meetings_path)? {
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            for i in 0..batch.num_rows() {
+                let cache_path = &cache_paths[i];
+                if cache_path.is_empty() {
+                    continue;
+                }
+                let full = cache_dir().join(cache_path);
+                if !full.exists() {
+                    continue;
+                }
+                let html = read_report_html(&full)?;
+                let document = Html::parse_document(&html);
+                let blocks = parse_report_blocks(&document);
+                let turns_by_agenda = collect_base_turns_by_agenda(&blocks);
+                for (agenda_id, turns) in turns_by_agenda {
+                    for gap in numeric_sequence_gaps_from_one(&turns) {
+                        let turn_id = format!("{agenda_id}.{gap:02}");
+                        details.push(
+                            CheckDetail::new(
+                                "utterance.turn_number_sequence",
+                                "warn",
+                                "warn",
+                                format!(
+                                    "meeting {} missing speaker turn {turn_id} in sequence 1..max",
+                                    meeting_ids[i]
+                                ),
+                            )
+                            .with_meeting(kind.as_str(), &meeting_ids[i])
+                            .with_entity("turn", &turn_id)
+                            .with_source(&source_urls[i], cache_path),
+                        );
+                    }
                 }
             }
         }

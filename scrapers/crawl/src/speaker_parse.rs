@@ -196,6 +196,46 @@ pub fn language_from_class(class: Option<&str>) -> String {
     }
 }
 
+/// Agenda prefix and base turn index (`DD.MM` or `DD.MMD` intervention marker).
+pub fn base_turn_parts(turn_number: &str) -> Option<(String, u32)> {
+    let parts: Vec<&str> = turn_number.split('.').collect();
+    if parts.len() != 2 || parts[0].len() != 2 {
+        return None;
+    }
+    let agenda_id = parts[0].to_string();
+    let base = match parts[1].len() {
+        2 => parts[1].parse().ok()?,
+        3 => parts[1][..2].parse().ok()?,
+        _ => return None,
+    };
+    Some((agenda_id, base))
+}
+
+pub fn collect_base_turns_by_agenda(
+    blocks: &[crate::report_blocks::ReportBlock],
+) -> std::collections::HashMap<String, std::collections::BTreeSet<u32>> {
+    use crate::report_blocks::BlockTag;
+    use std::collections::{BTreeSet, HashMap};
+
+    let mut by_agenda: HashMap<String, BTreeSet<u32>> = HashMap::new();
+    for block in blocks {
+        if block.tag != BlockTag::P {
+            continue;
+        }
+        let Some((start, _)) = detect_turn_start(&block.text) else {
+            continue;
+        };
+        let TurnStart::Numbered { turn_number, .. } = start else {
+            continue;
+        };
+        let Some((agenda_id, base)) = base_turn_parts(&turn_number) else {
+            continue;
+        };
+        by_agenda.entry(agenda_id).or_default().insert(base);
+    }
+    by_agenda
+}
+
 pub fn count_source_markers(blocks: &[crate::report_blocks::ReportBlock]) -> (usize, usize) {
     use crate::report_blocks::BlockTag;
 
@@ -353,5 +393,67 @@ mod tests {
         if let Some(u) = vandeput_110 {
             assert_eq!(u.raw_speaker, "Steven Vandeput");
         }
+    }
+
+    #[test]
+    fn base_turn_parts_strips_intervention_digit() {
+        assert_eq!(
+            base_turn_parts("02.150"),
+            Some(("02".to_string(), 15))
+        );
+        assert_eq!(base_turn_parts("02.15"), Some(("02".to_string(), 15)));
+        assert_eq!(
+            base_turn_parts("02.110"),
+            Some(("02".to_string(), 11))
+        );
+    }
+
+    #[test]
+    fn collect_base_turns_groups_interventions() {
+        use crate::report_blocks::BlockTag;
+
+        let blocks = vec![
+            crate::report_blocks::ReportBlock {
+                index: 0,
+                tag: BlockTag::P,
+                text: "02.15 Stefaan Van Hecke (Groen): speech".into(),
+                inlines: Vec::new(),
+                table_rows: None,
+                lang: None,
+                class: None,
+                has_oraspr: false,
+                content_hash: String::new(),
+                word_count: 5,
+            },
+            crate::report_blocks::ReportBlock {
+                index: 1,
+                tag: BlockTag::P,
+                text: "02.150 Steven Coenegrachts (Open Vld): reply".into(),
+                inlines: Vec::new(),
+                table_rows: None,
+                lang: None,
+                class: None,
+                has_oraspr: false,
+                content_hash: String::new(),
+                word_count: 5,
+            },
+            crate::report_blocks::ReportBlock {
+                index: 2,
+                tag: BlockTag::P,
+                text: "02.17 Annick Ponthier (VB): next".into(),
+                inlines: Vec::new(),
+                table_rows: None,
+                lang: None,
+                class: None,
+                has_oraspr: false,
+                content_hash: String::new(),
+                word_count: 5,
+            },
+        ];
+        let turns = collect_base_turns_by_agenda(&blocks);
+        let agenda_02 = turns.get("02").expect("agenda 02 turns");
+        assert!(agenda_02.contains(&15));
+        assert!(agenda_02.contains(&17));
+        assert_eq!(agenda_02.len(), 2);
     }
 }

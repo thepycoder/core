@@ -526,6 +526,14 @@ pub fn agenda_item_for_block<'a>(
         .find(|item| block_index >= item.start_block && block_index < item.end_block)
 }
 
+pub fn distinct_agenda_numbers(items: &[AgendaItem]) -> std::collections::BTreeSet<u32> {
+    items
+        .iter()
+        .filter_map(|item| item.agenda_id.parse::<u32>().ok())
+        .filter(|number| *number > 0)
+        .collect()
+}
+
 /// Count question agenda items from a cached meeting report (for QA crosschecks).
 pub fn count_agenda_questions_from_cache(
     cache_path: &std::path::Path,
