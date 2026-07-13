@@ -1466,8 +1466,6 @@ async function showEdgeDetail(link) {
   el.prepend(panel);
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
-  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
 
 async function showUnresolved(rawName, options = {}) {
   const { fromHistory = false } = options;

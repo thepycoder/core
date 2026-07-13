@@ -774,7 +774,7 @@ def _preview_dossier(conn, node_id: str, settings: Settings) -> EntityPreview | 
             SELECT id, type, authors, date, file_url
             FROM read_parquet('{subdoc_path}')
             WHERE dossier_id = ?
-            ORDER BY cast(id as integer)
+            ORDER BY date NULLS LAST, try_cast(id as bigint) NULLS LAST, id
             LIMIT 25
             """,
             [dossier_id],
