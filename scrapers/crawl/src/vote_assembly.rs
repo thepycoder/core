@@ -7,9 +7,10 @@ use crate::vote_events::{
 };
 use crate::vote_patterns::{
     VoteSectionKind, candidate_tally_re, dossier_ref_re, formal_outcome, formal_vote_begin_re,
-    is_sitting_standing_proposal, paragraph_vote_title, parse_paragraph_vote_number,
-    parse_participation, quorum_failure_re, reuse_result_re, scan_formal_outcome_after,
-    scan_reuse_marker, sitting_standing_outcome_re, votes_section_heading,
+    is_sitting_standing_proposal, is_numbered_agenda_heading, paragraph_vote_title,
+    parse_paragraph_vote_number, parse_participation, quorum_failure_re, reuse_result_re,
+    scan_formal_outcome_after, scan_reuse_marker, sitting_standing_outcome_re,
+    votes_section_heading,
 };
 use crate::vote_types::{
     SpanEvidence, UnresolvedVoteEventDraft, VoteAssemblyOutput, VoteDecisionDraft, VoteResultDraft,
@@ -63,9 +64,23 @@ pub fn assemble_votes_from_blocks(
     let mut sitting_standing_context = false;
 
     for (idx, block) in blocks.iter().enumerate() {
+        // Mirror vote_inventory section tracking: promote from any block text, reset
+        // only on non-vote H1. Meeting 16 ip016x: FR continuation H1 + prose cues.
+        let heading = votes_section_heading(&block.text);
+        if heading != VoteSectionKind::None {
+            section = heading;
+            if heading == VoteSectionKind::RollCall {
+                formal_zone = true;
+            }
+        } else if block.tag == BlockTag::H1 {
+            section = VoteSectionKind::None;
+            formal_zone = false;
+        }
+        if block.tag == BlockTag::P && formal_vote_begin_re().is_match(&block.text) {
+            formal_zone = true;
+        }
+
         if block.tag == BlockTag::H1 {
-            section = votes_section_heading(&block.text);
-            formal_zone = section == VoteSectionKind::RollCall;
             pending = TitleRefs::default();
             if section != VoteSectionKind::SecretBallot {
                 sitting_standing_context = false;
@@ -89,16 +104,17 @@ pub fn assemble_votes_from_blocks(
                     pending.title_nl = block.text.clone();
                 }
                 merge_refs(&mut pending, &block.text);
-            } else {
+            } else if section == VoteSectionKind::RollCall
+                && !is_numbered_agenda_heading(&block.text)
+            {
+                // Exit roll-call zone on debate headings; keep zone for numbered agenda
+                // items before a compact table — meeting 129 ip129x.
                 section = VoteSectionKind::None;
             }
             continue;
         }
 
         if block.tag == BlockTag::P {
-            if formal_vote_begin_re().is_match(&block.text) {
-                formal_zone = true;
-            }
             if is_sitting_standing_proposal(&block.text) {
                 sitting_standing_context = true;
                 if pending.title_nl.is_empty() && pending.title_fr.is_empty() {
@@ -365,7 +381,10 @@ pub fn assemble_votes_from_blocks(
         }
 
         if block.tag == BlockTag::Table {
-            if section == VoteSectionKind::SecretBallot {
+            // Meeting 97 ip097x: compact roll-call table after a second secret-ballot block.
+            let roll_call_in_secret_zone = section == VoteSectionKind::SecretBallot
+                && parse_roll_call_table(block).is_some();
+            if section == VoteSectionKind::SecretBallot && !roll_call_in_secret_zone {
                 let secret = parse_secret_ballot_table(block);
                 if secret.voters.is_some() || secret.valid.is_some() {
                     result_seq += 1;
@@ -436,7 +455,9 @@ pub fn assemble_votes_from_blocks(
                 continue;
             }
 
-            let in_roll_call_zone = section == VoteSectionKind::RollCall || formal_zone;
+            let in_roll_call_zone = section == VoteSectionKind::RollCall
+                || formal_zone
+                || roll_call_in_secret_zone;
             if !in_roll_call_zone {
                 continue;
             }
@@ -997,6 +1018,35 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let blocks = parse_report_blocks(&Html::parse_document(&html));
         assemble_votes_from_blocks(&blocks, 56, 60, "2020-01-01", "url", "cache")
+    }
+
+    #[test]
+    fn fixture_secret_ballot_bilingual_h1() {
+        let out = assemble("secret_ballot_bilingual_h1.html");
+        assert_eq!(out.results.len(), 1);
+        assert_eq!(out.results[0].method, "secret_ballot");
+        assert!(
+            out.tallies
+                .iter()
+                .any(|t| t.option_key == "voters" && t.count == 111)
+        );
+    }
+
+    #[test]
+    fn fixture_roll_call_after_secret_section() {
+        let out = assemble("roll_call_after_secret_section.html");
+        assert_eq!(out.results.len(), 2);
+        assert_eq!(out.results[0].method, "secret_ballot");
+        assert_eq!(out.results[1].method, "roll_call");
+        assert_eq!(out.results[1].source_roll_call_number, "12");
+    }
+
+    #[test]
+    fn fixture_roll_call_after_agenda_h2() {
+        let out = assemble("roll_call_after_agenda_h2.html");
+        assert_eq!(out.results.len(), 2);
+        assert_eq!(out.results[0].source_roll_call_number, "9");
+        assert_eq!(out.results[1].source_roll_call_number, "10");
     }
 
     #[test]

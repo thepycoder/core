@@ -214,7 +214,10 @@ pub enum VoteSectionKind {
 
 pub fn votes_section_heading(text: &str) -> VoteSectionKind {
     let lower = text.to_lowercase();
-    if lower.contains("geheime stemming") || lower.contains("scrutin secret") {
+    if lower.contains("geheime stemming")
+        || lower.contains("scrutin secret")
+        || lower.contains("scrutins secrets")
+    {
         return VoteSectionKind::SecretBallot;
     }
     if lower.contains("detail van de naamstemming") || lower.contains("détail du vote nominatif") {
@@ -266,6 +269,14 @@ pub fn paragraph_vote_title(text: &str) -> bool {
 pub fn is_sitting_standing_proposal(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains("bij zitten en opstaan") || lower.contains("par assis et levé")
+}
+
+/// Numbered agenda `H2` immediately before a roll-call table — meeting 129 ip129x.
+pub fn is_numbered_agenda_heading(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    let after_digits = trimmed.trim_start_matches(|c: char| c.is_ascii_digit());
+    let digit_count = trimmed.len().saturating_sub(after_digits.len());
+    digit_count > 0 && after_digits.starts_with(' ')
 }
 
 pub fn formal_outcome(text: &str) -> Option<&'static str> {
@@ -335,6 +346,21 @@ mod tests {
         assert_eq!(
             parse_reuse_marker_number("(Stemming/vote1\n)").as_deref(),
             Some("1")
+        );
+    }
+
+    #[test]
+    fn votes_section_heading_matches_bilingual_secret_continuation() {
+        // meeting 16 ip016x — FR H1 must not clear the secret-ballot zone
+        assert_eq!(
+            votes_section_heading("Scrutins secrets (continuation)"),
+            VoteSectionKind::SecretBallot
+        );
+        assert_eq!(
+            votes_section_heading(
+                "Ziehier de uitslag van de geheime stemming over de naturalisatieaanvragen."
+            ),
+            VoteSectionKind::SecretBallot
         );
     }
 }
