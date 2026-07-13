@@ -39,7 +39,9 @@ pub use artifact_id::{
     BLOCK_PARSER_VERSION, REPORT_BLOCK_EXTRACTOR_VERSION, VOTE_EXTRACTOR_VERSION, artifact_id,
     content_hash, content_hash_bytes,
 };
-pub use meeting_parse::{MeetingParseOutput, parse_plenary_meeting_report};
+pub use meeting_parse::{
+    MeetingParseOutput, materialize_commission_source_spans, parse_plenary_meeting_report,
+};
 pub use meeting_report::{
     extract_utterances_from_blocks, extract_utterances_from_cache, extract_utterances_from_document,
 };

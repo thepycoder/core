@@ -23,6 +23,52 @@ def test_registered_runtime_schemas_are_typed_when_files_are_missing(tmp_path):
     assert _types(db.conn, "source_spans")["confidence"] == "DOUBLE"
 
 
+def test_union_report_block_views(tmp_path):
+    derived = tmp_path / "derived" / "sessions" / "56"
+    plenary = derived / "plenary"
+    commission = derived / "commission"
+    plenary.mkdir(parents=True)
+    commission.mkdir(parents=True)
+    writer = duckdb.connect()
+    writer.execute(
+        f"""
+        COPY (
+            SELECT 'a1' artifact_id, 'hash' source_content_hash, 0::UINTEGER block_index,
+                   'p' block_type, 'hello' AS "text", '{{}}' structured_json, '' AS language,
+                   '' class_name, 1::UINTEGER word_count, 'x' content_hash, false has_oraspr,
+                   'v1' block_parser_version, 'e1' extractor_version,
+                   'http://example.test/1' source_url,
+                   'sessions/56/meetings/plenary/56-1.html' cache_path
+        ) TO '{(plenary / "report_blocks.parquet").as_posix()}' (FORMAT PARQUET)
+        """
+    )
+    writer.execute(
+        f"""
+        COPY (
+            SELECT 'a2' artifact_id, 'hash' source_content_hash, 0::UINTEGER block_index,
+                   'p' block_type, 'world' AS "text", '{{}}' structured_json, '' AS language,
+                   '' class_name, 1::UINTEGER word_count, 'y' content_hash, false has_oraspr,
+                   'v1' block_parser_version, 'e1' extractor_version,
+                   'http://example.test/2' source_url,
+                   'sessions/56/meetings/commission/56-2.html' cache_path
+        ) TO '{(commission / "report_blocks.parquet").as_posix()}' (FORMAT PARQUET)
+        """
+    )
+
+    db = Database.open(
+        Settings(scraper_data_dir=tmp_path, scraper_cache_dir=tmp_path / "cache")
+    )
+    rows = db.conn.execute(
+        """
+        SELECT regexp_extract(cache_path, 'meetings/([^/]+)/', 1) AS kind, count(*)
+        FROM report_blocks
+        GROUP BY 1
+        ORDER BY 1
+        """
+    ).fetchall()
+    assert rows == [("commission", 1), ("plenary", 1)]
+
+
 def test_registered_views_cast_physical_columns_to_declared_types(tmp_path):
     graph = tmp_path / "graph"
     graph.mkdir()

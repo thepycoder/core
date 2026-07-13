@@ -9,6 +9,9 @@
 <body>
   <header>
     <h1>Graph Debug Explorer</h1>
+    <nav class="header-nav">
+      <a href="/reports">Report coverage</a>
+    </nav>
     <div id="health-status" class="muted">Loading…</div>
   </header>
 
@@ -34,46 +37,6 @@
         </select>
         <button id="search-btn">Search</button>
         <ul id="search-results"></ul>
-      </section>
-
-      <section id="report-section">
-        <div class="report-heading">
-          <h2>Report coverage</h2>
-          <button id="report-close" class="hidden" type="button">Return to graph</button>
-        </div>
-        <label class="field-label" for="report-session">Session</label>
-        <input id="report-session" value="56" inputmode="numeric" />
-        <label class="field-label" for="report-kind">Meeting kind</label>
-        <select id="report-kind">
-          <option value="plenary">Plenary</option>
-          <option value="commission">Commission</option>
-        </select>
-        <label class="field-label" for="report-meeting">Meeting</label>
-        <select id="report-meeting"></select>
-        <label class="field-label" for="report-entity-filter">Entity type</label>
-        <select id="report-entity-filter" multiple size="5">
-          <option value="Vote">Vote</option>
-          <option value="VoteResult">VoteResult</option>
-          <option value="Question">Question</option>
-          <option value="Utterance">Utterance</option>
-          <option value="Hearing">Hearing</option>
-          <option value="Interpellation">Interpellation</option>
-          <option value="Proposition">Proposition</option>
-          <option value="Notice">Notice</option>
-          <option value="Meeting">Meeting</option>
-        </select>
-        <label class="field-label" for="report-coverage-filter">Coverage</label>
-        <select id="report-coverage-filter" multiple size="2">
-          <option value="extraction">Extraction</option>
-          <option value="scope">Scope</option>
-        </select>
-        <label class="field-label" for="report-role-filter">Span role (comma-separated)</label>
-        <input id="report-role-filter" placeholder="decision_title, result_counts…" />
-        <button id="report-clear-filters" type="button">Clear filters</button>
-        <div id="report-coverage-stats" class="muted"></div>
-        <div id="report-diagnostics"></div>
-        <div id="report-block-detail" class="hidden report-block-detail"></div>
-        <div id="report-blocks" class="report-blocks"></div>
       </section>
 
       <section>

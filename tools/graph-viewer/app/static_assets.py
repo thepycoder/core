@@ -5,7 +5,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 def asset_version() -> str:
     stamps = []
-    for name in ("app.js", "style.css", "index.html"):
+    for name in (
+        "app.js",
+        "style.css",
+        "index.html",
+        "report-coverage.js",
+        "report-coverage.css",
+        "report-coverage.html",
+    ):
         path = STATIC_DIR / name
         if path.exists():
             stamps.append(path.stat().st_mtime)

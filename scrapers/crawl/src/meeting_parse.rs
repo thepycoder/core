@@ -97,6 +97,7 @@ pub fn parse_plenary_meeting_report(
         source_content_hash,
         session_id,
         meeting_id,
+        MeetingKind::Plenary,
         &blocks,
         &agenda,
         &utterances,
@@ -194,12 +195,54 @@ fn span_from_evidence(
     }
 }
 
+pub fn materialize_commission_source_spans(
+    blocks: &[ReportBlock],
+    utterances: &[UtteranceDraft],
+    hearings: &[HearingDraft],
+    interpellations: &[InterpellationDraft],
+    oral_written_items: &[OralWrittenItem],
+    answers: &[AnswerDraft],
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+    source_content_hash: &str,
+) -> Vec<SourceSpanDraft> {
+    let artifact = artifact_id(source_url, cache_path);
+    let agenda = build_agenda_timeline(blocks, MeetingKind::Commission, session_id, meeting_id);
+    let span_candidates = semantic_spans(
+        &artifact,
+        source_content_hash,
+        session_id,
+        meeting_id,
+        MeetingKind::Commission,
+        blocks,
+        &agenda,
+        utterances,
+        hearings,
+        interpellations,
+        oral_written_items,
+        answers,
+        source_url,
+        cache_path,
+    );
+    validate_source_spans(
+        span_candidates,
+        &artifact,
+        source_content_hash,
+        BLOCK_PARSER_VERSION,
+        blocks.len() as u32,
+    )
+    .rows
+}
+
 #[allow(clippy::too_many_arguments)]
 fn semantic_spans(
     artifact: &str,
     source_content_hash: &str,
     session_id: u32,
     meeting_id: u32,
+    meeting_kind: MeetingKind,
     blocks: &[ReportBlock],
     agenda: &[AgendaItem],
     utterances: &[UtteranceDraft],
@@ -216,7 +259,7 @@ fn semantic_spans(
         session_id,
         meeting_id,
         "Meeting",
-        &format!("plenary_{session_id}_{meeting_id}"),
+        &format!("{}_{session_id}_{meeting_id}", meeting_kind.as_str()),
         "meeting_scope",
         0,
         blocks.len() as u32,
@@ -241,7 +284,8 @@ fn semantic_spans(
         };
         let entity_id = if item.item_id.is_empty() {
             format!(
-                "{session_id}_plenary_{meeting_id}_agenda_{}",
+                "{session_id}_{}_{meeting_id}_agenda_{}",
+                meeting_kind.as_str(),
                 item.start_block
             )
         } else {
@@ -422,15 +466,17 @@ fn semantic_spans(
             ));
         }
     }
-    spans.extend(plenary_heading_entity_spans(
-        artifact,
-        source_content_hash,
-        session_id,
-        meeting_id,
-        blocks,
-        source_url,
-        cache_path,
-    ));
+    if meeting_kind == MeetingKind::Plenary {
+        spans.extend(plenary_heading_entity_spans(
+            artifact,
+            source_content_hash,
+            session_id,
+            meeting_id,
+            blocks,
+            source_url,
+            cache_path,
+        ));
+    }
     spans
 }
 

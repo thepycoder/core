@@ -5,12 +5,14 @@ use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
     AnswerDraft, HearingDraft, InterpellationDraft, MeetingKind, QuestionHeadingRole,
-    UtteranceDraft, classify_question_heading_bilingual, classify_question_heading_text,
-    extract_agenda_number, extract_proceedings_from_document, extract_utterances_from_document,
+    ReportBlockRow, SourceSpanDraft, UtteranceDraft, artifact_id, classify_question_heading_bilingual,
+    classify_question_heading_text, content_hash, extract_agenda_number,
+    extract_proceedings_from_document, extract_utterances_from_document,
     extract_written_oral_items, has_pending_question_text, is_non_question_proceeding_heading,
-    looks_like_fr_heading, oral_written_answer_drafts, parse_report_blocks, read_report_html,
-    write_answers_parquet, write_hearings_parquet, write_interpellations_parquet,
-    write_utterances_parquet,
+    looks_like_fr_heading, materialize_commission_source_spans, materialize_report_blocks,
+    oral_written_answer_drafts, parse_report_blocks, read_report_html, write_answers_parquet,
+    write_hearings_parquet, write_interpellations_parquet, write_report_blocks_parquet,
+    write_source_spans_parquet, write_utterances_parquet,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -114,6 +116,8 @@ struct MeetingOutput {
     interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
     answers: Vec<AnswerDraft>,
+    report_blocks: Vec<ReportBlockRow>,
+    source_spans: Vec<SourceSpanDraft>,
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +400,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
     let mut all_answers = Vec::new();
+    let mut all_report_blocks = Vec::new();
+    let mut all_source_spans = Vec::new();
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -425,6 +431,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
                 all_answers.extend(output.answers);
+                all_report_blocks.extend(output.report_blocks);
+                all_source_spans.extend(output.source_spans);
             }
             Err(err) => {
                 record_gap(
@@ -454,6 +462,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
     write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
     write_answers_parquet(&session_dir.join("answers.parquet"), &all_answers)?;
+
+    let derived_dir = data_dir().join(format!("derived/sessions/{session_id}/commission"));
+    std::fs::create_dir_all(&derived_dir)?;
+    write_report_blocks_parquet(
+        &derived_dir.join("report_blocks.parquet"),
+        &all_report_blocks,
+    )?;
+    write_source_spans_parquet(
+        &derived_dir.join("source_spans.parquet"),
+        &all_source_spans,
+    )?;
 
     let gap_rows: Vec<MeetingGap> = gaps.into_values().collect();
     write_gaps(&session_dir.join("meeting_gaps.parquet"), &gap_rows)?;
@@ -635,6 +654,28 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         &cache_path,
     );
 
+    let report_blocks = materialize_report_blocks(
+        &artifact_id(&url, &cache_path),
+        &content_hash(&content),
+        &blocks,
+        &url,
+        &cache_path,
+    );
+
+    let source_spans = materialize_commission_source_spans(
+        &blocks,
+        &utterances,
+        &hearings,
+        &interpellations,
+        &oral_written_items,
+        &answers,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+        &content_hash(&content),
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -653,6 +694,8 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         interpellations,
         utterances,
         answers,
+        report_blocks,
+        source_spans,
     })
 }
 

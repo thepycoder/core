@@ -84,8 +84,12 @@ def fetch_report_coverage(
     except duckdb.Error:
         blocks = []
 
-    span_filters = ["session_id = ?", "meeting_id = ?"]
-    span_params: list[Any] = [session_id, meeting_id]
+    span_filters = ["session_id = ?", "meeting_id = ?", "cache_path LIKE ?"]
+    span_params: list[Any] = [
+        session_id,
+        meeting_id,
+        f"%/meetings/{meeting_kind}/{session_id}-{meeting_id}.html",
+    ]
     if entity_types:
         placeholders = ", ".join(["?"] * len(entity_types))
         span_filters.append(f"entity_type IN ({placeholders})")

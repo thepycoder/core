@@ -142,11 +142,11 @@ def _create_diagnostic_fixture(conn):
         SELECT * FROM (VALUES
             ('valid-1', 'a1', 'hash-1', 57, 60, 'Vote', 'v1', 'title', 0, 2, 'extraction', 'title_nl', 0.9, 'votes', 'parser-v2', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'valid', ''),
             ('valid-2', 'a1', 'hash-1', 57, 60, 'Question', 'q1', 'discussion', 1, 3, 'extraction', 'text', 1.0, 'questions', 'parser-v2', 'questions-v2', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'valid', ''),
-            ('bad-range', 'a1', 'hash-1', 57, 60, 'Vote', 'v2', 'counts', 2, 2, 'extraction', 'yes,no', 1.0, 'votes', 'parser-v2', 'votes-v3', '', '', 'unresolved', 'invalid_half_open_range'),
-            ('out-of-range', 'a1', 'hash-1', 57, 60, 'Vote', 'v3', 'counts', 2, 5, 'extraction', 'yes,no', 1.0, 'votes', 'parser-v2', 'votes-v3', '', '', 'unresolved', 'out_of_bounds'),
-            ('wrong-artifact', 'other', 'hash-1', 57, 60, 'Vote', 'v4', 'counts', 0, 1, 'extraction', 'yes', 1.0, 'votes', 'parser-v2', 'votes-v3', '', '', 'valid', ''),
-            ('stale-hash', 'a1', 'old-hash', 57, 60, 'Vote', 'v5', 'counts', 0, 1, 'extraction', 'yes', 1.0, 'votes', 'parser-v2', 'votes-v3', '', '', 'valid', ''),
-            ('stale-parser', 'a1', 'hash-1', 57, 60, 'Vote', 'v6', 'counts', 1, 2, 'scope', 'yes', 1.0, 'votes', 'parser-v1', 'votes-v3', '', '', 'valid', '')
+            ('bad-range', 'a1', 'hash-1', 57, 60, 'Vote', 'v2', 'counts', 2, 2, 'extraction', 'yes,no', 1.0, 'votes', 'parser-v2', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'unresolved', 'invalid_half_open_range'),
+            ('out-of-range', 'a1', 'hash-1', 57, 60, 'Vote', 'v3', 'counts', 2, 5, 'extraction', 'yes,no', 1.0, 'votes', 'parser-v2', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'unresolved', 'out_of_bounds'),
+            ('wrong-artifact', 'other', 'hash-1', 57, 60, 'Vote', 'v4', 'counts', 0, 1, 'extraction', 'yes', 1.0, 'votes', 'parser-v2', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'valid', ''),
+            ('stale-hash', 'a1', 'old-hash', 57, 60, 'Vote', 'v5', 'counts', 0, 1, 'extraction', 'yes', 1.0, 'votes', 'parser-v2', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'valid', ''),
+            ('stale-parser', 'a1', 'hash-1', 57, 60, 'Vote', 'v6', 'counts', 1, 2, 'scope', 'yes', 1.0, 'votes', 'parser-v1', 'votes-v3', 'https://example.test/60', 'sessions/57/meetings/commission/57-60.html', 'valid', '')
         ) AS t(span_id, artifact_id, source_content_hash, session_id, meeting_id, entity_type, entity_id, span_role, block_start, block_end, coverage_kind, field_names, confidence, extractor, block_parser_version, extractor_version, source_url, cache_path, validation_status, unresolved_reason)
         """
     )
@@ -205,6 +205,38 @@ def test_missing_derived_data_differs_from_valid_zero_spans(conn):
     assert zero.derived_data_status == "available"
     assert zero.diagnostics[0].code == "zero_spans"
     assert zero.diagnostics[0].state == "valid"
+
+
+def test_report_spans_are_scoped_by_meeting_kind(conn):
+    conn.execute(
+        """
+        CREATE TABLE report_blocks AS
+        SELECT * FROM (VALUES
+            ('commission-artifact', 'hash-c', 0, 'p', 'commission text', '{}', '', '', 2, 'x', false, 'v1', 'e1', 'http://example.com/c', 'sessions/56/meetings/commission/56-15.html'),
+            ('plenary-artifact', 'hash-p', 0, 'p', 'plenary text', '{}', '', '', 2, 'x', false, 'v1', 'e1', 'http://example.com/p', 'sessions/56/meetings/plenary/56-15.html')
+        ) AS t(artifact_id, source_content_hash, block_index, block_type, text, structured_json, language, class_name, word_count, content_hash, has_oraspr, block_parser_version, extractor_version, source_url, cache_path)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE source_spans AS
+        SELECT * FROM (VALUES
+            ('c-span', 'commission-artifact', 'hash-c', 56, 15, 'Question', '56-commission-15-0', 'question_body', 0, 1, 'extraction', 'question_body_nl', 1.0, 'questions', 'v1', 'e1', 'http://example.com/c', 'sessions/56/meetings/commission/56-15.html', 'valid', ''),
+            ('p-span', 'plenary-artifact', 'hash-p', 56, 15, 'Vote', '56-15-v1', 'decision_title', 0, 1, 'extraction', 'title_nl', 1.0, 'votes', 'v1', 'e1', 'http://example.com/p', 'sessions/56/meetings/plenary/56-15.html', 'valid', '')
+        ) AS t(span_id, artifact_id, source_content_hash, session_id, meeting_id, entity_type, entity_id, span_role, block_start, block_end, coverage_kind, field_names, confidence, extractor, block_parser_version, extractor_version, source_url, cache_path, validation_status, unresolved_reason)
+        """
+    )
+
+    commission = fetch_report_coverage(conn, "15", session_id="56", meeting_kind="commission")
+    plenary = fetch_report_coverage(conn, "15", session_id="56", meeting_kind="plenary")
+
+    assert commission.coverage.valid_span_count == 1
+    assert commission.coverage.invalid_span_count == 0
+    assert commission.blocks[0].has_extraction is True
+    assert {diagnostic.code for diagnostic in commission.diagnostics} == set()
+
+    assert plenary.coverage.valid_span_count == 1
+    assert plenary.blocks[0].artifact_id == "plenary-artifact"
 
 
 def test_report_meeting_list_is_session_and_kind_aware(conn):

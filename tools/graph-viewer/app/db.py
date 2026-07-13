@@ -16,7 +16,7 @@ class ParquetSource:
     columns: list[tuple[str, str]]
 
 
-PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
+PARQUET_SOURCES: list[tuple[str, str | list[str], list[tuple[str, str]]]] = [
     (
         "nodes",
         "graph/nodes.parquet",
@@ -122,7 +122,10 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
     ),
     (
         "report_blocks",
-        "derived/sessions/56/plenary/report_blocks.parquet",
+        [
+            "derived/sessions/56/plenary/report_blocks.parquet",
+            "derived/sessions/56/commission/report_blocks.parquet",
+        ],
         [
             ("artifact_id", "VARCHAR"),
             ("source_content_hash", "VARCHAR"),
@@ -143,7 +146,10 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
     ),
     (
         "source_spans",
-        "derived/sessions/56/plenary/source_spans.parquet",
+        [
+            "derived/sessions/56/plenary/source_spans.parquet",
+            "derived/sessions/56/commission/source_spans.parquet",
+        ],
         [
             ("span_id", "VARCHAR"),
             ("artifact_id", "VARCHAR"),
@@ -421,54 +427,69 @@ class Database:
         conn = duckdb.connect(database=":memory:")
         db = cls(conn=conn, settings=settings)
 
-        for view_name, rel_path, columns in PARQUET_SOURCES:
-            path = settings.parquet_path(rel_path)
-            source = ParquetSource(view_name=view_name, path=path, columns=columns)
-            db.sources.append(source)
-            if path.exists():
-                escaped_path = path.as_posix().replace("'", "''")
-                physical_columns = {
-                    row[0]
-                    for row in conn.execute(
-                        f"DESCRIBE SELECT * FROM read_parquet('{escaped_path}')"
-                    ).fetchall()
-                }
-                projections = []
-                for name, typ in columns:
-                    source_name = name
-                    if (
-                        name == "source_artifact_id"
-                        and name not in physical_columns
-                        and "artifact_id" in physical_columns
-                    ):
-                        source_name = "artifact_id"
-                    if source_name in physical_columns:
-                        projections.append(
-                            f'TRY_CAST("{source_name}" AS {typ}) AS "{name}"'
-                        )
-                    else:
-                        projections.append(f'NULL::{typ} AS "{name}"')
-                        db.warnings.append(f"Missing column {view_name}.{name}: {path}")
+        for view_name, rel_paths, columns in PARQUET_SOURCES:
+            paths = [rel_paths] if isinstance(rel_paths, str) else rel_paths
+            resolved_paths = [settings.parquet_path(path) for path in paths]
+            for path in resolved_paths:
+                db.sources.append(
+                    ParquetSource(view_name=view_name, path=path, columns=columns)
+                )
+            existing_paths = [path for path in resolved_paths if path.exists()]
+            if existing_paths:
+                selects = [
+                    db._project_parquet_select(path, columns, view_name)
+                    for path in existing_paths
+                ]
                 conn.execute(
-                    f"CREATE OR REPLACE VIEW {view_name} AS "
-                    f"SELECT {', '.join(projections)} "
-                    f"FROM read_parquet('{escaped_path}')"
+                    f"CREATE OR REPLACE VIEW {view_name} AS {' UNION ALL '.join(selects)}"
                 )
             else:
                 cols = ", ".join(f'NULL::{typ} AS "{name}"' for name, typ in columns)
                 conn.execute(
                     f"CREATE OR REPLACE VIEW {view_name} AS SELECT {cols} WHERE false"
                 )
-                db.warnings.append(f"Missing parquet: {path}")
+                for path in resolved_paths:
+                    db.warnings.append(f"Missing parquet: {path}")
 
         return db
+
+    def _project_parquet_select(
+        self,
+        path: Path,
+        columns: list[tuple[str, str]],
+        view_name: str,
+    ) -> str:
+        escaped_path = path.as_posix().replace("'", "''")
+        physical_columns = {
+            row[0]
+            for row in self.conn.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{escaped_path}')"
+            ).fetchall()
+        }
+        projections = []
+        for name, typ in columns:
+            source_name = name
+            if (
+                name == "source_artifact_id"
+                and name not in physical_columns
+                and "artifact_id" in physical_columns
+            ):
+                source_name = "artifact_id"
+            if source_name in physical_columns:
+                projections.append(f'TRY_CAST("{source_name}" AS {typ}) AS "{name}"')
+            else:
+                projections.append(f'NULL::{typ} AS "{name}"')
+                self.warnings.append(f"Missing column {view_name}.{name}: {path}")
+        return (
+            f"SELECT {', '.join(projections)} FROM read_parquet('{escaped_path}')"
+        )
 
     def file_status(self) -> list[tuple[str, bool]]:
         return [(str(source.path), source.path.exists()) for source in self.sources]
 
     def has_view_data(self, view_name: str) -> bool:
-        source = next(s for s in self.sources if s.view_name == view_name)
-        if not source.path.exists():
+        sources = [s for s in self.sources if s.view_name == view_name]
+        if not any(source.path.exists() for source in sources):
             return False
         row = self.conn.execute(f"SELECT count(*) FROM {view_name}").fetchone()
         return bool(row and row[0] > 0)
