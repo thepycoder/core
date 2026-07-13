@@ -8,6 +8,9 @@
 </head>
 <body>
   <header>
+    <button id="sidebar-toggle" type="button" class="sidebar-toggle" aria-expanded="false" aria-controls="sidebar">
+      Search &amp; issues
+    </button>
     <h1>Graph Debug Explorer</h1>
     <nav class="header-nav">
       <a href="/reports">Report coverage</a>
@@ -15,7 +18,9 @@
     <div id="health-status" class="muted">Loading…</div>
   </header>
 
-  <main>
+  <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+  <main id="layout">
     <aside id="sidebar">
       <section>
         <h2>Search</h2>
@@ -44,6 +49,8 @@
         <ul id="issues-list"></ul>
       </section>
     </aside>
+
+    <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
     <section id="inspector-panel">
       <div id="breadcrumb-bar" class="hidden"></div>

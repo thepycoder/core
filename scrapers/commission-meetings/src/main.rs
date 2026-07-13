@@ -2,17 +2,13 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
-use crawl::utils::{clean_text, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
+use crawl::utils::{max_cached_meeting_id, relative_cache_path};
 use crawl::{
-    AnswerDraft, HearingDraft, InterpellationDraft, MeetingKind, QuestionHeadingRole,
-    ReportBlockRow, SourceSpanDraft, UtteranceDraft, artifact_id, classify_question_heading_bilingual,
-    classify_question_heading_text, content_hash, extract_agenda_number,
-    extract_proceedings_from_document, extract_utterances_from_document,
-    extract_written_oral_items, has_pending_question_text, is_non_question_proceeding_heading,
-    looks_like_fr_heading, materialize_commission_source_spans, materialize_report_blocks,
-    oral_written_answer_drafts, parse_report_blocks, read_report_html, write_answers_parquet,
-    write_hearings_parquet, write_interpellations_parquet, write_report_blocks_parquet,
-    write_source_spans_parquet, write_utterances_parquet,
+    AnswerDraft, HearingDraft, InterpellationDraft, MeetingKind, OralQuestionDraft, ReportBlockRow,
+    SourceSpanDraft, UtteranceDraft, content_hash, extract_questions_from_agenda,
+    parse_commission_meeting_report, read_report_html, write_answers_parquet, write_hearings_parquet,
+    write_interpellations_parquet, write_report_blocks_parquet, write_source_spans_parquet,
+    write_utterances_parquet,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -20,6 +16,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{Html, Selector};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -28,20 +25,10 @@ use std::sync::{Arc, OnceLock};
 use tokio::fs;
 
 /// REGEXES
-static QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
 static CHAIR_TITLES_REGEX: OnceLock<Regex> = OnceLock::new();
 static CHAIR_REGEX: OnceLock<Regex> = OnceLock::new();
-
-fn question_regex() -> &'static Regex {
-    // FIXME: Respondents like "de vice-eersteminister en minister van Werk, Economie en Landbouw"
-    //        are captured as-is; normalising them is left for a future pass.
-    // NOTE: Handles question IDs in the format of `(56002763C)`, `(nr. 6003263c)` and `(n° 6003263c)`
-    // NOTE: Handles both ” and " quotes (which is a mistake in meeting 157 question 8)
-    // NOTE: Handles missing questionee (which is a mistake in meeting 357 question 35)
-    QUESTION_REGEX.get_or_init(|| Regex::new(r#"(?m)(?:(?:Vraag van|Question de)\s)?([^\n]+?)(?:\s+(?:aan|à|au)\s+([^\n]+?))?(?:\s*\(.*?\))?\s*(?:over|sur)\s*["'“”](.+?)["'“”]\s*\(?(?:n[°ro]\.?\s*)?(\d{6,8}[A-Za-z])\)?"#).unwrap())
-}
 
 fn time_regex() -> &'static Regex {
     TIME_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})[.:](\d{2})\s*uur\b").unwrap())
@@ -65,7 +52,6 @@ fn chair_regex() -> &'static Regex {
 static SELECTOR_SPAN: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_SPAN_P: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_TABLE: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_H2_OR_P: OnceLock<Selector> = OnceLock::new();
 
 fn selector_span() -> &'static Selector {
     SELECTOR_SPAN.get_or_init(|| Selector::parse("span").unwrap())
@@ -75,9 +61,6 @@ fn selector_span_p() -> &'static Selector {
 }
 fn selector_table() -> &'static Selector {
     SELECTOR_TABLE.get_or_init(|| Selector::parse("table").unwrap())
-}
-fn selector_h2_or_p() -> &'static Selector {
-    SELECTOR_H2_OR_P.get_or_init(|| Selector::parse("h2, p").unwrap())
 }
 
 struct ScrapedMeeting {
@@ -155,13 +138,6 @@ fn discover_last_from_probes(
     }
 
     (last, missing)
-}
-
-struct QuestionData {
-    questioners: Vec<String>,
-    respondents: Vec<String>,
-    topics: Vec<String>,
-    internal_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -609,14 +585,29 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
     let chair = extract_chair_from_document(&document)?;
     let commission = extract_commission_from_document(&document)?;
 
-    let blocks = parse_report_blocks(&document);
+    let parsed = parse_commission_meeting_report(
+        &document,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+        &content_hash(&content),
+    );
 
-    let mut questions = extract_questions(&document, session_id, meeting_id, &url, &cache_path)?;
+    let mut questions: Vec<ScrapedQuestion> = extract_questions_from_agenda(
+        &parsed.agenda,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        &HashMap::new(),
+        &url,
+        &cache_path,
+    )?
+    .into_iter()
+    .map(scraped_question_from_draft)
+    .collect();
 
-    let oral_written_items =
-        extract_written_oral_items(&blocks, MeetingKind::Commission, session_id, meeting_id);
-
-    for item in &oral_written_items {
+    for item in &parsed.oral_written_items {
         if let Some(q) = questions
             .iter_mut()
             .find(|q| q.question_id == item.question_id)
@@ -626,55 +617,6 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
             q.treatment_mode = "oral_written".to_string();
         }
     }
-
-    let answers = oral_written_answer_drafts(
-        &oral_written_items,
-        MeetingKind::Commission,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
-
-    let utterances = extract_utterances_from_document(
-        &document,
-        MeetingKind::Commission,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
-
-    let (hearings, interpellations) = extract_proceedings_from_document(
-        &document,
-        MeetingKind::Commission,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
-
-    let report_blocks = materialize_report_blocks(
-        &artifact_id(&url, &cache_path),
-        &content_hash(&content),
-        &blocks,
-        &url,
-        &cache_path,
-    );
-
-    let source_spans = materialize_commission_source_spans(
-        &blocks,
-        &utterances,
-        &hearings,
-        &interpellations,
-        &oral_written_items,
-        &answers,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-        &content_hash(&content),
-    );
 
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
@@ -690,272 +632,31 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
             cache_path,
         },
         questions,
-        hearings,
-        interpellations,
-        utterances,
-        answers,
-        report_blocks,
-        source_spans,
+        hearings: parsed.hearings,
+        interpellations: parsed.interpellations,
+        utterances: parsed.utterances,
+        answers: parsed.answers,
+        report_blocks: parsed.report_block_rows,
+        source_spans: parsed.source_spans,
     })
 }
 
-fn extract_questions(
-    document: &Html,
-    session_id: u32,
-    meeting_id: u32,
-    source_url: &str,
-    cache_path: &str,
-) -> Result<Vec<ScrapedQuestion>, Box<dyn Error>> {
-    let mut questions = Vec::new();
-    let mut previous_nl = String::new();
-    let mut previous_fr = String::new();
-    let mut pending_nl_agenda: Option<String> = None;
-    let mut question_seq: i32 = 0;
-
-    // Commission reports always contain questions from the start; no section header needed.
-    let french_indicators = ["questions jointes", "question de"];
-    let dutch_indicators = ["samengevoegde vragen", "toegevoegde vragen", "vraag van"];
-
-    let flush = |seq: i32, nl: &str, fr: &str| -> Result<Option<ScrapedQuestion>, Box<dyn Error>> {
-        if nl.is_empty() && fr.is_empty() {
-            return Ok(None);
-        }
-        let data_nl = extract_question_data(nl)?;
-        let data_fr = extract_question_data(fr)?;
-        Ok(Some(ScrapedQuestion {
-            question_id: composite_scoped_id(session_id, "commission", meeting_id, seq),
-            session_id,
-            meeting_id,
-            questioners: data_nl.questioners.join(","),
-            respondents: data_nl.respondents.join(","),
-            topics_nl: data_nl.topics.join(";"),
-            topics_fr: data_fr.topics.join(";"),
-            internal_ids: data_nl.internal_ids.join(","),
-            question_body_nl: String::new(),
-            question_body_fr: String::new(),
-            treatment_mode: String::new(),
-            source_url: source_url.to_string(),
-            cache_path: cache_path.to_string(),
-        }))
-    };
-
-    for element in document.select(selector_h2_or_p()) {
-        let tag = element.value().name();
-
-        if tag == "h2" {
-            let mut found_nl: Option<String> = None;
-            let mut found_fr: Option<String> = None;
-
-            // Dutch spans — swap to FR if they look French.
-            if let Some(span) = element
-                .select(selector_span())
-                .filter(|s| matches!(s.value().attr("lang"), Some("NL") | Some("NL-BE")))
-                .last()
-            {
-                let text =
-                    clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                if french_indicators
-                    .iter()
-                    .any(|w| text.to_lowercase().contains(w))
-                {
-                    found_fr = Some(text);
-                } else {
-                    found_nl = Some(text);
-                }
-            }
-
-            // French spans — swap to NL if they look Dutch.
-            if let Some(span) = element
-                .select(selector_span())
-                .filter(|s| s.value().attr("lang") == Some("FR"))
-                .last()
-            {
-                let text =
-                    clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                if dutch_indicators
-                    .iter()
-                    .any(|w| text.to_lowercase().contains(w))
-                {
-                    found_nl = Some(text);
-                } else {
-                    found_fr = Some(text);
-                }
-            }
-
-            if found_nl.is_none() && found_fr.is_none() {
-                let full =
-                    clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                if !full.is_empty() {
-                    found_nl = Some(full);
-                }
-            }
-
-            let full_heading =
-                clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-            let heading_agenda = extract_agenda_number(&full_heading);
-
-            // Pair NL h2 with the following FR h2 for the same agenda item.
-            if let (Some(found_fr), Some(pending)) = (found_fr.as_ref(), pending_nl_agenda.as_ref())
-            {
-                if heading_agenda.as_deref() == Some(pending.as_str())
-                    || looks_like_fr_heading(found_fr)
-                {
-                    if previous_fr.is_empty() {
-                        previous_fr = found_fr.clone();
-                    }
-                    pending_nl_agenda = None;
-                    continue;
-                }
-            }
-
-            let is_non_question_proceeding = is_non_question_proceeding_heading(&full_heading);
-            if classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref())
-                == QuestionHeadingRole::Unrelated
-            {
-                let role = classify_question_heading_text(&full_heading);
-                if role != QuestionHeadingRole::Unrelated {
-                    if full_heading.to_lowercase().contains("question de")
-                        || full_heading.to_lowercase().contains("questions jointes")
-                    {
-                        found_fr = Some(full_heading);
-                    } else {
-                        found_nl = Some(full_heading);
-                    }
-                }
-            }
-
-            let heading_role =
-                classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref());
-
-            if heading_role == QuestionHeadingRole::Hearing || is_non_question_proceeding {
-                if has_pending_question_text(&previous_nl, &previous_fr) {
-                    if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
-                        questions.push(q);
-                        question_seq += 1;
-                    }
-                }
-                previous_nl.clear();
-                previous_fr.clear();
-                continue;
-            }
-
-            let is_group_start = matches!(heading_role, QuestionHeadingRole::GroupStart);
-            let is_subquestion = matches!(heading_role, QuestionHeadingRole::SubQuestion);
-            let is_single = matches!(heading_role, QuestionHeadingRole::Single);
-            let is_fr_group_header = matches!(heading_role, QuestionHeadingRole::FrGroupHeader);
-
-            if is_group_start || is_single {
-                if has_pending_question_text(&previous_nl, &previous_fr) {
-                    if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
-                        questions.push(q);
-                        question_seq += 1;
-                    }
-                    previous_nl.clear();
-                    previous_fr.clear();
-                }
-                if let Some(t) = found_nl {
-                    previous_nl = t;
-                    pending_nl_agenda = heading_agenda.clone();
-                }
-                if let Some(t) = found_fr {
-                    if previous_fr.is_empty() {
-                        previous_fr = t;
-                    }
-                    pending_nl_agenda = None;
-                }
-            } else if is_subquestion {
-                if let Some(t) = found_nl {
-                    previous_nl.push('\n');
-                    previous_nl.push_str(&t);
-                }
-                if let Some(t) = found_fr {
-                    previous_fr.push('\n');
-                    previous_fr.push_str(&t);
-                }
-            } else if is_fr_group_header {
-                if let Some(t) = found_fr.or(found_nl) {
-                    if previous_fr.is_empty() {
-                        previous_fr = t;
-                    }
-                }
-            }
-        }
-
-        if tag == "p" {
-            let _text = element
-                .text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_string();
-        }
+fn scraped_question_from_draft(draft: OralQuestionDraft) -> ScrapedQuestion {
+    ScrapedQuestion {
+        question_id: draft.question_id,
+        session_id: draft.session_id,
+        meeting_id: draft.meeting_id,
+        questioners: draft.questioners,
+        respondents: draft.respondents,
+        topics_nl: draft.topics_nl,
+        topics_fr: draft.topics_fr,
+        internal_ids: draft.internal_ids,
+        question_body_nl: String::new(),
+        question_body_fr: String::new(),
+        treatment_mode: String::new(),
+        source_url: draft.source_url,
+        cache_path: draft.cache_path,
     }
-
-    // Flush the last question.
-    if has_pending_question_text(&previous_nl, &previous_fr) {
-        if let Some(q) = flush(question_seq, &previous_nl, &previous_fr)? {
-            questions.push(q);
-        }
-    }
-
-    Ok(questions)
-}
-
-fn extract_question_data(question_text: &str) -> Result<QuestionData, Box<dyn Error>> {
-    let mut questioners = Vec::new();
-    let mut topics = Vec::new();
-    let mut respondents = Vec::new();
-    let mut internal_ids = Vec::new();
-
-    for capture in question_regex().captures_iter(question_text) {
-        let Some(questioner) = normalize_questioner_name(&capture[1]) else {
-            continue;
-        };
-        let respondent = capture
-            .get(2)
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_else(|| "Onbekend".to_string());
-        let topic = capture[3].trim().to_string();
-        let internal_id = format!("Q{}", capture[4].trim());
-
-        questioners.push(questioner);
-        if !respondents.contains(&respondent) {
-            respondents.push(respondent);
-        }
-        internal_ids.push(internal_id);
-        topics.push(topic);
-    }
-
-    Ok(QuestionData {
-        questioners,
-        respondents,
-        topics,
-        internal_ids,
-    })
-}
-
-/// Strip scrape artefacts from a captured questioner field.
-fn normalize_questioner_name(raw: &str) -> Option<String> {
-    let mut name = raw.trim().trim_start_matches('-').trim().to_string();
-    if name.is_empty() {
-        return None;
-    }
-
-    static QUESTION_PREFIX: OnceLock<Regex> = OnceLock::new();
-    let prefix =
-        QUESTION_PREFIX.get_or_init(|| Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap());
-    name = prefix.replace(&name, "").trim().to_string();
-    if name.is_empty() {
-        return None;
-    }
-
-    name = name.replace("- ", "").replace("de heer ", "");
-    name = name.trim().trim_end_matches('-').trim().to_string();
-    if name.is_empty() {
-        return None;
-    }
-
-    Some(name)
 }
 
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
@@ -1118,29 +819,5 @@ mod tests {
         let (last, missing) = discover_last_from_probes(66, 2, exists);
         assert_eq!(last, 68);
         assert_eq!(missing, vec![67, 69, 70]);
-    }
-
-    #[test]
-    fn normalize_questioner_strips_subquestion_header() {
-        assert_eq!(
-            normalize_questioner_name("-Vraag van Xavier Dubois"),
-            Some("Xavier Dubois".to_string())
-        );
-        assert_eq!(
-            normalize_questioner_name("-Natalie Eggermont"),
-            Some("Natalie Eggermont".to_string())
-        );
-        assert_eq!(
-            normalize_questioner_name("Question de François De Smet"),
-            Some("François De Smet".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_question_data_parses_merged_subquestion_block() {
-        let text = "-Vraag van Xavier Dubois aan Bernard Quintin (Veiligheid) over \"test topic\" (56001234C)";
-        let data = extract_question_data(text).unwrap();
-        assert_eq!(data.questioners, vec!["Xavier Dubois".to_string()]);
-        assert_eq!(data.respondents, vec!["Bernard Quintin".to_string()]);
     }
 }

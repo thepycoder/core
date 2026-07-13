@@ -42,6 +42,13 @@ fn heading_body_after_agenda(text: &str) -> String {
 }
 
 pub fn is_hearing_text(text: &str) -> bool {
+    if is_subquestion_text(text)
+        || is_single_text(text)
+        || is_group_start_text(text)
+        || is_fr_group_header_text(text)
+    {
+        return false;
+    }
     let lower = text.to_lowercase();
     lower.contains("hoorzitting") || lower.contains("audition")
 }
@@ -68,9 +75,6 @@ pub fn is_fr_group_header_text(text: &str) -> bool {
 }
 
 pub fn classify_question_heading_text(text: &str) -> QuestionHeadingRole {
-    if is_hearing_text(text) {
-        return QuestionHeadingRole::Hearing;
-    }
     if is_subquestion_text(text) {
         return QuestionHeadingRole::SubQuestion;
     }
@@ -82,6 +86,9 @@ pub fn classify_question_heading_text(text: &str) -> QuestionHeadingRole {
     }
     if is_fr_group_header_text(text) {
         return QuestionHeadingRole::FrGroupHeader;
+    }
+    if is_hearing_text(text) {
+        return QuestionHeadingRole::Hearing;
     }
     QuestionHeadingRole::Unrelated
 }
@@ -140,6 +147,16 @@ mod tests {
         assert_eq!(
             classify_question_heading_text("01 Questions jointes de"),
             QuestionHeadingRole::FrGroupHeader
+        );
+    }
+
+    #[test]
+    fn subquestion_about_hearing_followup_stays_subquestion() {
+        assert_eq!(
+            classify_question_heading_text(
+                "- Michael Freilich aan minister over \"De opvolging van de hoorzitting met Proximus\" (56001293C)"
+            ),
+            QuestionHeadingRole::SubQuestion
         );
     }
 

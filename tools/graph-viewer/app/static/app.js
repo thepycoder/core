@@ -1486,6 +1486,7 @@ async function initFromUrl() {
 }
 
 async function init() {
+  initSidebarLayout();
   try {
     await loadHealth();
     await loadIssues();
@@ -1499,6 +1500,130 @@ async function init() {
   } catch (err) {
     document.getElementById("health-status").textContent = `Error: ${err.message}`;
   }
+}
+
+const SIDEBAR_WIDTH_KEY = "graph-viewer-sidebar-width";
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 520;
+const SIDEBAR_MOBILE_BREAKPOINT = 900;
+
+function clampSidebarWidth(width) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+}
+
+function setSidebarWidth(width) {
+  const layout = document.getElementById("layout");
+  if (!layout) return;
+  const clamped = clampSidebarWidth(width);
+  layout.style.setProperty("--sidebar-width", `${clamped}px`);
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function isMobileSidebarLayout() {
+  return window.matchMedia(`(max-width: ${SIDEBAR_MOBILE_BREAKPOINT}px)`).matches;
+}
+
+function setSidebarOpen(open) {
+  const layout = document.getElementById("layout");
+  const toggle = document.getElementById("sidebar-toggle");
+  const backdrop = document.getElementById("sidebar-backdrop");
+  if (!layout || !toggle) return;
+  layout.classList.toggle("sidebar-open", open);
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  toggle.textContent = open ? "Close panel" : "Search & issues";
+  if (backdrop) {
+    backdrop.setAttribute("aria-hidden", open ? "false" : "true");
+  }
+}
+
+function initSidebarLayout() {
+  const layout = document.getElementById("layout");
+  const resizer = document.getElementById("sidebar-resizer");
+  const toggle = document.getElementById("sidebar-toggle");
+  const backdrop = document.getElementById("sidebar-backdrop");
+  if (!layout) return;
+
+  try {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(saved) && saved > 0) {
+      setSidebarWidth(saved);
+    }
+  } catch {
+    /* ignore storage errors */
+  }
+
+  let resizeStartX = 0;
+  let resizeStartWidth = 0;
+
+  function stopResize() {
+    document.removeEventListener("mousemove", onResizeMove);
+    document.removeEventListener("mouseup", stopResize);
+    document.removeEventListener("touchmove", onResizeMove);
+    document.removeEventListener("touchend", stopResize);
+    document.body.classList.remove("sidebar-resizing");
+  }
+
+  function onResizeMove(event) {
+    const point = event.touches?.[0] ?? event;
+    const delta = point.clientX - resizeStartX;
+    setSidebarWidth(resizeStartWidth + delta);
+  }
+
+  function startResize(event) {
+    if (isMobileSidebarLayout()) return;
+    event.preventDefault();
+    const sidebar = document.getElementById("sidebar");
+    resizeStartX = event.touches?.[0]?.clientX ?? event.clientX;
+    resizeStartWidth = sidebar?.getBoundingClientRect().width ?? SIDEBAR_MIN_WIDTH;
+    document.body.classList.add("sidebar-resizing");
+    document.addEventListener("mousemove", onResizeMove);
+    document.addEventListener("mouseup", stopResize);
+    document.addEventListener("touchmove", onResizeMove, { passive: false });
+    document.addEventListener("touchend", stopResize);
+  }
+
+  resizer?.addEventListener("mousedown", startResize);
+  resizer?.addEventListener("touchstart", startResize, { passive: false });
+  resizer?.addEventListener("keydown", (event) => {
+    if (isMobileSidebarLayout()) return;
+    const sidebar = document.getElementById("sidebar");
+    const current = sidebar?.getBoundingClientRect().width ?? SIDEBAR_MIN_WIDTH;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setSidebarWidth(current - 16);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setSidebarWidth(current + 16);
+    }
+  });
+
+  toggle?.addEventListener("click", () => {
+    setSidebarOpen(!layout.classList.contains("sidebar-open"));
+  });
+
+  backdrop?.addEventListener("click", () => setSidebarOpen(false));
+
+  window.matchMedia(`(max-width: ${SIDEBAR_MOBILE_BREAKPOINT}px)`).addEventListener("change", (event) => {
+    if (!event.matches) {
+      setSidebarOpen(false);
+    }
+  });
+
+  document.getElementById("search-results")?.addEventListener("click", (event) => {
+    if (isMobileSidebarLayout() && event.target.closest("li")) {
+      setSidebarOpen(false);
+    }
+  });
+
+  document.getElementById("issues-list")?.addEventListener("click", (event) => {
+    if (isMobileSidebarLayout() && event.target.closest(".sample, .issue-item")) {
+      setSidebarOpen(false);
+    }
+  });
 }
 
 init();

@@ -659,6 +659,44 @@ mod tests {
     }
 
     #[test]
+    fn commission_fixture_58_emits_grouped_question_at_end() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/commission/56-58.html");
+        if !path.exists() {
+            return;
+        }
+        let html = read_report_html(&path).unwrap();
+        let document = Html::parse_document(&html);
+        let blocks = parse_report_blocks(&document);
+        let items = build_agenda_timeline(&blocks, MeetingKind::Commission, 56, 58);
+        let questions: Vec<_> = items
+            .iter()
+            .filter(|i| i.item_kind == ItemKind::Question)
+            .collect();
+        let all_ids: Vec<_> = questions
+            .iter()
+            .flat_map(|q| q.internal_ids.iter())
+            .map(String::as_str)
+            .collect();
+        assert!(
+            all_ids.iter().any(|id| *id == "Q56001293C"),
+            "expected grouped Proximus question ids, got {:?} from {:?}",
+            all_ids,
+            questions
+                .iter()
+                .map(|q| {
+                    (
+                        q.item_id.as_str(),
+                        q.internal_ids.clone(),
+                        q.title_nl.as_str(),
+                        q.title_fr.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn commission_fixture_question_item_ids_match_scraper_seq() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cache/sessions/56/meetings/commission/56-105.html");

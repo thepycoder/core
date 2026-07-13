@@ -8,6 +8,7 @@ pub mod answer_io;
 pub mod artifact_id;
 pub mod meeting_parse;
 pub mod meeting_report;
+pub mod oral_questions;
 pub mod proceeding_entities;
 pub mod proceeding_io;
 pub mod qa_coverage;
@@ -40,7 +41,11 @@ pub use artifact_id::{
     content_hash, content_hash_bytes,
 };
 pub use meeting_parse::{
-    MeetingParseOutput, materialize_commission_source_spans, parse_plenary_meeting_report,
+    MeetingParseOutput, materialize_commission_source_spans, parse_commission_meeting_report,
+    parse_plenary_meeting_report,
+};
+pub use oral_questions::{
+    OralQuestionDraft, extract_questions_from_agenda, normalize_questioner_name,
 };
 pub use meeting_report::{
     extract_utterances_from_blocks, extract_utterances_from_cache, extract_utterances_from_document,

@@ -9,9 +9,15 @@
   --error: #f85149;
   --warning: #d29922;
   --info: #79c0ff;
+  --sidebar-width: 300px;
+  --header-height: 52px;
 }
 
 * { box-sizing: border-box; }
+
+html {
+  overflow-x: hidden;
+}
 
 body {
   margin: 0;
@@ -19,6 +25,12 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body.sidebar-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 header {
@@ -28,6 +40,16 @@ header {
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  flex-wrap: wrap;
+}
+
+.sidebar-toggle {
+  display: none;
+  width: auto;
+  margin: 0;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
 }
 
 header h1 {
@@ -50,22 +72,93 @@ header h1 {
 
 main {
   display: grid;
-  grid-template-columns: 300px 1fr;
-  height: calc(100vh - 52px);
+  grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr);
+  height: calc(100vh - var(--header-height));
+  min-width: 0;
+  overflow: hidden;
 }
 
 #sidebar {
-  overflow: auto;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.sidebar-resizer {
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  touch-action: none;
+}
+
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0 -2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body.sidebar-resizing .sidebar-resizer::after {
+  background: rgba(88, 166, 255, 0.35);
+}
+
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: var(--header-height) 0 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 9;
 }
 
 #inspector-panel {
-  overflow: auto;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
 
-section { padding: 0.75rem; border-bottom: 1px solid var(--border); }
+@media (max-width: 900px) {
+  .sidebar-toggle {
+    display: inline-block;
+  }
+
+  main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #sidebar {
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    bottom: 0;
+    width: min(var(--sidebar-width), min(100vw, 22rem));
+    max-width: 100%;
+    z-index: 10;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  main.sidebar-open #sidebar {
+    transform: translateX(0);
+  }
+
+  main.sidebar-open .sidebar-backdrop {
+    display: block;
+  }
+
+  .sidebar-resizer {
+    display: none;
+  }
+}
+
+section { padding: 0.75rem; border-bottom: 1px solid var(--border); min-width: 0; }
 
 h2 {
   margin: 0 0 0.5rem;
@@ -86,6 +179,8 @@ h2 {
 #search-type {
   display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   margin-bottom: 0.35rem;
 }
 
@@ -118,6 +213,8 @@ ul {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   font-size: 0.85rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #search-results li:hover,
@@ -128,8 +225,8 @@ ul {
   padding-left: 0.5rem;
 }
 
-.issue-item { margin-bottom: 0.75rem; }
-.issue-count { font-weight: 600; }
+.issue-item { margin-bottom: 0.75rem; overflow-wrap: anywhere; word-break: break-word; }
+.issue-count { font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }
 .severity-error { color: var(--error); }
 .severity-warning { color: var(--warning); }
 .severity-info { color: var(--info); }
@@ -140,6 +237,8 @@ ul {
   padding-left: 0.5rem;
   cursor: pointer;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .sample-actionable {
@@ -202,6 +301,9 @@ ul {
   font-size: 0.9rem;
   line-height: 1.5;
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .entity-header {
@@ -286,12 +388,14 @@ ul {
   align-items: flex-start;
   padding: 0.45rem 0;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .link-row:last-child { border-bottom: none; }
 
 .link-drill {
   flex: 1;
+  min-width: 0;
   text-align: left;
   margin: 0;
   padding: 0.35rem 0.5rem;

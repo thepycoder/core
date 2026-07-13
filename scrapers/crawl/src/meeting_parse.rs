@@ -129,6 +129,88 @@ pub fn parse_plenary_meeting_report(
     }
 }
 
+pub fn parse_commission_meeting_report(
+    document: &Html,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+    source_content_hash: &str,
+) -> MeetingParseOutput {
+    let blocks = parse_report_blocks(document);
+    let artifact = artifact_id(source_url, cache_path);
+    let agenda = build_agenda_timeline(&blocks, MeetingKind::Commission, session_id, meeting_id);
+    let utterances = extract_utterances_from_blocks(
+        &blocks,
+        &agenda,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        source_url,
+        cache_path,
+    );
+    let (hearings, interpellations) = extract_proceedings_from_agenda(
+        &agenda,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        source_url,
+        cache_path,
+    );
+    let oral_written_items =
+        extract_written_oral_items(&blocks, MeetingKind::Commission, session_id, meeting_id);
+    let answers = oral_written_answer_drafts(
+        &oral_written_items,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        source_url,
+        cache_path,
+    );
+    let report_block_rows = materialize_report_blocks(
+        &artifact,
+        source_content_hash,
+        &blocks,
+        source_url,
+        cache_path,
+    );
+    let span_candidates = semantic_spans(
+        &artifact,
+        source_content_hash,
+        session_id,
+        meeting_id,
+        MeetingKind::Commission,
+        &blocks,
+        &agenda,
+        &utterances,
+        &hearings,
+        &interpellations,
+        &oral_written_items,
+        &answers,
+        source_url,
+        cache_path,
+    );
+    let validated = validate_source_spans(
+        span_candidates,
+        &artifact,
+        source_content_hash,
+        BLOCK_PARSER_VERSION,
+        blocks.len() as u32,
+    );
+    MeetingParseOutput {
+        blocks,
+        agenda,
+        utterances,
+        hearings,
+        interpellations,
+        oral_written_items,
+        answers,
+        votes: VoteAssemblyOutput::default(),
+        report_block_rows,
+        source_spans: validated.rows,
+    }
+}
+
 fn assembly_spans(
     artifact: &str,
     source_content_hash: &str,
@@ -197,6 +279,7 @@ fn span_from_evidence(
 
 pub fn materialize_commission_source_spans(
     blocks: &[ReportBlock],
+    agenda: &[AgendaItem],
     utterances: &[UtteranceDraft],
     hearings: &[HearingDraft],
     interpellations: &[InterpellationDraft],
@@ -209,7 +292,6 @@ pub fn materialize_commission_source_spans(
     source_content_hash: &str,
 ) -> Vec<SourceSpanDraft> {
     let artifact = artifact_id(source_url, cache_path);
-    let agenda = build_agenda_timeline(blocks, MeetingKind::Commission, session_id, meeting_id);
     let span_candidates = semantic_spans(
         &artifact,
         source_content_hash,
@@ -217,7 +299,7 @@ pub fn materialize_commission_source_spans(
         meeting_id,
         MeetingKind::Commission,
         blocks,
-        &agenda,
+        agenda,
         utterances,
         hearings,
         interpellations,
