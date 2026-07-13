@@ -1,8 +1,8 @@
 # Scrape all sources, rebuild identity, normalize edges, and write graph Parquet.
 update: scrape-sessions scrape-commissions scrape-members scrape-plenary-meetings scrape-commission-meetings scrape-qrva scrape-dossiers scrape-lobby scrape-remunerations build-identity normalize-edges enrich-external-persons build-graph qa
 
-# Rebuild staging + graph from existing scraper cache only (no network fetches).
-reparse: reparse-scrapers build-identity normalize-edges build-graph qa
+# Rebuild from cached scraper data, then enrich external actors via Mistral.
+reparse: reparse-scrapers build-identity normalize-edges enrich-external-persons build-graph qa
 
 reparse-scrapers:
     #!/usr/bin/env bash

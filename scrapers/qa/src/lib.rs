@@ -36,8 +36,6 @@ pub const SESSION_ID: &str = "56";
 pub struct QaRunOptions {
     pub strict: bool,
     pub update_baseline: bool,
-    pub tier_filter: Option<String>,
-    pub check_filter: Option<String>,
 }
 
 pub struct QaRunResult {
@@ -82,13 +80,6 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(written::run_written_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
-
-    if let Some(tier) = &opts.tier_filter {
-        details.retain(|d| d.check_id.starts_with(tier));
-    }
-    if let Some(check) = &opts.check_filter {
-        details.retain(|d| d.check_id == *check);
-    }
 
     let summaries = aggregate_details(&details)?;
 

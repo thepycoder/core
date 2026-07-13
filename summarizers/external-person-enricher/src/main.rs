@@ -19,11 +19,13 @@ use std::sync::Arc;
 
 const MODEL: &str = "mistral-large-latest";
 const AGENT_NAME: &str = "partijgedrag-external-person-enricher";
+const ENRICHMENT_PROMPT_VERSION: &str = "external-actor-v2";
 const SAVE_EVERY: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Default)]
 struct BioJson {
     identified_as: String,
+    classification: String,
     role: String,
     affiliation: String,
     holder_name: String,
@@ -42,6 +44,8 @@ impl<'de> Deserialize<'de> for BioJson {
             #[serde(default)]
             identified_as: Option<String>,
             #[serde(default)]
+            classification: Option<String>,
+            #[serde(default)]
             role: Option<String>,
             #[serde(default)]
             affiliation: Option<String>,
@@ -58,6 +62,7 @@ impl<'de> Deserialize<'de> for BioJson {
         let raw = Raw::deserialize(deserializer)?;
         Ok(BioJson {
             identified_as: raw.identified_as.unwrap_or_default(),
+            classification: raw.classification.unwrap_or_default(),
             role: raw.role.unwrap_or_default(),
             affiliation: raw.affiliation.unwrap_or_default(),
             holder_name: raw.holder_name.unwrap_or_default(),
@@ -76,6 +81,10 @@ struct PersonRow {
     external_person_id: String,
     display_name: String,
     kind: String,
+    source: String,
+    first_seen_bucket: String,
+    source_url: String,
+    cache_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +130,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let persons = load_persons(&persons_path)?;
+    let mut persons = load_persons(&persons_path)?;
     let contexts = load_contexts(&contexts_path)?;
     let mut by_person: HashMap<String, Vec<ContextRow>> = HashMap::new();
     for ctx in contexts {
@@ -159,13 +168,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    for person in &persons {
+    for person in &mut persons {
         let ctxs = by_person.get(&person.external_person_id);
         let bundle = build_context_bundle(person, ctxs);
-        let input_hash = hash_text(&bundle);
-        if cache.values().any(|c| {
-            c.external_person_id == person.external_person_id && c.input_hash == input_hash
-        }) {
+        let input_hash = hash_text(&format!("{ENRICHMENT_PROMPT_VERSION}\n{bundle}"));
+        let cache_key = format!("{}:{input_hash}", person.external_person_id);
+        if let Some(cached) = cache.get(&cache_key) {
+            apply_enriched_classification(person, &parse_bio_response(&cached.bio_json));
             continue;
         }
 
@@ -216,7 +225,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
 
         cache.insert(
-            format!("{}:{}", person.external_person_id, input_hash),
+            cache_key,
             CachedBio {
                 external_person_id: person.external_person_id.clone(),
                 input_hash: input_hash.clone(),
@@ -227,6 +236,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 created_at: Utc::now().to_rfc3339(),
             },
         );
+        apply_enriched_classification(person, &bio_json);
 
         processed += 1;
         eprintln!(
@@ -240,6 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     save_bios(&output_path, &cache)?;
+    save_persons(&persons_path, &persons)?;
     eprintln!("[enricher] wrote {} bios ({} new)", cache.len(), processed);
     Ok(())
 }
@@ -250,9 +261,12 @@ Volksvertegenwoordigers). Je identificeert personen en rollen die in parlementai
 voorkomen maar geen Kamerlid zijn.\n\n\
 Gebruik web_search wanneer je actuele of externe informatie nodig hebt (minister, voorzitter, \
 expert, institutionele auteur).\n\n\
+Classificeer personen op de datum in de broncontext. Gebruik een huidige functie niet als \
+vervanging voor de historische rol op die vergaderdatum.\n\n\
 Antwoord ALLEEN met geldig JSON, geen markdown fences, met EXACT deze velden:\n\
 {\n  \
 \"identified_as\": \"echte naam of org-label\",\n  \
+\"classification\": \"minister|state_secretary|expert|other\",\n  \
 \"role\": \"minister van … / voorzitter / griffier / expert / …\",\n  \
 \"affiliation\": \"federale regering / Kamer / Senaat / …\",\n  \
 \"holder_name\": \"alleen voor procedurele rollen zoals Voorzitter: wie was het op dat moment; lege string als niet van toepassing\",\n  \
@@ -261,6 +275,18 @@ Antwoord ALLEEN met geldig JSON, geen markdown fences, met EXACT deze velden:\n\
 \"evidence_urls\": [\"url1\", \"url2\"]\n\
 }\n\n\
 Gebruik lege strings in plaats van null. Wees voorzichtig bij lage confidence."
+}
+
+fn apply_enriched_classification(person: &mut PersonRow, bio: &BioJson) {
+    if !person.external_person_id.starts_with("ext:person:") {
+        return;
+    }
+    match bio.classification.trim().to_lowercase().as_str() {
+        "minister" | "state_secretary" | "expert" | "other" => {
+            person.kind = bio.classification.trim().to_lowercase();
+        }
+        _ => {}
+    }
 }
 
 fn user_prompt(person: &PersonRow, bundle: &str, search_hints: &[String]) -> String {
@@ -379,6 +405,35 @@ mod tests {
         assert_eq!(bio.holder_name, "");
         assert_eq!(bio.confidence, "high");
     }
+
+    #[test]
+    fn applies_only_known_person_classifications() {
+        let mut person = PersonRow {
+            external_person_id: "ext:person:example".to_string(),
+            display_name: "Example".to_string(),
+            kind: "other".to_string(),
+            source: "bootstrap".to_string(),
+            first_seen_bucket: "speakers".to_string(),
+            source_url: String::new(),
+            cache_path: String::new(),
+        };
+        apply_enriched_classification(
+            &mut person,
+            &BioJson {
+                classification: "expert".to_string(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(person.kind, "expert");
+        apply_enriched_classification(
+            &mut person,
+            &BioJson {
+                classification: "ministerial".to_string(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(person.kind, "expert");
+    }
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -398,15 +453,82 @@ fn load_persons(path: &Path) -> Result<Vec<PersonRow>, Box<dyn Error>> {
         let ids = col_str(&batch, "external_person_id");
         let names = col_str(&batch, "display_name");
         let kinds = col_str(&batch, "kind");
+        let sources = col_str(&batch, "source");
+        let buckets = col_str(&batch, "first_seen_bucket");
+        let source_urls = col_str(&batch, "source_url");
+        let cache_paths = col_str(&batch, "cache_path");
         for i in 0..batch.num_rows() {
             out.push(PersonRow {
                 external_person_id: ids.value(i).to_string(),
                 display_name: names.value(i).to_string(),
                 kind: kinds.value(i).to_string(),
+                source: sources.value(i).to_string(),
+                first_seen_bucket: buckets.value(i).to_string(),
+                source_url: source_urls.value(i).to_string(),
+                cache_path: cache_paths.value(i).to_string(),
             });
         }
     }
     Ok(out)
+}
+
+fn save_persons(path: &Path, persons: &[PersonRow]) -> Result<(), Box<dyn Error>> {
+    let schema = Schema::new(vec![
+        Field::new("external_person_id", DataType::Utf8, false),
+        Field::new("display_name", DataType::Utf8, false),
+        Field::new("kind", DataType::Utf8, false),
+        Field::new("source", DataType::Utf8, false),
+        Field::new("first_seen_bucket", DataType::Utf8, false),
+        Field::new("source_url", DataType::Utf8, false),
+        Field::new("cache_path", DataType::Utf8, false),
+    ]);
+    let cols: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.external_person_id.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.display_name.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons.iter().map(|p| p.kind.as_str()).collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.source.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.first_seen_bucket.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.source_url.as_str())
+                .collect::<Vec<_>>(),
+        )),
+        Arc::new(StringArray::from(
+            persons
+                .iter()
+                .map(|p| p.cache_path.as_str())
+                .collect::<Vec<_>>(),
+        )),
+    ];
+    let batch = RecordBatch::try_new(Arc::new(schema), cols)?;
+    let file = File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
 }
 
 fn load_contexts(path: &Path) -> Result<Vec<ContextRow>, Box<dyn Error>> {

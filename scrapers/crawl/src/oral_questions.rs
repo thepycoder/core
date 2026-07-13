@@ -30,6 +30,7 @@ struct QuestionData {
 static PLENARY_QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static COMMISSION_QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static QUESTION_PREFIX: OnceLock<Regex> = OnceLock::new();
+static AGENDA_PREFIX: OnceLock<Regex> = OnceLock::new();
 
 fn plenary_question_regex() -> &'static Regex {
     // NOTE: Handles question IDs in the format of `(56001442P)`
@@ -54,8 +55,11 @@ fn commission_question_regex() -> &'static Regex {
 }
 
 fn question_prefix_regex() -> &'static Regex {
-    QUESTION_PREFIX
-        .get_or_init(|| Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap())
+    QUESTION_PREFIX.get_or_init(|| Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap())
+}
+
+fn agenda_prefix_regex() -> &'static Regex {
+    AGENDA_PREFIX.get_or_init(|| Regex::new(r"^\d{2}\s+").unwrap())
 }
 
 /// Strip scrape artefacts from a captured questioner field (commission sub-question lines).
@@ -65,6 +69,7 @@ pub fn normalize_questioner_name(raw: &str) -> Option<String> {
         return None;
     }
 
+    name = agenda_prefix_regex().replace(&name, "").trim().to_string();
     name = question_prefix_regex()
         .replace(&name, "")
         .trim()
@@ -131,7 +136,9 @@ fn extract_question_data(
     match meeting_kind {
         MeetingKind::Plenary => {
             for capture in plenary_question_regex().captures_iter(question_text) {
-                let questioner_raw = capture[1].trim().replace("- ", "");
+                let Some(questioner_raw) = normalize_questioner_name(&capture[1]) else {
+                    continue;
+                };
                 let questioner = typo_map
                     .get(&questioner_raw)
                     .cloned()
@@ -204,6 +211,17 @@ mod tests {
             normalize_questioner_name("Question de François De Smet"),
             Some("François De Smet".to_string())
         );
+        assert_eq!(
+            normalize_questioner_name("03 Question de Michel De Maegd"),
+            Some("Michel De Maegd".to_string())
+        );
+    }
+
+    #[test]
+    fn plenary_questioner_strips_agenda_number_and_heading() {
+        let text = "03 Question de Michel De Maegd à Alexander De Croo (test) over test";
+        let data = extract_question_data(MeetingKind::Plenary, &HashMap::new(), text).unwrap();
+        assert_eq!(data.questioners, vec!["Michel De Maegd".to_string()]);
     }
 
     #[test]
@@ -322,14 +340,7 @@ mod tests {
         }
         let html = read_report_html(&path).unwrap();
         let document = Html::parse_document(&html);
-        let parsed = parse_commission_meeting_report(
-            &document,
-            56,
-            6,
-            "url",
-            "cache",
-            "hash",
-        );
+        let parsed = parse_commission_meeting_report(&document, 56, 6, "url", "cache", "hash");
         let questions = extract_questions_from_agenda(
             &parsed.agenda,
             MeetingKind::Commission,

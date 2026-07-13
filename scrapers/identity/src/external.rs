@@ -187,18 +187,12 @@ pub fn department_external_id(deptnum: &str) -> String {
 
 pub fn classify_named_external(name: &str, bucket: &str) -> ExternalKind {
     let lower = name.trim().to_lowercase();
-    if bucket == "respondents" || bucket == "speakers" {
-        if lower.contains("staatssecretaris") || lower.contains("state secretary") {
-            return ExternalKind::StateSecretary;
-        }
-        return ExternalKind::Minister;
+    if lower.contains("staatssecretaris") || lower.contains("state secretary") {
+        return ExternalKind::StateSecretary;
     }
-    if bucket == "authors" {
-        return ExternalKind::Expert;
-    }
-    if bucket == "commission_members" {
-        return ExternalKind::Expert;
-    }
+    let _ = bucket;
+    // Name-only parsing cannot establish a political mandate or professional role.
+    // The web-search enricher upgrades this conservative bootstrap classification.
     ExternalKind::Other
 }
 

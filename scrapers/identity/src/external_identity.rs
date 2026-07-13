@@ -42,8 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let person_resolver = Resolver::load(&root)?;
     let mut candidates = Vec::new();
     seed_institutional_and_roles(&mut candidates);
-    collect_from_questions(&root, &person_resolver, &mut candidates)?;
-    collect_from_utterances(&root, &person_resolver, &mut candidates)?;
+    let meeting_dates = load_meeting_dates(&root)?;
+    collect_from_questions(&root, &person_resolver, &meeting_dates, &mut candidates)?;
+    collect_from_utterances(&root, &person_resolver, &meeting_dates, &mut candidates)?;
     collect_from_dossiers(&root, &person_resolver, &mut candidates)?;
     collect_from_written_routes(&root, &mut candidates)?;
 
@@ -174,6 +175,7 @@ fn seed_institutional_and_roles(candidates: &mut Vec<Candidate>) {
 fn collect_from_questions(
     root: &Path,
     resolver: &Resolver,
+    meeting_dates: &HashMap<(String, String), String>,
     candidates: &mut Vec<Candidate>,
 ) -> Result<(), Box<dyn Error>> {
     let mut seen: HashSet<(String, String)> = HashSet::new();
@@ -192,15 +194,11 @@ fn collect_from_questions(
             let respondents = read_string_column(&batch, "respondents")?;
             let topics_nl = read_string_column(&batch, "topics_nl")?;
             let topics_fr = read_string_column(&batch, "topics_fr")?;
-            let questioners = read_string_column(&batch, "questioners")?;
             let source_urls = read_string_column(&batch, "source_url")?;
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
-                let qid = format!(
-                    "{SESSION_ID}_{meeting_kind}_{}_{}",
-                    meeting_ids[i], question_ids[i]
-                );
+                let qid = question_ids[i].clone();
                 for name in split_csv(&respondents[i]) {
                     if should_add_external(resolver, &name, Bucket::Respondent) {
                         let key = (name.clone(), "respondents".to_string());
@@ -212,7 +210,11 @@ fn collect_from_questions(
                                 context_label: format!("question {qid}"),
                                 meeting_id: meeting_ids[i].clone(),
                                 meeting_kind: meeting_kind.to_string(),
-                                meeting_date: String::new(),
+                                meeting_date: meeting_date_for(
+                                    meeting_dates,
+                                    meeting_kind,
+                                    &meeting_ids[i],
+                                ),
                                 question_id: qid.clone(),
                                 topics_nl: topics_nl[i].clone(),
                                 topics_fr: topics_fr[i].clone(),
@@ -224,32 +226,8 @@ fn collect_from_questions(
                     }
                 }
 
-                for name in split_csv(&questioners[i]) {
-                    let cleaned = clean_raw_name(&name);
-                    if cleaned.is_empty() {
-                        continue;
-                    }
-                    if should_add_external(resolver, &cleaned, Bucket::Questioner) {
-                        let key = (cleaned.clone(), "questioners".to_string());
-                        if seen.insert(key) {
-                            candidates.push(Candidate {
-                                raw_name: cleaned,
-                                bucket: "questioners".to_string(),
-                                context_id: qid.clone(),
-                                context_label: format!("question {qid}"),
-                                meeting_id: meeting_ids[i].clone(),
-                                meeting_kind: meeting_kind.to_string(),
-                                meeting_date: String::new(),
-                                question_id: qid.clone(),
-                                topics_nl: topics_nl[i].clone(),
-                                topics_fr: topics_fr[i].clone(),
-                                utterance_excerpt: String::new(),
-                                source_url: source_urls[i].clone(),
-                                cache_path: cache_paths[i].clone(),
-                            });
-                        }
-                    }
-                }
+                // Questioners are Chamber MPs in this model. Resolution failures remain
+                // unresolved instead of becoming fabricated ExternalPerson nodes.
             }
         }
     }
@@ -259,6 +237,7 @@ fn collect_from_questions(
 fn collect_from_utterances(
     root: &Path,
     resolver: &Resolver,
+    meeting_dates: &HashMap<(String, String), String>,
     candidates: &mut Vec<Candidate>,
 ) -> Result<(), Box<dyn Error>> {
     let mut seen: HashSet<(String, String)> = HashSet::new();
@@ -294,7 +273,11 @@ fn collect_from_utterances(
                             context_label: format!("utterance {}", utterance_ids[i]),
                             meeting_id: meeting_ids[i].clone(),
                             meeting_kind: meeting_kind.to_string(),
-                            meeting_date: String::new(),
+                            meeting_date: meeting_date_for(
+                                meeting_dates,
+                                meeting_kind,
+                                &meeting_ids[i],
+                            ),
                             question_id: String::new(),
                             topics_nl: String::new(),
                             topics_fr: String::new(),
@@ -308,6 +291,40 @@ fn collect_from_utterances(
         }
     }
     Ok(())
+}
+
+fn load_meeting_dates(root: &Path) -> Result<HashMap<(String, String), String>, Box<dyn Error>> {
+    let mut dates = HashMap::new();
+    for (meeting_kind, rel) in [
+        ("plenary", "plenary/meetings.parquet"),
+        ("commission", "commission/meetings.parquet"),
+    ] {
+        let path = root.join(format!("sessions/{SESSION_ID}/{rel}"));
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let meeting_dates = read_string_column(&batch, "date")?;
+            for (meeting_id, meeting_date) in meeting_ids.iter().zip(meeting_dates) {
+                if !meeting_date.is_empty() {
+                    dates.insert((meeting_kind.to_string(), meeting_id.clone()), meeting_date);
+                }
+            }
+        }
+    }
+    Ok(dates)
+}
+
+fn meeting_date_for(
+    meeting_dates: &HashMap<(String, String), String>,
+    meeting_kind: &str,
+    meeting_id: &str,
+) -> String {
+    meeting_dates
+        .get(&(meeting_kind.to_string(), meeting_id.to_string()))
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn collect_from_dossiers(

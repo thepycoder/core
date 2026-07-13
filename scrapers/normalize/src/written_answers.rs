@@ -5,7 +5,7 @@ use identity::actor_resolver::{ActorResolution, ActorResolver};
 use identity::external::department_external_id;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::resolver::Bucket;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -64,6 +64,7 @@ pub fn normalize_written_answers(
     let mut seen_answered_by: HashSet<(String, String)> = HashSet::new();
 
     let question_respondents = load_question_respondents(data_dir)?;
+    let route_deptnums = load_route_deptnums(data_dir)?;
 
     for path in load_answer_paths(data_dir) {
         if !path.exists() {
@@ -118,7 +119,7 @@ pub fn normalize_written_answers(
                     .unwrap_or_default();
 
                 if kinds[i] == "written" && !route_ids[i].is_empty() {
-                    if let Some(deptnum) = load_route_deptnum(data_dir, &route_ids[i])? {
+                    if let Some(deptnum) = route_deptnums.get(&route_ids[i]) {
                         let entity_id = department_external_id(&deptnum);
                         let key = (entity_id.clone(), answer_ids[i].clone());
                         if seen_answered_by.insert(key) {
@@ -234,21 +235,22 @@ fn load_question_respondents(
     Ok(map)
 }
 
-fn load_route_deptnum(data_dir: &Path, route_id: &str) -> Result<Option<String>, Box<dyn Error>> {
+fn load_route_deptnums(data_dir: &Path) -> Result<HashMap<String, String>, Box<dyn Error>> {
     let path = data_dir.join(format!("sessions/{SESSION_ID}/written/routes.parquet"));
     if !path.exists() {
-        return Ok(None);
+        return Ok(HashMap::new());
     }
+    let mut by_route = HashMap::new();
     for batch in read_all_rows(&path)? {
         let route_ids = read_string_column(&batch, "route_id")?;
         let deptnums = read_string_column(&batch, "deptnum")?;
         for i in 0..batch.num_rows() {
-            if route_ids[i] == route_id {
-                return Ok(Some(deptnums[i].clone()));
+            if !route_ids[i].is_empty() {
+                by_route.insert(route_ids[i].clone(), deptnums[i].clone());
             }
         }
     }
-    Ok(None)
+    Ok(by_route)
 }
 
 pub fn write_normalized_answers(
