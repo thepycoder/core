@@ -28,15 +28,13 @@ Open http://127.0.0.1:8765
 ## Features
 
 - Search entities, inspect links, vote breakdown (`Vote` → `result_id` → tallies / casts / reconciliation)
-- **Report coverage** at `/reports` — full-screen cached HTML with live block overlays (not written to cache):
-  - List meetings: `GET /api/reports/meetings?session_id=56&meeting_kind=plenary`
-  - Load report: `GET /api/reports/{session_id}/{meeting_kind}/{meeting_id}`
-  - Deep link: `/reports?session_id=56&meeting_kind=plenary&meeting_id=60&block={index}`
-- Overlay filters on report API: `entity_type`, `coverage_kind` (`extraction`|`scope`), `span_role`
+- **Origins panel** — select any node or edge in the inspector, then **Show origins** to open the cached report HTML with block overlays filtered to that entity. Meeting/filters are available inside the panel when you need to browse manually.
+- Overlay filters on report API: `entity_type`, `entity_id`, `coverage_kind` (`extraction`|`scope`), `span_role`
 - Block inspection on original HTML: outlines, span badges, parser/extractor versions, per-block detail panel
 - Span validation diagnostics: `wrong_artifact`, `stale_source_content`, `stale_block_parser`, `out_of_bounds`, `invalid_half_open_range`
-- Bidirectional navigation: span badge → graph node; node detail → “Open in report” when spans exist
-- QA issues with `source_block` deep-link into `/reports`
+- Bidirectional navigation: span in origins panel → graph node; node/edge/link → **Show origins**
+- QA issues with `source_block` open the origins panel at that block
+- `/reports?…` redirects into the explorer with the origins panel open (legacy standalone page at `/reports/legacy`)
 - URL-backed navigation (`?type=…&id=…`) with browser history preservation
 - Artifact metadata: `GET /api/artifacts/{source_artifact_id}` (`source_content_hash`, versions, cache path)
 

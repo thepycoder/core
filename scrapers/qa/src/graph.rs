@@ -1,4 +1,5 @@
-use crate::types::CheckDetail;
+use crate::{SESSION_ID, types::CheckDetail};
+use crawl::utils::is_flwb_document_id;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -22,6 +23,8 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
 
     let node_keys = load_node_keys(&nodes_path)?;
     let edges = load_edges(&edges_path)?;
+    details.extend(check_native_document_ids(data_dir)?);
+    details.extend(check_vote_result_edges_match_staging(data_dir, &edges)?);
     let utterance_ids: HashSet<String> = node_keys
         .iter()
         .filter(|(t, _)| t == "Utterance")
@@ -160,6 +163,86 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
         }
     }
 
+    Ok(details)
+}
+
+fn check_native_document_ids(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let path = data_dir.join(format!("sessions/{SESSION_ID}/subdocuments.parquet"));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut details = Vec::new();
+    for batch in read_all_rows(&path)? {
+        let ids = read_string_column(&batch, "id")?;
+        for id in ids {
+            if !is_flwb_document_id(&id) {
+                details.push(
+                    CheckDetail::new(
+                        "graph.document_id_native",
+                        "error",
+                        "fail",
+                        format!("subdocument id {id} is not a native FLWB document id"),
+                    )
+                    .with_entity("Document", &id),
+                );
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_vote_result_edges_match_staging(
+    data_dir: &Path,
+    edges: &[EdgeRow],
+) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/votes.parquet"));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut graph_targets: HashMap<String, Vec<String>> = HashMap::new();
+    for edge in edges {
+        if edge.edge_type == "HAS_RESULT"
+            && edge.from_type == "Vote"
+            && edge.to_type == "VoteResult"
+        {
+            graph_targets
+                .entry(edge.from_id.clone())
+                .or_default()
+                .push(edge.to_id.clone());
+        }
+    }
+    for targets in graph_targets.values_mut() {
+        targets.sort();
+        targets.dedup();
+    }
+
+    let mut details = Vec::new();
+    for batch in read_all_rows(&path)? {
+        let vote_ids = read_string_column(&batch, "vote_id")?;
+        let result_ids = read_string_column(&batch, "result_id")?;
+        for i in 0..batch.num_rows() {
+            let actual = graph_targets.get(&vote_ids[i]).cloned().unwrap_or_default();
+            if actual.len() != 1 || actual[0] != result_ids[i] {
+                details.push(
+                    CheckDetail::new(
+                        "graph.vote_result_edges_match_staging",
+                        "error",
+                        "fail",
+                        format!(
+                            "Vote {} stages result {} but graph HAS_RESULT targets [{}]",
+                            vote_ids[i],
+                            result_ids[i],
+                            actual.join(", ")
+                        ),
+                    )
+                    .with_entity("Vote", &vote_ids[i])
+                    .with_values(&result_ids[i], actual.join(", ")),
+                );
+            }
+        }
+    }
     Ok(details)
 }
 

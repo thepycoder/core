@@ -215,6 +215,7 @@ def report_coverage(
     meeting_kind: str,
     meeting_id: str,
     entity_type: list[str] | None = Query(default=None),
+    entity_id: list[str] | None = Query(default=None),
     coverage_kind: list[str] | None = Query(default=None),
     span_role: list[str] | None = Query(default=None),
 ) -> ReportCoverageResponse:
@@ -228,6 +229,7 @@ def report_coverage(
         session_id=session_id,
         meeting_kind=meeting_kind,
         entity_types=entity_type,
+        entity_ids=entity_id,
         coverage_kinds=coverage_kind,
         span_roles=span_role,
     )

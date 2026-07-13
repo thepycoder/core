@@ -263,6 +263,8 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "source.span.overlap",
         "graph.edge_endpoints_exist",
         "graph.voted_on_orphan_targets",
+        "graph.document_id_native",
+        "graph.vote_result_edges_match_staging",
         "graph.utterance_spoke_resolved",
         "graph.external_on_mp_only_edges",
         "graph.orphan_external_person",

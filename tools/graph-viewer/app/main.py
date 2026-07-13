@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from urllib.parse import urlencode
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -18,7 +20,7 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         response = await call_next(request)
         path = request.url.path
-        if path in {"/", "/reports", "/app.js", "/style.css", "/report-coverage.js", "/report-coverage.css"} or path.endswith((".js", ".css")):
+        if path in {"/", "/reports", "/app.js", "/style.css", "/coverage-panel.js", "/report-coverage.js", "/report-coverage.css"} or path.endswith((".js", ".css")):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             response.headers["Pragma"] = "no-cache"
         return response
@@ -52,8 +54,23 @@ async def index_page() -> HTMLResponse:
     return _render_static_page("index.html")
 
 
-@app.get("/reports", response_class=HTMLResponse, include_in_schema=False)
-async def report_coverage_page() -> HTMLResponse:
+@app.get("/reports", include_in_schema=False)
+async def report_coverage_page(request: Request) -> RedirectResponse:
+    params: list[tuple[str, str]] = []
+    for key, value in request.query_params.multi_items():
+        if key == "report":
+            params.append(("meeting_id", value))
+        else:
+            params.append((key, value))
+    if not any(key == "meeting_id" for key, _ in params):
+        pass
+    params.append(("coverage", "1"))
+    query = urlencode(params)
+    return RedirectResponse(url=f"/?{query}" if query else "/?coverage=1", status_code=307)
+
+
+@app.get("/reports/legacy", response_class=HTMLResponse, include_in_schema=False)
+async def report_coverage_legacy_page() -> HTMLResponse:
     return _render_static_page("report-coverage.html")
 
 

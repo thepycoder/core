@@ -71,6 +71,32 @@ def test_fetch_report_coverage_entity_type_filter(conn):
     assert question_only.coverage.covered_words == 1
 
 
+def test_fetch_report_coverage_entity_id_filter(conn):
+    conn.execute(
+        """
+        CREATE TABLE report_blocks AS
+        SELECT * FROM (VALUES
+            ('a1', 'source-hash', 0, 'p', 'hello', '{}', '', '', 1, 'x', false, 'v1', 'e1', 'http://example.com', 'sessions/56/meetings/plenary/56-60.html'),
+            ('a1', 'source-hash', 1, 'p', 'world', '{}', '', '', 1, 'x', false, 'v1', 'e1', 'http://example.com', 'sessions/56/meetings/plenary/56-60.html')
+        ) AS t(artifact_id, source_content_hash, block_index, block_type, text, structured_json, language, class_name, word_count, content_hash, has_oraspr, block_parser_version, extractor_version, source_url, cache_path)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE source_spans AS
+        SELECT * FROM (VALUES
+            ('s1', 'a1', 'source-hash', 56, 60, 'Vote', '56-60-v1', 'decision_title', 0, 1, 'extraction', 'title_nl', 1.0, 'vote_assembly', 'v1', 'e1', 'http://example.com', 'sessions/56/meetings/plenary/56-60.html'),
+            ('s2', 'a1', 'source-hash', 56, 60, 'Vote', '56-60-v2', 'decision_title', 1, 2, 'extraction', 'title_nl', 1.0, 'vote_assembly', 'v1', 'e1', 'http://example.com', 'sessions/56/meetings/plenary/56-60.html')
+        ) AS t(span_id, artifact_id, source_content_hash, session_id, meeting_id, entity_type, entity_id, span_role, block_start, block_end, coverage_kind, field_names, confidence, extractor, block_parser_version, extractor_version, source_url, cache_path)
+        """
+    )
+
+    vote_one = fetch_report_coverage(conn, "60", entity_ids=["56-60-v1"])
+    assert vote_one.blocks[0].has_extraction is True
+    assert vote_one.blocks[1].has_extraction is False
+    assert vote_one.coverage.covered_words == 1
+
+
 def test_fetch_report_coverage_coverage_kind_filter(conn):
     conn.execute(
         """

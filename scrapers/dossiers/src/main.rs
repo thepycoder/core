@@ -22,6 +22,7 @@ use tokio::fs::read_dir;
 use tokio::fs::{self, remove_file};
 
 const DEKAMER_BASE: &str = "https://www.dekamer.be";
+const SESSION_ID: u32 = 56;
 /// Re-check open dossiers at most once per week unless linked to a recent plenary meeting.
 const DEFAULT_RECHECK_DAYS: i64 = 7;
 /// Dossiers tied to a plenary meeting in the last week are re-checked daily.
@@ -35,6 +36,7 @@ static SELECTOR_A: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_FONT: OnceLock<Selector> = OnceLock::new();
 static LIST_FROM_TO_REGEX: OnceLock<Regex> = OnceLock::new();
 static FLWB_DOSSIER_ID_REGEX: OnceLock<Regex> = OnceLock::new();
+static FLWB_DOCUMENT_ID_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn selector_tr() -> &'static Selector {
     SELECTOR_TR.get_or_init(|| Selector::parse("tr").unwrap())
@@ -64,6 +66,11 @@ fn list_from_to_regex() -> &'static Regex {
 fn flwb_dossier_id_regex() -> &'static Regex {
     FLWB_DOSSIER_ID_REGEX
         .get_or_init(|| Regex::new(r#"(?i)flwbn\.cfm[^"'<>]*dossierID=(\d+)"#).unwrap())
+}
+
+fn flwb_document_id_regex() -> &'static Regex {
+    FLWB_DOCUMENT_ID_REGEX
+        .get_or_init(|| Regex::new(r"(?i)/(\d{2}K\d{7})\.pdf(?:[?#].*)?$").unwrap())
 }
 
 /// The output of this scraper.
@@ -215,7 +222,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
     let client = ScrapingClient::new();
-    let session_id: u32 = 56;
+    let session_id = SESSION_ID;
 
     let session_dir = data_dir().join("sessions").join(session_id.to_string());
     fs::create_dir_all(&session_dir).await?;
@@ -919,7 +926,7 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
             if complete_subdocument {
                 subdocuments.push(Subdocument {
                     dossier_id: dossier_id.to_string(),
-                    id: document_id.clone(),
+                    id: canonical_document_id(dossier_id, &document_id, file_url.as_deref()),
                     document_type,
                     date: document_date.clone(),
                     authors: document_authors.clone(),
@@ -1007,7 +1014,7 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
     if complete_subdocument {
         subdocuments.push(Subdocument {
             dossier_id: dossier_id.to_string(),
-            id: document_id,
+            id: canonical_document_id(dossier_id, &document_id, file_url.as_deref()),
             document_type,
             date: document_date,
             authors: document_authors,
@@ -1016,6 +1023,24 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
     }
 
     subdocuments
+}
+
+fn canonical_document_id(
+    dossier_id: &str,
+    document_number: &str,
+    file_url: Option<&str>,
+) -> String {
+    if let Some(url) = file_url {
+        if let Some(captures) = flwb_document_id_regex().captures(url) {
+            return captures[1].to_uppercase();
+        }
+    }
+
+    format!(
+        "{SESSION_ID:02}K{:0>4}{:0>3}",
+        normalize_dossier_id(dossier_id),
+        document_number.trim().trim_start_matches('0')
+    )
 }
 
 /// Parse the document status from the given raw text.
@@ -1194,6 +1219,19 @@ mod tests {
         assert_eq!(normalize_dossier_id("0001"), "1");
         assert_eq!(normalize_dossier_id("297"), "297");
         assert_eq!(normalize_dossier_id("0000"), "0");
+    }
+
+    #[test]
+    fn canonical_document_id_uses_full_flwb_id_from_pdf_url() {
+        assert_eq!(
+            canonical_document_id(
+                "1243",
+                "2",
+                Some("https://www.dekamer.be/FLWB/PDF/56/1243/56K1243002.pdf"),
+            ),
+            "56K1243002"
+        );
+        assert_eq!(canonical_document_id("1243", "2", None), "56K1243002");
     }
 
     #[test]

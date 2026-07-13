@@ -11,24 +11,131 @@ function navStackSnapshot() {
   return navStack.map((item) => ({ type: item.type, id: item.id, label: item.label }));
 }
 
-function reportCoverageUrl({
-  sessionId = "56",
-  meetingKind = "plenary",
-  meetingId,
-  blockIndex = null,
-  entityTypes = [],
-  coverageKinds = [],
-  spanRoles = [],
-} = {}) {
-  const params = new URLSearchParams();
-  params.set("session_id", sessionId);
-  params.set("meeting_kind", meetingKind);
-  if (meetingId) params.set("meeting_id", meetingId);
-  if (blockIndex != null) params.set("block", String(blockIndex));
-  for (const value of entityTypes) params.append("entity_type", value);
-  for (const value of coverageKinds) params.append("coverage_kind", value);
-  for (const value of spanRoles) params.append("span_role", value);
-  return `/reports?${params}`;
+const REPORT_EVIDENCE_TYPES = new Set([
+  "Vote",
+  "VoteResult",
+  "Question",
+  "Utterance",
+  "Hearing",
+  "Interpellation",
+  "Proposition",
+  "Notice",
+]);
+
+function parseMeetingFromCachePath(cachePath) {
+  const match = cachePath?.match(/\/meetings\/([^/]+)\/(\d+)-(\d+)\.html/);
+  if (!match) return null;
+  return { meetingKind: match[1], sessionId: match[2], meetingId: match[3] };
+}
+
+function originsContextFromSpan(span, label) {
+  return {
+    label: label || `${span.entity_type}: ${span.entity_id}`,
+    sessionId: span.session_id,
+    meetingKind: span.meeting_kind,
+    meetingId: span.meeting_id,
+    blockIndex: span.block_start,
+    entityTypes: [span.entity_type],
+    entityIds: [span.entity_id],
+  };
+}
+
+function originsContextFromDetail(detail) {
+  const label = `${detail.type}: ${detail.label}`;
+  if (detail.source_evidence?.length) {
+    const first = detail.source_evidence[0];
+    return {
+      label,
+      sessionId: first.session_id,
+      meetingKind: first.meeting_kind,
+      meetingId: first.meeting_id,
+      blockIndex: first.block_start,
+      entityTypes: [detail.type],
+      entityIds: [detail.id],
+    };
+  }
+  if (detail.type === "Meeting") {
+    const parts = detail.id.split("_");
+    if (parts.length === 3) {
+      return {
+        label,
+        sessionId: parts[1],
+        meetingKind: parts[0],
+        meetingId: parts[2],
+        entityTypes: ["Meeting"],
+        entityIds: [detail.id],
+      };
+    }
+  }
+  const meeting = parseMeetingFromCachePath(detail.cache_path);
+  if (meeting) {
+    const context = { label, ...meeting, sourceUrl: detail.source_url, cachePath: detail.cache_path };
+    if (REPORT_EVIDENCE_TYPES.has(detail.type)) {
+      context.entityTypes = [detail.type];
+      context.entityIds = [detail.id];
+    }
+    return context;
+  }
+  return { label, sourceUrl: detail.source_url, cachePath: detail.cache_path };
+}
+
+function originsContextFromProvenance({ sourceUrl, cachePath, label }) {
+  const meeting = parseMeetingFromCachePath(cachePath);
+  if (meeting) return { label, ...meeting, sourceUrl, cachePath };
+  return { label, sourceUrl, cachePath };
+}
+
+function originsContextFromEdge(detail) {
+  const label = `Edge ${detail.edge_type}`;
+  const meeting = parseMeetingFromCachePath(detail.cache_path);
+  if (meeting) {
+    return { label, ...meeting, sourceUrl: detail.source_url, cachePath: detail.cache_path };
+  }
+  return { label, sourceUrl: detail.source_url, cachePath: detail.cache_path };
+}
+
+function originsContextFromLink(link) {
+  const label = `${link.edge_type} → ${link.neighbor_type}: ${link.neighbor_label || link.neighbor_id}`;
+  const meeting = parseMeetingFromCachePath(link.cache_path);
+  if (meeting) {
+    return { label, ...meeting, sourceUrl: link.source_url, cachePath: link.cache_path };
+  }
+  return { label, sourceUrl: link.source_url, cachePath: link.cache_path };
+}
+
+function showOrigins(context) {
+  if (!context) return;
+  CoveragePanel.open(context).catch((err) => console.error(err));
+}
+
+function appendShowOriginsButton(container, context, text = "Show origins") {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "origins-action-btn";
+  btn.textContent = text;
+  btn.addEventListener("click", () => showOrigins(context));
+  container.appendChild(btn);
+  return btn;
+}
+
+function coverageContextFromUrl(params) {
+  const block = params.get("block");
+  return {
+    sessionId: params.get("session_id") || "56",
+    meetingKind: params.get("meeting_kind") || "plenary",
+    meetingId: params.get("meeting_id") || params.get("report") || "",
+    blockIndex: block != null && block !== "" ? Number(block) : null,
+    entityTypes: params.getAll("entity_type"),
+    entityIds: params.getAll("entity_id"),
+    coverageKinds: params.getAll("coverage_kind"),
+    spanRoles: params.getAll("span_role").length
+      ? params.getAll("span_role")
+      : (params.get("span_role") || "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+    expandControls: true,
+  };
 }
 
 function viewUrlForItem(item) {
@@ -370,10 +477,17 @@ function renderBreadcrumbs() {
   });
 }
 
-function renderProvenanceBar(sourceUrl, cachePath) {
+function renderProvenanceBar(sourceUrl, cachePath, originsContext = null) {
   const bar = document.getElementById("provenance-bar");
   bar.innerHTML = "";
-  if (!sourceUrl && !cachePath) {
+  const canTrace = Boolean(
+    sourceUrl ||
+      cachePath ||
+      originsContext?.meetingId ||
+      originsContext?.sourceUrl ||
+      originsContext?.cachePath
+  );
+  if (!canTrace) {
     bar.classList.add("hidden");
     return;
   }
@@ -397,6 +511,20 @@ function renderProvenanceBar(sourceUrl, cachePath) {
     a.textContent = "Open cached HTML";
     bar.appendChild(a);
   }
+
+  const context =
+    originsContext ||
+    originsContextFromProvenance({
+      sourceUrl,
+      cachePath,
+      label: inspectorNode ? `${inspectorNode.type}: ${inspectorNode.id}` : "Selection",
+    });
+  const originsBtn = document.createElement("button");
+  originsBtn.type = "button";
+  originsBtn.className = "provenance-btn origins-btn";
+  originsBtn.textContent = "Show origins";
+  originsBtn.addEventListener("click", () => showOrigins(context));
+  bar.appendChild(originsBtn);
 }
 
 function seedFromSample(_issueId, sample) {
@@ -432,11 +560,12 @@ async function openIssueSample(issue, sample) {
     return;
   }
   if (sample.action === "report" && sample.meeting_id && sample.source_block) {
-    window.location.href = reportCoverageUrl({
+    showOrigins({
+      label: sample.label || `Report block ${sample.source_block}`,
       sessionId: sample.session_id || "56",
       meetingKind: sample.meeting_kind || "plenary",
       meetingId: sample.meeting_id,
-      blockIndex: sample.source_block,
+      blockIndex: Number(sample.source_block),
     });
     return;
   }
@@ -689,7 +818,7 @@ async function drillTo(neighborType, neighborId) {
 }
 
 function renderNodeDetail(detail) {
-  renderProvenanceBar(detail.source_url, detail.cache_path);
+  renderProvenanceBar(detail.source_url, detail.cache_path, originsContextFromDetail(detail));
 
   const el = document.getElementById("inspector-content");
   el.innerHTML = "";
@@ -786,15 +915,11 @@ function renderSourceEvidence(rows) {
   section.appendChild(heading);
   for (const span of rows) {
     const card = renderSpanDetail(span);
-    const open = document.createElement("a");
-    open.href = reportCoverageUrl({
-      sessionId: span.session_id,
-      meetingKind: span.meeting_kind,
-      meetingId: span.meeting_id,
-      blockIndex: span.block_start,
-    });
-    open.textContent = `Open report at block ${span.block_start}`;
-    card.appendChild(open);
+    appendShowOriginsButton(
+      card,
+      originsContextFromSpan(span),
+      `Show block ${span.block_start} in report`
+    );
     section.appendChild(card);
   }
   return section;
@@ -1210,6 +1335,18 @@ function createLinkRow(link) {
   });
   actions.appendChild(edgeBtn);
 
+  if (link.source_url || link.cache_path) {
+    const originsBtn = document.createElement("button");
+    originsBtn.type = "button";
+    originsBtn.className = "link-action-btn";
+    originsBtn.textContent = "Origins";
+    originsBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showOrigins(originsContextFromLink(link));
+    });
+    actions.appendChild(originsBtn);
+  }
+
   row.appendChild(actions);
   return row;
 }
@@ -1322,7 +1459,13 @@ async function showEdgeDetail(link) {
   if (detail.cache_path) {
     panel.innerHTML += ` · <a href="${cacheUrl(detail.cache_path)}" target="_blank" rel="noopener">Edge cache</a>`;
   }
+  const originsActions = document.createElement("div");
+  originsActions.className = "span-actions";
+  appendShowOriginsButton(originsActions, originsContextFromEdge(detail));
+  panel.appendChild(originsActions);
   el.prepend(panel);
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
   panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
@@ -1460,39 +1603,44 @@ async function initFromUrl() {
   const type = params.get("type");
   const id = params.get("id");
   const unresolved = params.get("unresolved");
-  const report = params.get("report");
-  if (report) {
-    const next = reportCoverageUrl({
-      sessionId: params.get("session_id") || "56",
-      meetingKind: params.get("meeting_kind") || "plenary",
-      meetingId: report,
-      blockIndex: params.get("block") == null ? null : Number(params.get("block")),
-      entityTypes: params.getAll("entity_type"),
-      coverageKinds: params.getAll("coverage_kind"),
-      spanRoles: params.getAll("span_role"),
-    });
-    window.location.replace(next);
-    return;
-  }
+  const wantsCoverage =
+    params.get("coverage") === "1" ||
+    params.has("meeting_id") ||
+    params.has("report") ||
+    params.has("block");
+
   if (type && id) {
     seedHomeHistoryEntry();
     await openNode(type, id, { resetNav: true });
+    if (wantsCoverage) {
+      await CoveragePanel.open(coverageContextFromUrl(params));
+    }
     return;
   }
   if (unresolved) {
     seedHomeHistoryEntry();
     await showUnresolved(unresolved);
+    return;
+  }
+  if (wantsCoverage) {
+    await CoveragePanel.open(coverageContextFromUrl(params));
   }
 }
 
 async function init() {
+  CoveragePanel.init();
+  CoveragePanel.setNavigateHandler((type, id) => openNode(type, id, { resetNav: false }));
   initSidebarLayout();
   try {
     await loadHealth();
     await loadIssues();
     const params = new URLSearchParams(window.location.search);
     const hasDeepLink =
-      (params.get("type") && params.get("id")) || params.has("unresolved") || params.has("report");
+      (params.get("type") && params.get("id")) ||
+      params.has("unresolved") ||
+      params.get("coverage") === "1" ||
+      params.has("meeting_id") ||
+      params.has("report");
     await initFromUrl();
     if (!hasDeepLink && navStack.length === 0) {
       await renderExploreHome();

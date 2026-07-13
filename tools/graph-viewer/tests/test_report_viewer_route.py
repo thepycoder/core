@@ -8,7 +8,8 @@ def test_report_coverage_template_exists():
     assert "report-frame" in html
 
 
-def test_graph_home_links_to_report_viewer():
+def test_graph_home_embeds_coverage_panel():
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'href="/reports"' in html
-    assert "report-section" not in html
+    assert "coverage-drawer" in html
+    assert "coverage-panel.js" in html
+    assert 'href="/reports"' not in html

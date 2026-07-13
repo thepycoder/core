@@ -90,6 +90,14 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A `VOTED_ON` edge targets a vote node id that is missing from the graph.",
             measures: "Finds `VOTED_ON` edges whose `to_id` is not present among graph Vote nodes.",
         },
+        "graph.document_id_native" => CheckDoc {
+            what: "A subdocument uses a local sequence number instead of its native FLWB document id.",
+            measures: "Requires every `subdocuments.parquet.id` to match the native `NNKddddddd` FLWB identifier format.",
+        },
+        "graph.vote_result_edges_match_staging" => CheckDoc {
+            what: "A graph `HAS_RESULT` edge does not match the result id recorded for that vote in staging.",
+            measures: "Compares each `plenary/votes.parquet` (`vote_id`, `result_id`) pair with exactly one Vote→VoteResult `HAS_RESULT` graph edge.",
+        },
         "graph.utterance_spoke_resolved" => CheckDoc {
             what: "An Utterance node has no incoming `SPOKE` edge from a resolved Person.",
             measures: "Collects all Utterance node ids and subtracts those referenced as `SPOKE` targets.",

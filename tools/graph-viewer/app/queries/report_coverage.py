@@ -65,6 +65,7 @@ def fetch_report_coverage(
     session_id: str = "56",
     meeting_kind: str = "plenary",
     entity_types: list[str] | None = None,
+    entity_ids: list[str] | None = None,
     coverage_kinds: list[str] | None = None,
     span_roles: list[str] | None = None,
 ) -> ReportCoverageResponse:
@@ -94,6 +95,10 @@ def fetch_report_coverage(
         placeholders = ", ".join(["?"] * len(entity_types))
         span_filters.append(f"entity_type IN ({placeholders})")
         span_params.extend(entity_types)
+    if entity_ids:
+        placeholders = ", ".join(["?"] * len(entity_ids))
+        span_filters.append(f"entity_id IN ({placeholders})")
+        span_params.extend(entity_ids)
     if coverage_kinds:
         placeholders = ", ".join(["?"] * len(coverage_kinds))
         span_filters.append(f"coverage_kind IN ({placeholders})")

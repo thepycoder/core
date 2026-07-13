@@ -12,55 +12,120 @@
       Search &amp; issues
     </button>
     <h1>Graph Debug Explorer</h1>
-    <nav class="header-nav">
-      <a href="/reports">Report coverage</a>
-    </nav>
     <div id="health-status" class="muted">Loading…</div>
   </header>
 
   <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
 
-  <main id="layout">
-    <aside id="sidebar">
-      <section>
-        <h2>Search</h2>
-        <input id="search-input" type="search" placeholder="Name, title, question body, answer text…" />
-        <label class="field-label" for="search-type">Node type</label>
-        <select id="search-type">
-          <option value="">All types</option>
-          <option value="Person">Person</option>
-          <option value="Party">Party</option>
-          <option value="Vote">Vote</option>
-          <option value="Question">Question</option>
-          <option value="Answer">Answer</option>
-          <option value="Dossier">Dossier</option>
-          <option value="Meeting">Meeting</option>
-          <option value="Document">Document</option>
-          <option value="Utterance">Utterance</option>
-          <option value="Commission">Commission</option>
-          <option value="Topic">Topic</option>
-        </select>
-        <button id="search-btn">Search</button>
-        <ul id="search-results"></ul>
+  <div id="app-shell">
+    <main id="layout">
+      <aside id="sidebar">
+        <section>
+          <h2>Search</h2>
+          <input id="search-input" type="search" placeholder="Name, title, question body, answer text…" />
+          <label class="field-label" for="search-type">Node type</label>
+          <select id="search-type">
+            <option value="">All types</option>
+            <option value="Person">Person</option>
+            <option value="Party">Party</option>
+            <option value="Vote">Vote</option>
+            <option value="Question">Question</option>
+            <option value="Answer">Answer</option>
+            <option value="Dossier">Dossier</option>
+            <option value="Meeting">Meeting</option>
+            <option value="Document">Document</option>
+            <option value="Utterance">Utterance</option>
+            <option value="Commission">Commission</option>
+            <option value="Topic">Topic</option>
+          </select>
+          <button id="search-btn">Search</button>
+          <ul id="search-results"></ul>
+        </section>
+
+        <section>
+          <h2>Issues</h2>
+          <ul id="issues-list"></ul>
+        </section>
+      </aside>
+
+      <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
+
+      <section id="inspector-panel">
+        <div id="breadcrumb-bar" class="hidden"></div>
+        <div id="provenance-bar" class="hidden"></div>
+        <div id="inspector-content" class="muted">
+          Loading…
+        </div>
       </section>
+    </main>
 
-      <section>
-        <h2>Issues</h2>
-        <ul id="issues-list"></ul>
-      </section>
-    </aside>
-
-    <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
-
-    <section id="inspector-panel">
-      <div id="breadcrumb-bar" class="hidden"></div>
-      <div id="provenance-bar" class="hidden"></div>
-      <div id="inspector-content" class="muted">
-        Loading…
+    <aside id="coverage-drawer" class="coverage-drawer" aria-hidden="true" aria-label="Origins viewer">
+      <div class="coverage-drawer-header">
+        <div class="coverage-drawer-heading">
+          <h2>Origins</h2>
+          <div id="coverage-context-label" class="muted"></div>
+          <div id="coverage-title" class="muted coverage-meeting-title"></div>
+          <div id="coverage-stats" class="muted coverage-stats-line"></div>
+        </div>
+        <button id="coverage-close" type="button" class="coverage-close-btn">Close</button>
       </div>
-    </section>
-  </main>
 
+      <div class="coverage-drawer-toolbar">
+        <button id="coverage-controls-toggle" type="button" aria-expanded="false">Meeting &amp; filters</button>
+        <button id="coverage-clear-filters" type="button">Clear filters</button>
+      </div>
+
+      <div id="coverage-controls" class="coverage-controls hidden">
+        <label class="field-label" for="coverage-session">Session</label>
+        <input id="coverage-session" value="56" inputmode="numeric" />
+
+        <label class="field-label" for="coverage-kind">Meeting kind</label>
+        <select id="coverage-kind">
+          <option value="plenary">Plenary</option>
+          <option value="commission">Commission</option>
+        </select>
+
+        <label class="field-label" for="coverage-meeting">Meeting</label>
+        <select id="coverage-meeting"></select>
+
+        <label class="field-label" for="coverage-entity-filter">Entity type</label>
+        <select id="coverage-entity-filter" multiple size="4">
+          <option value="Vote">Vote</option>
+          <option value="VoteResult">VoteResult</option>
+          <option value="Question">Question</option>
+          <option value="Utterance">Utterance</option>
+          <option value="Hearing">Hearing</option>
+          <option value="Interpellation">Interpellation</option>
+          <option value="Proposition">Proposition</option>
+          <option value="Notice">Notice</option>
+          <option value="Meeting">Meeting</option>
+        </select>
+
+        <label class="field-label" for="coverage-entity-id">Entity id (comma-separated)</label>
+        <input id="coverage-entity-id" placeholder="e.g. 56-60-v1" />
+
+        <label class="field-label" for="coverage-coverage-filter">Coverage</label>
+        <select id="coverage-coverage-filter" multiple size="2">
+          <option value="extraction">Extraction</option>
+          <option value="scope">Scope</option>
+        </select>
+
+        <label class="field-label" for="coverage-role-filter">Span role (comma-separated)</label>
+        <input id="coverage-role-filter" placeholder="decision_title, result_counts…" />
+      </div>
+
+      <div id="coverage-diagnostics" class="coverage-diagnostics"></div>
+      <div id="coverage-block-detail" class="hidden coverage-block-detail"></div>
+      <div id="coverage-provenance" class="coverage-provenance muted"></div>
+
+      <div id="coverage-viewer" class="coverage-viewer">
+        <div id="coverage-viewer-status" class="coverage-viewer-status muted">Select a node and choose “Show origins”.</div>
+        <iframe id="coverage-frame" class="coverage-frame hidden" title="Cached meeting report"></iframe>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/coverage-panel.js?v={{ASSET_VERSION}}"></script>
   <script src="/app.js?v={{ASSET_VERSION}}"></script>
 </body>
 </html>

@@ -9,6 +9,7 @@ def asset_version() -> str:
         "app.js",
         "style.css",
         "index.html",
+        "coverage-panel.js",
         "report-coverage.js",
         "report-coverage.css",
         "report-coverage.html",

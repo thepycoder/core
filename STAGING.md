@@ -167,7 +167,7 @@ Commission report URL pattern: `https://www.dekamer.be/doc/CCRI/html/{session}/i
 | Column | Nullable | Notes |
 |--------|----------|--------|
 | `dossier_id` | | Parent dossier |
-| `id` | | Subdocument number |
+| `id` | | Native FLWB document id (e.g. `56K1243002`) |
 | `date` | | |
 | `type` | | DocumentType string |
 | `authors` | | CSV |
