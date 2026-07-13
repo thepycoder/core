@@ -98,7 +98,29 @@ fn coverage_distribution_stats(snapshots: &[CoverageBaselineRow]) -> Option<Stri
         ));
     }
 
+    lines.push(String::new());
+    lines.push(coverage_duckdb_query_block());
+
     Some(lines.join("\n"))
+}
+
+/// Copy-paste DuckDB query for per-meeting coverage (written on every `just qa` run).
+pub fn coverage_duckdb_query_block() -> String {
+    [
+        "**DuckDB — all meetings by coverage ratio (low → high):**".to_string(),
+        String::new(),
+        "```sql".to_string(),
+        "SELECT".to_string(),
+        "  meeting_kind,".to_string(),
+        "  meeting_id,".to_string(),
+        "  CAST(saved_words AS INTEGER) AS saved_words,".to_string(),
+        "  CAST(source_words AS INTEGER) AS source_words,".to_string(),
+        "  ROUND(CAST(ratio AS DOUBLE), 3) AS ratio".to_string(),
+        "FROM read_parquet('data/qa/speech_coverage.parquet')".to_string(),
+        "ORDER BY ratio ASC, meeting_kind, TRY_CAST(meeting_id AS INTEGER);".to_string(),
+        "```".to_string(),
+    ]
+    .join("\n")
 }
 
 /// Compact lines for stderr (one per kind + lowest outliers).
@@ -381,6 +403,7 @@ mod tests {
         assert!(stats.contains("plenary"));
         assert!(stats.contains("p5"));
         assert!(stats.contains("Lowest ratios"));
+        assert!(stats.contains("speech_coverage.parquet"));
     }
 
     #[test]

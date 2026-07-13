@@ -20,7 +20,9 @@ use aggregate::{aggregate_details, write_summary_md};
 use crawl::paths::data_dir;
 use identity::actor_resolver::ActorResolver;
 use identity::resolver::Resolver;
-use io::{write_alias_candidates, write_check_details, write_check_summaries};
+use io::{
+    write_alias_candidates, write_check_details, write_check_summaries, write_coverage_baselines,
+};
 use normalize::common::UnresolvedRow;
 use normalize::normalize_utterances;
 use stats::{coverage_console_lines, format_all_issue_stats, QaStatsContext};
@@ -109,6 +111,11 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     )?;
     write_check_summaries(&qa_dir.join("checks.parquet"), &summaries)?;
     write_alias_candidates(&qa_dir.join("alias_candidates.parquet"), &alias_candidates)?;
+
+    write_coverage_baselines(
+        &qa_dir.join("speech_coverage.parquet"),
+        &speech_out.coverage_snapshots,
+    )?;
 
     let row_counts_path = qa_dir.join("row_counts.json");
     let stats_ctx = QaStatsContext {
