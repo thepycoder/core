@@ -126,17 +126,29 @@ fn extract_lobby_from_layout(
     Ok(entries)
 }
 
-fn dedupe_lobby(mut rows: Vec<ScrapedLobby>) -> Vec<ScrapedLobby> {
-    rows.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then(a.url.cmp(&b.url))
-            .then(a.contacts.cmp(&b.contacts))
-    });
-    rows.dedup_by(|a, b| {
-        a.name == b.name && a.contacts == b.contacts && a.interests == b.interests && a.url == b.url
-    });
-    rows
+fn dedupe_lobby(rows: Vec<ScrapedLobby>) -> Vec<ScrapedLobby> {
+    let mut by_name: std::collections::HashMap<String, ScrapedLobby> = std::collections::HashMap::new();
+    for row in rows {
+        by_name
+            .entry(row.name.clone())
+            .and_modify(|existing| merge_lobby_row(existing, &row))
+            .or_insert(row);
+    }
+    let mut out: Vec<_> = by_name.into_values().collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+fn merge_lobby_row(keep: &mut ScrapedLobby, other: &ScrapedLobby) {
+    if other.url.len() > keep.url.len() {
+        keep.url = other.url.clone();
+    }
+    if other.contacts.len() > keep.contacts.len() {
+        keep.contacts = other.contacts.clone();
+    }
+    if other.interests.len() > keep.interests.len() {
+        keep.interests = other.interests.clone();
+    }
 }
 
 fn should_skip_line(line: &str) -> bool {

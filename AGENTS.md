@@ -33,6 +33,10 @@ just build-identity → just normalize-edges → just build-graph
 
 Optional LLM enrichment (`just enrich-external-persons`, summarizers) runs after core graph; Mistral token in `.env`.
 
+## QA triage
+
+After `just qa`, run `just qa-triage` to cluster warn/fail detail rows and write LLM root-cause reports under `data/qa/reports/` (fix-agent briefs — identify only, no patches). Use `just qa-triage -- --dry-run` to validate clustering without API calls.
+
 ## Source data reality
 
 Meeting reports are **handwritten by note-takers** — HTML structure, names, and labels are unreliable. Mistakes are normal.
@@ -58,3 +62,4 @@ Assume the reader lacks a mental model of this codebase. Before code-level detai
 - New nodes/edges: update `DATA_GRAPH.md` and wire through identity + graph builder.
 - **Data graph canvas:** keep `canvases/data-graph-overview.canvas.tsx` in sync with `DATA_GRAPH.md` whenever you add or change node types, edge types, implementation status, coverage counts, or pipeline stages. Update the inline `NODES` and `EDGES` catalogs (labels, domains, status, id keys, notes) and any summary stats shown in the canvas (built node/edge counts, coverage bar). The repo copy is canonical; if you use the live Cursor canvas beside chat, sync the same file there too.
 - Minimize scope for small fixes; for structural problems, refactor properly instead of patching around them.
+- When adding exceptions or regexes or other case-specific logic, always add and example reference to a document in comments
