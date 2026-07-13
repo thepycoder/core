@@ -1,4 +1,6 @@
-use crate::normalize::{apply_typo_fix, clean_raw_name, normalize_name, typo_corrections, PersonName};
+use crate::normalize::{
+    PersonName, apply_typo_fix, clean_raw_name, normalize_name, typo_corrections,
+};
 use crate::parquet_io::{read_all_rows, read_string_column};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -101,7 +103,11 @@ impl Resolver {
             if reversed != name.normalized_full() {
                 register(reversed, &person.person_id);
             }
-            if let Some(digits) = person.person_id.strip_prefix('O').or_else(|| person.person_id.strip_prefix('o')) {
+            if let Some(digits) = person
+                .person_id
+                .strip_prefix('O')
+                .or_else(|| person.person_id.strip_prefix('o'))
+            {
                 actr_lookup.insert(digits.to_string(), person.person_id.clone());
                 let trimmed = digits.trim_start_matches('0');
                 if !trimmed.is_empty() {

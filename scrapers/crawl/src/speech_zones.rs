@@ -10,8 +10,10 @@ static VOTE_APPENDIX_BUCKET: OnceLock<Regex> = OnceLock::new();
 
 pub fn hard_boundary_regex() -> &'static Regex {
     HARD_BOUNDARY.get_or_init(|| {
-        Regex::new(r"(?i)(?:Het incident is gesloten|L'incident est clos|DETAIL VAN DE NAAMSTEMMINGEN)")
-            .unwrap()
+        Regex::new(
+            r"(?i)(?:Het incident is gesloten|L'incident est clos|DETAIL VAN DE NAAMSTEMMINGEN)",
+        )
+        .unwrap()
     })
 }
 
@@ -29,9 +31,8 @@ pub fn stage_direction_regex() -> &'static Regex {
 }
 
 pub fn vote_appendix_bucket_regex() -> &'static Regex {
-    VOTE_APPENDIX_BUCKET.get_or_init(|| {
-        Regex::new(r"(?i)Naamstemming\s*-\s*Vote\s*nominatif\s*:\s*\d+").unwrap()
-    })
+    VOTE_APPENDIX_BUCKET
+        .get_or_init(|| Regex::new(r"(?i)Naamstemming\s*-\s*Vote\s*nominatif\s*:\s*\d+").unwrap())
 }
 
 pub fn is_vote_appendix_heading(text: &str) -> bool {

@@ -1,6 +1,6 @@
 use arrow::array::{ArrayRef, StringArray};
 use crawl::paths::{cache_dir, data_dir};
-use identity::normalize::{normalize_name, typo_corrections, PersonName};
+use identity::normalize::{PersonName, normalize_name, typo_corrections};
 use identity::parquet_io::{
     read_all_rows, read_optional_string_column, read_string_column, utf8_field, write_parquet,
 };
@@ -288,11 +288,7 @@ fn build_party_memberships(members: &[MemberRow]) -> Vec<PartyMembership> {
         });
     }
 
-    out.sort_by(|a, b| {
-        a.person_id
-            .cmp(&b.person_id)
-            .then(a.org_id.cmp(&b.org_id))
-    });
+    out.sort_by(|a, b| a.person_id.cmp(&b.person_id).then(a.org_id.cmp(&b.org_id)));
     out
 }
 
@@ -350,7 +346,11 @@ fn build_aliases(persons: &[PersonRecord]) -> Vec<AliasRecord> {
         }
     }
 
-    aliases.sort_by(|a, b| a.alias_norm.cmp(&b.alias_norm).then(a.person_id.cmp(&b.person_id)));
+    aliases.sort_by(|a, b| {
+        a.alias_norm
+            .cmp(&b.alias_norm)
+            .then(a.person_id.cmp(&b.person_id))
+    });
     aliases
 }
 
@@ -498,7 +498,9 @@ fn write_persons(path: &Path, persons: &[PersonRecord]) -> Result<(), Box<dyn Er
 
     macro_rules! col {
         ($f:expr) => {
-            Arc::new(StringArray::from(persons.iter().map($f).collect::<Vec<_>>())) as ArrayRef
+            Arc::new(StringArray::from(
+                persons.iter().map($f).collect::<Vec<_>>(),
+            )) as ArrayRef
         };
     }
 
@@ -565,10 +567,16 @@ fn write_aliases(path: &Path, aliases: &[AliasRecord]) -> Result<(), Box<dyn Err
 
     let columns = vec![
         Arc::new(StringArray::from(
-            aliases.iter().map(|a| a.alias_norm.clone()).collect::<Vec<_>>(),
+            aliases
+                .iter()
+                .map(|a| a.alias_norm.clone())
+                .collect::<Vec<_>>(),
         )) as ArrayRef,
         Arc::new(StringArray::from(
-            aliases.iter().map(|a| a.person_id.clone()).collect::<Vec<_>>(),
+            aliases
+                .iter()
+                .map(|a| a.person_id.clone())
+                .collect::<Vec<_>>(),
         )) as ArrayRef,
         Arc::new(StringArray::from(sources)) as ArrayRef,
         Arc::new(StringArray::from(confidence)) as ArrayRef,
@@ -577,10 +585,7 @@ fn write_aliases(path: &Path, aliases: &[AliasRecord]) -> Result<(), Box<dyn Err
     write_parquet(path, schema, columns)
 }
 
-fn write_commissions(
-    path: &Path,
-    rows: &[(String, CommissionRow)],
-) -> Result<(), Box<dyn Error>> {
+fn write_commissions(path: &Path, rows: &[(String, CommissionRow)]) -> Result<(), Box<dyn Error>> {
     let schema = arrow::datatypes::Schema::new(vec![
         utf8_field("commission_id", false),
         utf8_field("name", false),
@@ -597,7 +602,9 @@ fn write_commissions(
             rows.iter().map(|(_, r)| r.name.clone()).collect::<Vec<_>>(),
         )) as ArrayRef,
         Arc::new(StringArray::from(
-            rows.iter().map(|(_, r)| r.ctype.clone()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|(_, r)| r.ctype.clone())
+                .collect::<Vec<_>>(),
         )) as ArrayRef,
         Arc::new(StringArray::from(
             rows.iter()
@@ -686,10 +693,7 @@ fn write_memberships(
     write_parquet(path, schema, columns)
 }
 
-fn write_unresolved_persons(
-    path: &Path,
-    cases: &[UnresolvedCase],
-) -> Result<(), Box<dyn Error>> {
+fn write_unresolved_persons(path: &Path, cases: &[UnresolvedCase]) -> Result<(), Box<dyn Error>> {
     let schema = arrow::datatypes::Schema::new(vec![
         utf8_field("raw_name", false),
         utf8_field("typo_corrected", false),
@@ -738,10 +742,7 @@ fn write_unresolved_report(
 ) -> Result<(), Box<dyn Error>> {
     let mut out = String::new();
     out.push_str("# Identity unresolved report\n\n");
-    out.push_str(&format!(
-        "Cache root: `{}`\n\n",
-        cache_dir().display()
-    ));
+    out.push_str(&format!("Cache root: `{}`\n\n", cache_dir().display()));
 
     if !skipped.is_empty() {
         out.push_str("## Members skipped (empty person_id)\n\n");
@@ -842,10 +843,7 @@ fn print_summary(
 
     if total_commission_names > 0 && !unresolved.is_empty() {
         let rate = (resolved_commission as f64 / total_commission_names as f64) * 100.0;
-        println!(
-            "[identity] commission name resolution rate: {:.1}%",
-            rate
-        );
+        println!("[identity] commission name resolution rate: {:.1}%", rate);
     }
 
     let report_path = out_dir.join("unresolved_report.md");
@@ -882,7 +880,10 @@ fn print_summary(
     let mut names: Vec<_> = by_name.keys().cloned().collect();
     names.sort();
 
-    println!("\n[identity] unresolved commission member names ({} unique):", names.len());
+    println!(
+        "\n[identity] unresolved commission member names ({} unique):",
+        names.len()
+    );
     for name in names {
         let group = &by_name[&name];
         let first = group[0];

@@ -1,5 +1,6 @@
 let inspectorNode = null;
 const navStack = [];
+let reportContext = null;
 const linkSearchTimers = new Map();
 const PAGE_SIZE = 40;
 
@@ -7,12 +8,41 @@ function navStackSnapshot() {
   return navStack.map((item) => ({ type: item.type, id: item.id, label: item.label }));
 }
 
+function reportContextSnapshot() {
+  if (!reportContext) return null;
+  return {
+    ...reportContext,
+    entityTypes: [...(reportContext.entityTypes || [])],
+    coverageKinds: [...(reportContext.coverageKinds || [])],
+    spanRoles: [...(reportContext.spanRoles || [])],
+  };
+}
+
+function addReportParams(params, context = reportContext) {
+  if (!context) return params;
+  params.set("report", context.meetingId);
+  params.set("session_id", context.sessionId);
+  params.set("meeting_kind", context.meetingKind);
+  if (context.blockIndex != null) params.set("block", String(context.blockIndex));
+  for (const value of context.entityTypes || []) params.append("entity_type", value);
+  for (const value of context.coverageKinds || []) params.append("coverage_kind", value);
+  for (const value of context.spanRoles || []) params.append("span_role", value);
+  return params;
+}
+
 function viewUrlForItem(item) {
   if (!item) return window.location.pathname;
-  if (item.type === "Unresolved") {
-    return `?${new URLSearchParams({ unresolved: item.id })}`;
+  if (item.type === "Report") {
+    return `?${addReportParams(new URLSearchParams()).toString()}`;
   }
-  return `?${new URLSearchParams({ type: item.type, id: item.id })}`;
+  if (item.type === "Unresolved") {
+    const params = new URLSearchParams({ unresolved: item.id });
+    addReportParams(params);
+    return `?${params}`;
+  }
+  const params = new URLSearchParams({ type: item.type, id: item.id });
+  addReportParams(params);
+  return `?${params}`;
 }
 
 function currentViewUrl() {
@@ -20,7 +50,11 @@ function currentViewUrl() {
 }
 
 function writeHistory() {
-  history.pushState({ navStack: navStackSnapshot() }, "", currentViewUrl());
+  history.pushState(
+    { navStack: navStackSnapshot(), reportContext: reportContextSnapshot() },
+    "",
+    currentViewUrl()
+  );
 }
 
 function seedHomeHistoryEntry() {
@@ -98,8 +132,16 @@ function navigateToIndex(index) {
   navStack.length = index + 1;
   renderBreadcrumbs();
   const item = navStack[index];
-  history.pushState({ navStack: navStackSnapshot() }, "", viewUrlForItem(item));
-  openNode(item.type, item.id, { resetNav: false, fromHistory: true });
+  history.pushState(
+    { navStack: navStackSnapshot(), reportContext: reportContextSnapshot() },
+    "",
+    viewUrlForItem(item)
+  );
+  if (item.type === "Report") {
+    openReportContext(reportContext, { fromHistory: true });
+  } else {
+    openNode(item.type, item.id, { resetNav: false, fromHistory: true });
+  }
 }
 
 function renderBreadcrumbs() {
@@ -189,6 +231,15 @@ async function openIssueSample(issue, sample) {
   }
   if (sample.action === "artifact" && sample.artifact_id) {
     await showArtifactIssue(sample);
+    return;
+  }
+  if (sample.action === "report" && sample.meeting_id && sample.source_block) {
+    await openReportAtBlock(
+      sample.meeting_id,
+      sample.source_block,
+      sample.session_id || "56",
+      sample.meeting_kind || "plenary"
+    );
     return;
   }
   showIssueContext(issue, sample);
@@ -332,7 +383,8 @@ async function showArtifactIssue(sample) {
   section.className = "detail-section preview-section";
   section.innerHTML = `
     <dl class="preview-fields">
-      <dt>Parser version</dt><dd>${escapeHtml(detail.parser_version || "—")}</dd>
+      <dt>Block parser</dt><dd>${escapeHtml(detail.block_parser_version || "—")}</dd>
+      <dt>Extractor</dt><dd>${escapeHtml(detail.extractor_version || "—")}</dd>
       <dt>Scraped at</dt><dd>${escapeHtml(detail.scraped_at || "—")}</dd>
     </dl>
   `;
@@ -425,6 +477,8 @@ async function openNode(type, id, options = {}) {
   if (resetNav) {
     navStack.length = 0;
   }
+  document.getElementById("report-section")?.classList.remove("fullscreen");
+  document.getElementById("report-close")?.classList.add("hidden");
   const detail = await api(`/api/node/${encodeURIComponent(type)}/${id}`);
   pushNav(type, id, detail.label);
   inspectorNode = { type, id };
@@ -470,12 +524,44 @@ function renderNodeDetail(detail) {
     el.appendChild(renderVoteReconciliation(detail.vote_reconciliation));
   }
 
-  if (detail.utterances?.length) {
+  if (detail.utterance_groups?.length) {
+    el.appendChild(renderUtteranceGroups(detail.utterance_groups, detail.utterance_section_title));
+  } else if (detail.utterances?.length) {
     el.appendChild(renderUtterances(detail.utterances, detail.utterance_section_title));
+  }
+
+  if (detail.source_evidence?.length) {
+    el.appendChild(renderSourceEvidence(detail.source_evidence));
   }
 
   appendLinkSection(el, "Outgoing links", "out", detail.out_edges);
   appendLinkSection(el, "Incoming links", "in", detail.in_edges);
+}
+
+function renderSourceEvidence(rows) {
+  const section = document.createElement("div");
+  section.className = "detail-section source-evidence";
+  const heading = document.createElement("h3");
+  heading.textContent = "Report source evidence";
+  section.appendChild(heading);
+  for (const span of rows) {
+    const card = renderSpanDetail(span);
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "link-action-btn";
+    open.textContent = `Open report at block ${span.block_start}`;
+    open.addEventListener("click", () =>
+      openReportAtBlock(
+        span.meeting_id,
+        span.block_start,
+        span.session_id,
+        span.meeting_kind
+      )
+    );
+    card.appendChild(open);
+    section.appendChild(card);
+  }
+  return section;
 }
 
 function renderEntityPreview(preview) {
@@ -699,36 +785,79 @@ function appendUtteranceActions(block, u) {
   }
 }
 
+function renderUtteranceBlock(u) {
+  const block = document.createElement("div");
+  block.className = "utterance-block";
+  const turnPrefix = u.turn_number ? `${u.turn_number} · ` : "";
+  const roleSuffix = u.speaker_role ? ` (${u.speaker_role})` : "";
+  const speaker = `${u.raw_speaker || "?"}${roleSuffix}`;
+  block.innerHTML = `
+    <div class="speaker">${escapeHtml(turnPrefix + speaker)}</div>
+    <div class="text">${escapeHtml(truncate(u.text, 1500))}</div>
+  `;
+  if (u.text && u.text.length > 1500) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-action-btn show-more-btn";
+    btn.textContent = "Show full utterance";
+    const textEl = block.querySelector(".text");
+    btn.addEventListener("click", () => {
+      textEl.textContent = u.text;
+      btn.remove();
+    });
+    block.appendChild(btn);
+  }
+  appendUtteranceActions(block, u);
+  return block;
+}
+
 function renderUtterances(utterances, sectionTitle) {
   const section = document.createElement("div");
   section.className = "detail-section";
   const title = sectionTitle || "Discussion";
   section.innerHTML = `<h3>${escapeHtml(title)} (${utterances.length} utterances)</h3>`;
   for (const u of utterances) {
-    const block = document.createElement("div");
-    block.className = "utterance-block";
-    const turnPrefix = u.turn_number ? `${u.turn_number} · ` : "";
-    const roleSuffix = u.speaker_role ? ` (${u.speaker_role})` : "";
-    const speaker = `${u.raw_speaker || "?"}${roleSuffix}`;
-    block.innerHTML = `
-      <div class="speaker">${escapeHtml(turnPrefix + speaker)}</div>
-      <div class="text">${escapeHtml(truncate(u.text, 1500))}</div>
-    `;
-    if (u.text && u.text.length > 1500) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "link-action-btn show-more-btn";
-      btn.textContent = "Show full utterance";
-      const textEl = block.querySelector(".text");
-      btn.addEventListener("click", () => {
-        textEl.textContent = u.text;
-        btn.remove();
-      });
-      block.appendChild(btn);
-    }
-    appendUtteranceActions(block, u);
-    section.appendChild(block);
+    section.appendChild(renderUtteranceBlock(u));
   }
+  return section;
+}
+
+function renderUtteranceGroups(groups, sectionTitle) {
+  const section = document.createElement("div");
+  section.className = "detail-section";
+  const total = groups.reduce((sum, group) => sum + (group.utterances?.length || 0), 0);
+  const title = sectionTitle || "Discussion";
+  section.innerHTML = `<h3>${escapeHtml(title)} (${total} utterances, ${groups.length} agenda items)</h3>`;
+
+  for (const group of groups) {
+    const utterances = group.utterances || [];
+    if (!utterances.length) continue;
+
+    const agendaSection = document.createElement("details");
+    agendaSection.className = "agenda-group";
+    agendaSection.open = groups.length <= 6;
+
+    const agendaLabel = group.agenda_id
+      ? `${group.agenda_id} · ${group.title}`
+      : group.title;
+    const kindSuffix = group.item_kind ? ` · ${group.item_kind.replaceAll("_", " ")}` : "";
+    const summary = document.createElement("summary");
+    summary.className = "agenda-group-header";
+    summary.innerHTML = `
+      <span class="agenda-group-title">${escapeHtml(agendaLabel)}</span>
+      <span class="agenda-group-meta">${escapeHtml(`${utterances.length} utterances${kindSuffix}`)}</span>
+    `;
+    agendaSection.appendChild(summary);
+
+    const body = document.createElement("div");
+    body.className = "agenda-group-body";
+    for (const u of utterances) {
+      body.appendChild(renderUtteranceBlock(u));
+    }
+    agendaSection.appendChild(body);
+    section.appendChild(agendaSection);
+  }
+
   return section;
 }
 
@@ -808,7 +937,7 @@ function createLinkRow(link) {
   btn.innerHTML = `
     <span class="link-drill-type">${escapeHtml(link.neighbor_type)} · ${escapeHtml(link.edge_type)}${edgeRoleMarkup(link.role)}</span>
     <span class="link-drill-label">${escapeHtml(label)}</span>
-    <span class="link-drill-id muted">${escapeHtml(link.neighbor_id)}${link.confidence !== "exact" ? ` · ${escapeHtml(link.confidence)}` : ""}</span>
+    <span class="link-drill-id muted">${escapeHtml(link.neighbor_id)}${link.confidence < 1 ? ` · ${escapeHtml(link.confidence)}` : ""}</span>
   `;
   btn.addEventListener("click", () => drillTo(link.neighbor_type, link.neighbor_id));
   row.appendChild(btn);
@@ -1073,12 +1202,15 @@ document.getElementById("search-input").addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("popstate", (event) => {
+  reportContext = event.state?.reportContext || null;
   if (event.state?.navStack?.length) {
     navStack.length = 0;
     navStack.push(...event.state.navStack);
     renderBreadcrumbs();
     const item = navStack[navStack.length - 1];
-    if (item.type === "Unresolved") {
+    if (item.type === "Report") {
+      openReportContext(reportContext, { fromHistory: true });
+    } else if (item.type === "Unresolved") {
       showUnresolved(item.id, { fromHistory: true });
     } else {
       openNode(item.type, item.id, { resetNav: false, fromHistory: true });
@@ -1095,9 +1227,45 @@ async function initFromUrl() {
   const type = params.get("type");
   const id = params.get("id");
   const unresolved = params.get("unresolved");
+  const report = params.get("report");
+  const block = params.get("block");
+  if (report) {
+    reportContext = {
+      sessionId: params.get("session_id") || "56",
+      meetingKind: params.get("meeting_kind") || "plenary",
+      meetingId: report,
+      blockIndex: block == null ? null : Number(block),
+      entityTypes: params.getAll("entity_type"),
+      coverageKinds: params.getAll("coverage_kind"),
+      spanRoles: params.getAll("span_role"),
+    };
+    applyReportContextToControls(reportContext);
+  }
   if (type && id) {
     seedHomeHistoryEntry();
-    await openNode(type, id, { resetNav: true });
+    if (reportContext) {
+      pushNav(
+        "Report",
+        `${reportContext.sessionId}/${reportContext.meetingKind}/${reportContext.meetingId}`,
+        `${reportContext.meetingKind} ${reportContext.meetingId}`
+      );
+    }
+    await openNode(type, id, { resetNav: !reportContext });
+    return;
+  }
+  if (report) {
+    navStack.length = 0;
+    pushNav(
+      "Report",
+      `${reportContext.sessionId}/${reportContext.meetingKind}/${report}`,
+      `${reportContext.meetingKind} ${report}`
+    );
+    history.replaceState(
+      { navStack: navStackSnapshot(), reportContext: reportContextSnapshot() },
+      "",
+      currentViewUrl()
+    );
+    await openReportContext(reportContext, { fromHistory: true });
     return;
   }
   if (unresolved) {
@@ -1106,11 +1274,382 @@ async function initFromUrl() {
   }
 }
 
+async function loadReportMeetings() {
+  const select = document.getElementById("report-meeting");
+  if (!select) return;
+  const sessionId = document.getElementById("report-session")?.value.trim() || "56";
+  const meetingKind = document.getElementById("report-kind")?.value || "plenary";
+  const query = new URLSearchParams({
+    session_id: sessionId,
+    meeting_kind: meetingKind,
+  });
+  const previous = reportContext?.meetingId || select.value;
+  const data = await api(`/api/reports/meetings?${query}`);
+  select.innerHTML = "";
+  for (const meeting of data.meetings || []) {
+    const opt = document.createElement("option");
+    opt.value = meeting.meeting_id;
+    opt.textContent = `${meeting.meeting_kind} ${meeting.meeting_id}`;
+    select.appendChild(opt);
+  }
+  if (previous && [...select.options].some((option) => option.value === String(previous))) {
+    select.value = String(previous);
+  }
+}
+
+function renderStructuredTable(structured) {
+  const rows = structured?.table_rows;
+  if (!Array.isArray(rows) || !rows.length) return "";
+  const body = rows
+    .map((row) => {
+      const cells = (row.cells || [])
+        .map((cell) => {
+          const colspan = Math.max(1, Math.min(20, Number(cell.colspan) || 1));
+          const rowspan = Math.max(1, Math.min(100, Number(cell.rowspan) || 1));
+          const tag = cell.is_header || row.is_header ? "th" : "td";
+          return `<${tag} colspan="${colspan}" rowspan="${rowspan}">${escapeHtml(cell.text || "")}</${tag}>`;
+        })
+        .join("");
+      return `<tr>${cells}</tr>`;
+    })
+    .join("");
+  return `<table class="report-table">${body}</table>`;
+}
+
+function selectedValues(id) {
+  const select = document.getElementById(id);
+  return select ? [...select.selectedOptions].map((option) => option.value).filter(Boolean) : [];
+}
+
+function setSelectedValues(id, values) {
+  const wanted = new Set(values || []);
+  const select = document.getElementById(id);
+  if (!select) return;
+  for (const option of select.options) option.selected = wanted.has(option.value);
+}
+
+function reportContextFromControls(blockIndex = null) {
+  return {
+    sessionId: document.getElementById("report-session")?.value.trim() || "56",
+    meetingKind: document.getElementById("report-kind")?.value || "plenary",
+    meetingId: document.getElementById("report-meeting")?.value || "",
+    blockIndex,
+    entityTypes: selectedValues("report-entity-filter"),
+    coverageKinds: selectedValues("report-coverage-filter"),
+    spanRoles: (document.getElementById("report-role-filter")?.value || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  };
+}
+
+function applyReportContextToControls(context) {
+  if (!context) return;
+  const session = document.getElementById("report-session");
+  const kind = document.getElementById("report-kind");
+  const meeting = document.getElementById("report-meeting");
+  if (session) session.value = context.sessionId;
+  if (kind) kind.value = context.meetingKind;
+  if (meeting) meeting.value = context.meetingId;
+  setSelectedValues("report-entity-filter", context.entityTypes);
+  setSelectedValues("report-coverage-filter", context.coverageKinds);
+  const role = document.getElementById("report-role-filter");
+  if (role) role.value = (context.spanRoles || []).join(", ");
+}
+
+function updateReportUrl(meetingId, blockIndex) {
+  reportContext = reportContextFromControls(blockIndex);
+  reportContext.meetingId = meetingId || reportContext.meetingId;
+  const top = navStack[navStack.length - 1];
+  if (!top || top.type !== "Report") {
+    navStack.length = 0;
+    pushNav(
+      "Report",
+      `${reportContext.sessionId}/${reportContext.meetingKind}/${reportContext.meetingId}`,
+      `${reportContext.meetingKind} ${reportContext.meetingId}`
+    );
+  }
+  const next = `${window.location.pathname}?${addReportParams(new URLSearchParams()).toString()}`;
+  window.history.replaceState(
+    { navStack: navStackSnapshot(), reportContext: reportContextSnapshot() },
+    "",
+    next
+  );
+}
+
+function appendMetadataRow(container, label, value) {
+  if (value == null || value === "") return;
+  const row = document.createElement("div");
+  const strong = document.createElement("strong");
+  strong.textContent = `${label}: `;
+  row.append(strong, document.createTextNode(String(value)));
+  container.appendChild(row);
+}
+
+function renderSpanDetail(span) {
+  const card = document.createElement("div");
+  card.className = `span-detail ${span.validation_status || "valid"}`;
+  appendMetadataRow(card, "Entity", `${span.entity_type} ${span.entity_id}`);
+  appendMetadataRow(card, "Role", span.span_role);
+  appendMetadataRow(card, "Coverage", span.coverage_kind);
+  appendMetadataRow(card, "Fields", span.field_names);
+  appendMetadataRow(card, "Blocks", `${span.block_start}–${span.block_end}`);
+  appendMetadataRow(card, "Confidence", span.confidence);
+  appendMetadataRow(card, "Extractor", span.extractor);
+  appendMetadataRow(card, "Extractor version", span.extractor_version);
+  appendMetadataRow(card, "Parser version", span.block_parser_version);
+  appendMetadataRow(card, "Status", span.validation_status);
+  appendMetadataRow(card, "Reason", span.unresolved_reason);
+
+  const actions = document.createElement("div");
+  actions.className = "span-actions";
+  const graph = document.createElement("button");
+  graph.type = "button";
+  graph.className = "link-action-btn";
+  graph.textContent = "Open graph node";
+  graph.addEventListener("click", () =>
+    openNode(span.entity_type, span.entity_id, { resetNav: false })
+  );
+  actions.appendChild(graph);
+  if (span.source_url) {
+    const source = document.createElement("a");
+    source.href = span.source_url;
+    source.target = "_blank";
+    source.rel = "noopener";
+    source.textContent = "Source";
+    actions.appendChild(source);
+  }
+  if (span.cache_path) {
+    const cache = document.createElement("a");
+    cache.href = cacheUrl(span.cache_path);
+    cache.target = "_blank";
+    cache.rel = "noopener";
+    cache.textContent = "Cached report";
+    actions.appendChild(cache);
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+function showReportBlockDetail(block) {
+  const panel = document.getElementById("report-block-detail");
+  if (!panel) return;
+  if (!block) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  panel.classList.remove("hidden");
+  panel.innerHTML = "";
+  const heading = document.createElement("strong");
+  heading.textContent = `Block #${block.block_index} (${block.word_count || 0} words)`;
+  panel.appendChild(heading);
+  appendMetadataRow(panel, "Artifact", block.artifact_id);
+  appendMetadataRow(panel, "Content hash", block.content_hash);
+  appendMetadataRow(panel, "Source hash", block.source_content_hash);
+  appendMetadataRow(panel, "Parser version", block.block_parser_version);
+  appendMetadataRow(panel, "Block extractor", block.extractor_version);
+  if (!block.spans?.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No spans overlap this block.";
+    panel.appendChild(empty);
+  }
+  for (const span of block.spans || []) panel.appendChild(renderSpanDetail(span));
+}
+
+async function loadReportCoverage(focusBlock) {
+  const select = document.getElementById("report-meeting");
+  const container = document.getElementById("report-blocks");
+  const stats = document.getElementById("report-coverage-stats");
+  const diagnostics = document.getElementById("report-diagnostics");
+  if (!select || !container || !stats || !diagnostics) return;
+  const meetingId = select.value;
+  if (!meetingId) {
+    stats.textContent = "No meeting is available for this session and kind.";
+    diagnostics.innerHTML = "";
+    showReportBlockDetail(null);
+    container.innerHTML = "";
+    return;
+  }
+  const context = reportContextFromControls(focusBlock ?? reportContext?.blockIndex ?? null);
+  const params = new URLSearchParams();
+  for (const value of context.entityTypes) params.append("entity_type", value);
+  for (const value of context.coverageKinds) params.append("coverage_kind", value);
+  for (const value of context.spanRoles) params.append("span_role", value);
+  const query = params.toString();
+  stats.textContent = "Loading report coverage…";
+  diagnostics.innerHTML = "";
+  container.innerHTML = "";
+  showReportBlockDetail(null);
+  let data;
+  try {
+    data = await api(
+      `/api/reports/${encodeURIComponent(context.sessionId)}/${encodeURIComponent(context.meetingKind)}/${encodeURIComponent(meetingId)}${query ? `?${query}` : ""}`
+    );
+  } catch (err) {
+    stats.textContent = `Could not load report: ${err.message}`;
+    diagnostics.innerHTML = "";
+    container.innerHTML = "<p class='report-state error'>Report data could not be loaded.</p>";
+    showReportBlockDetail(null);
+    return;
+  }
+  const ratio = Math.round((data.coverage?.ratio || 0) * 100);
+  stats.textContent = `Extraction coverage: ${data.coverage?.covered_words || 0}/${data.coverage?.total_words || 0} words (${ratio}%) · ${data.coverage?.valid_span_count || 0} valid / ${data.coverage?.invalid_span_count || 0} invalid spans`;
+  for (const item of data.diagnostics || []) {
+    const note = document.createElement("div");
+    note.className = `report-diagnostic ${item.state}`;
+    note.textContent = `${item.code}: ${item.message}${item.count > 1 ? ` (${item.count})` : ""}`;
+    diagnostics.appendChild(note);
+  }
+  if (!data.blocks?.length) {
+    const missing = document.createElement("p");
+    missing.className = `report-state ${data.derived_data_status === "missing" ? "missing" : "empty"}`;
+    missing.textContent =
+      data.derived_data_status === "missing"
+        ? "Derived report blocks are missing for this report."
+        : "This report contains no blocks.";
+    container.appendChild(missing);
+    showReportBlockDetail(null);
+    updateReportUrl(meetingId, null);
+    return;
+  }
+  const selectedBlock = focusBlock ?? context.blockIndex;
+  updateReportUrl(meetingId, selectedBlock);
+  container.innerHTML = "";
+  for (const block of data.blocks) {
+    const article = document.createElement("article");
+    const hasExtraction = block.has_extraction;
+    article.className = "report-block";
+    if (hasExtraction) article.classList.add("covered");
+    else if (block.has_scope) article.classList.add("scope-only");
+    else article.classList.add("uncovered");
+    if (block.has_invalid) article.classList.add("invalid");
+    if (block.has_stale) article.classList.add("stale");
+    if (selectedBlock != null && Number(block.block_index) === Number(selectedBlock)) {
+      article.classList.add("selected");
+      showReportBlockDetail(block);
+    }
+    const header = document.createElement("header");
+    const label = document.createElement("strong");
+    label.textContent = `${block.block_type} #${block.block_index}`;
+    header.appendChild(label);
+    for (const span of block.spans || []) {
+      const badge = document.createElement("span");
+      badge.className = "span-badge";
+      badge.classList.add(span.coverage_kind === "scope" ? "scope" : "extraction");
+      if (span.validation_status !== "valid") {
+        badge.classList.add(span.unresolved_reason.startsWith("stale_") ? "stale" : "invalid");
+      }
+      badge.textContent = `${span.entity_type}:${span.span_role}`;
+      badge.title = `${span.coverage_kind} · ${span.field_names || "no fields"} · ${span.extractor || "unknown extractor"} ${span.extractor_version || ""}`;
+      badge.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openNode(span.entity_type, span.entity_id, { resetNav: false });
+      });
+      header.appendChild(badge);
+    }
+    article.appendChild(header);
+    if (block.block_type === "table" && block.structured) {
+      article.insertAdjacentHTML("beforeend", renderStructuredTable(block.structured));
+    } else {
+      const body = document.createElement(
+        block.block_type === "h1" ? "h3" : block.block_type === "h2" ? "h4" : "p"
+      );
+      body.textContent = block.text || "";
+      article.appendChild(body);
+    }
+    article.addEventListener("click", () => {
+      container.querySelectorAll(".report-block.selected").forEach((el) => el.classList.remove("selected"));
+      article.classList.add("selected");
+      showReportBlockDetail(block);
+      updateReportUrl(meetingId, block.block_index);
+    });
+    container.appendChild(article);
+  }
+  if (selectedBlock != null) {
+    const selected = container.querySelector(".report-block.selected");
+    selected?.scrollIntoView({ block: "center" });
+  }
+}
+
+async function openReportContext(context, options = {}) {
+  if (!context) return;
+  const { fromHistory = false } = options;
+  reportContext = { ...context };
+  applyReportContextToControls(reportContext);
+  await loadReportMeetings();
+  applyReportContextToControls(reportContext);
+  document.getElementById("report-section")?.classList.add("fullscreen");
+  document.getElementById("report-close")?.classList.remove("hidden");
+  if (!fromHistory) writeHistory();
+  await loadReportCoverage(reportContext.blockIndex);
+}
+
+async function openReportAtBlock(
+  meetingId,
+  blockIndex,
+  sessionId = "56",
+  meetingKind = "plenary"
+) {
+  const current = reportContextFromControls(Number(blockIndex));
+  current.sessionId = String(sessionId);
+  current.meetingKind = meetingKind;
+  current.meetingId = String(meetingId);
+  current.blockIndex = Number(blockIndex);
+  reportContext = current;
+  pushNav(
+    "Report",
+    `${current.sessionId}/${current.meetingKind}/${current.meetingId}`,
+    `${current.meetingKind} ${current.meetingId}`
+  );
+  await openReportContext(current);
+}
+
+function bindReportControls() {
+  const reload = () => loadReportCoverage().catch((err) => {
+    document.getElementById("report-coverage-stats").textContent = `Error: ${err.message}`;
+  });
+  document.getElementById("report-meeting")?.addEventListener("change", reload);
+  document.getElementById("report-entity-filter")?.addEventListener("change", reload);
+  document.getElementById("report-coverage-filter")?.addEventListener("change", reload);
+  document.getElementById("report-role-filter")?.addEventListener("change", reload);
+  const reloadMeetings = async () => {
+    reportContext = null;
+    await loadReportMeetings();
+    await loadReportCoverage();
+  };
+  document.getElementById("report-session")?.addEventListener("change", () => {
+    reloadMeetings().catch(console.error);
+  });
+  document.getElementById("report-kind")?.addEventListener("change", () => {
+    reloadMeetings().catch(console.error);
+  });
+  document.getElementById("report-clear-filters")?.addEventListener("click", () => {
+    setSelectedValues("report-entity-filter", []);
+    setSelectedValues("report-coverage-filter", []);
+    document.getElementById("report-role-filter").value = "";
+    reload();
+  });
+  document.getElementById("report-close")?.addEventListener("click", () => {
+    if (navStack.length > 1) navigateToIndex(navStack.length - 2);
+    else {
+      document.getElementById("report-section")?.classList.remove("fullscreen");
+      document.getElementById("report-close")?.classList.add("hidden");
+    }
+  });
+}
+
 async function init() {
   try {
     await loadHealth();
     await loadIssues();
+    bindReportControls();
+    await loadReportMeetings();
+    const hasInitialView = new URLSearchParams(window.location.search).toString() !== "";
     await initFromUrl();
+    const select = document.getElementById("report-meeting");
+    if (!hasInitialView && select?.value) await loadReportCoverage();
   } catch (err) {
     document.getElementById("health-status").textContent = `Error: ${err.message}`;
   }

@@ -1,22 +1,46 @@
-from app.config import get_settings
+import re
+
+import duckdb
+
 from app.models import (
     EdgeDetailResponse,
     EdgeGroup,
     NodeDetailResponse,
     NodeLink,
     NodeLinksResponse,
+    SourceEvidence,
     VoteBreakdown,
     VoteCastMember,
     VotePositionGroup,
 )
+from app.models import UtteranceGroup
 from app.queries.discussion_threads import (
+    fetch_meeting_agenda_items,
     fetch_meeting_thread,
     fetch_proceeding_thread,
     fetch_question_thread,
+    group_utterances_by_agenda,
 )
 from app.queries.entity_preview import fetch_entity_preview
+from app.queries.vote_helpers import (
+    fetch_headline_tallies,
+    fetch_result_member_names,
+    resolve_result_id,
+)
 
 _SPEAKER_NODE_TYPES = frozenset({"Person", "ExternalPerson"})
+_REPORT_EVIDENCE_TYPES = frozenset(
+    {
+        "Vote",
+        "VoteResult",
+        "Question",
+        "Utterance",
+        "Hearing",
+        "Interpellation",
+        "Proposition",
+        "Notice",
+    }
+)
 
 
 def _utterance_text_join(direction: str) -> str:
@@ -41,9 +65,12 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
 
     in_edges = _edge_groups(conn, node_type, node_id, "in")
     out_edges = _edge_groups(conn, node_type, node_id, "out")
-    utterances, utterance_section_title = _fetch_utterances(conn, node_type, node_id)
+    utterances, utterance_groups, utterance_section_title = _fetch_utterances(
+        conn, node_type, node_id
+    )
     vote_reconciliation = _fetch_vote_reconciliation(conn, node_type, node_id)
     vote_breakdown = _fetch_vote_breakdown(conn, node_type, node_id)
+    source_evidence = _fetch_source_evidence(conn, node_type, node_id)
     preview = fetch_entity_preview(conn, node_type, node_id)
 
     return NodeDetailResponse(
@@ -56,34 +83,94 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
         out_edges=out_edges,
         preview=preview,
         utterances=utterances,
+        utterance_groups=utterance_groups,
         utterance_section_title=utterance_section_title,
         vote_reconciliation=vote_reconciliation,
         vote_breakdown=vote_breakdown,
+        source_evidence=source_evidence,
     )
 
 
-def _fetch_utterances(conn, node_type: str, node_id: str) -> tuple[list[dict], str | None]:
+def _fetch_source_evidence(conn, node_type: str, node_id: str) -> list[SourceEvidence]:
+    if node_type not in _REPORT_EVIDENCE_TYPES:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT span_id, session_id, meeting_id, entity_type, entity_id, span_role,
+                   block_start, block_end, coverage_kind, field_names, confidence,
+                   extractor, block_parser_version, extractor_version, source_url,
+                   cache_path, validation_status, unresolved_reason
+            FROM source_spans
+            WHERE entity_type = ? AND entity_id = ?
+            ORDER BY block_start, block_end, span_role, span_id
+            """,
+            [node_type, node_id],
+        ).fetchall()
+    except duckdb.Error:
+        return []
+
+    evidence: list[SourceEvidence] = []
+    for row in rows:
+        kind_match = re.search(r"/meetings/([^/]+)/", row[15] or "")
+        evidence.append(
+            SourceEvidence(
+                span_id=row[0],
+                session_id=str(row[1]),
+                meeting_kind=kind_match.group(1) if kind_match else "plenary",
+                meeting_id=str(row[2]),
+                entity_type=row[3],
+                entity_id=row[4],
+                span_role=row[5],
+                block_start=int(row[6]),
+                block_end=int(row[7]),
+                coverage_kind=row[8],
+                field_names=row[9] or "",
+                confidence=float(row[10]) if row[10] is not None else 0.0,
+                extractor=row[11] or "",
+                block_parser_version=row[12] or "",
+                extractor_version=row[13] or "",
+                source_url=row[14] or "",
+                cache_path=row[15] or "",
+                validation_status=row[16] or "valid",
+                unresolved_reason=row[17] or "",
+            )
+        )
+    return evidence
+
+
+def _fetch_utterances(
+    conn, node_type: str, node_id: str
+) -> tuple[list[dict], list[UtteranceGroup], str | None]:
     if node_type == "Question":
         rows = fetch_question_thread(conn, node_id)
-        return rows, "Question discussion"
+        return rows, [], "Question discussion"
     if node_type == "Hearing":
         rows = fetch_proceeding_thread(conn, "hearing", node_id)
-        return rows, "Hearing discussion"
+        return rows, [], "Hearing discussion"
     if node_type == "Interpellation":
         rows = fetch_proceeding_thread(conn, "interpellation", node_id)
-        return rows, "Interpellation discussion"
+        return rows, [], "Interpellation discussion"
     if node_type == "Meeting":
         parts = node_id.split("_", 2)
         if len(parts) != 3:
-            return [], None
-        meeting_kind, _session_id, meeting_id = parts
+            return [], [], None
+        meeting_kind, session_id, meeting_id = parts
         rows = fetch_meeting_thread(conn, meeting_kind, meeting_id)
-        return rows, "Meeting speech"
-    return [], None
+        agenda_items = fetch_meeting_agenda_items(
+            conn, meeting_kind, meeting_id, session_id=session_id
+        )
+        grouped = group_utterances_by_agenda(rows, agenda_items)
+        utterance_groups = [
+            UtteranceGroup(**group) for group in grouped if group["utterances"]
+        ]
+        return [], utterance_groups, "Meeting speech"
+    return [], [], None
 
 
 def _fetch_vote_reconciliation(conn, node_type: str, node_id: str) -> dict | None:
-    if node_type != "Vote":
+    result_id = resolve_result_id(conn, node_type, node_id)
+    if not result_id:
         return None
     row = conn.execute(
         """
@@ -91,10 +178,10 @@ def _fetch_vote_reconciliation(conn, node_type: str, node_id: str) -> dict | Non
                members_yes_count, members_no_count, members_abstain_count,
                reconciled, source_url, cache_path
         FROM vote_reconciliation
-        WHERE vote_id = ?
+        WHERE result_id = ?
         LIMIT 1
         """,
-        [node_id],
+        [result_id],
     ).fetchone()
     if not row:
         return None
@@ -109,12 +196,6 @@ def _fetch_vote_reconciliation(conn, node_type: str, node_id: str) -> dict | Non
         "source_url": row[7],
         "cache_path": row[8],
     }
-
-
-def _split_csv(value: str | None) -> list[str]:
-    if not value or not value.strip():
-        return []
-    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def _person_label_lookup(conn) -> dict[str, tuple[str, str]]:
@@ -143,29 +224,12 @@ def _member_from_raw_name(
 
 
 def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown | None:
-    if node_type != "Vote":
+    result_id = resolve_result_id(conn, node_type, node_id)
+    if not result_id:
         return None
 
-    settings = get_settings()
-    votes_path = settings.parquet_path("sessions/56/plenary/votes.parquet")
-    headline = {"yes": "", "no": "", "abstain": ""}
-    raw_lists: dict[str, list[str]] = {"yes": [], "no": [], "abstain": []}
-
-    if votes_path.exists():
-        row = conn.execute(
-            f"""
-            SELECT yes, no, abstain, members_yes, members_no, members_abstain
-            FROM read_parquet('{votes_path.as_posix()}')
-            WHERE vote_id = ?
-            LIMIT 1
-            """,
-            [node_id],
-        ).fetchone()
-        if row:
-            headline["yes"], headline["no"], headline["abstain"] = row[0], row[1], row[2]
-            raw_lists["yes"] = _split_csv(row[3])
-            raw_lists["no"] = _split_csv(row[4])
-            raw_lists["abstain"] = _split_csv(row[5])
+    headline = fetch_headline_tallies(conn, result_id)
+    raw_lists = fetch_result_member_names(conn, result_id)
 
     rows = conn.execute(
         """
@@ -177,10 +241,10 @@ def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown |
             vc.confidence
         FROM vote_casts vc
         LEFT JOIN nodes n ON n.node_type = 'Person' AND n.node_id = vc.person_id
-        WHERE vc.vote_id = ?
+        WHERE vc.result_id = ?
         ORDER BY vc.position, label, vc.raw_name
         """,
-        [node_id],
+        [result_id],
     ).fetchall()
 
     groups_by_position: dict[str, list[VoteCastMember]] = {
@@ -198,7 +262,7 @@ def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown |
                 person_id=person_id or None,
                 label=label or raw_name,
                 raw_name=raw_name,
-                confidence=confidence or "exact",
+                confidence=confidence if confidence is not None else 1.0,
             )
         )
         if raw_name:
@@ -222,7 +286,7 @@ def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown |
 
     def _has_headline(position: str) -> bool:
         value = headline[position]
-        return bool(value and value != "0")
+        return value > 0
 
     groups = [
         VotePositionGroup(
@@ -240,9 +304,7 @@ def _fetch_vote_breakdown(conn, node_type: str, node_id: str) -> VoteBreakdown |
     return VoteBreakdown(groups=groups)
 
 
-def _edge_groups(
-    conn, node_type: str, node_id: str, direction: str
-) -> list[EdgeGroup]:
+def _edge_groups(conn, node_type: str, node_id: str, direction: str) -> list[EdgeGroup]:
     if direction == "out":
         count_sql = """
             SELECT edge_type, count(*) AS n
@@ -297,15 +359,15 @@ def _edge_groups(
     for etype, total in counts:
         rows = conn.execute(sample_sql, [node_type, node_id, etype]).fetchall()
         samples = [_row_to_sample(row) for row in rows]
-        groups.append(
-            EdgeGroup(edge_type=etype, count=total, samples=samples)
-        )
+        groups.append(EdgeGroup(edge_type=etype, count=total, samples=samples))
     return groups
 
 
 def _row_to_sample(row) -> dict:
     if len(row) < 13:
-        raise ValueError(f"expected 13 columns in edge sample row, got {len(row)}: {row!r}")
+        raise ValueError(
+            f"expected 13 columns in edge sample row, got {len(row)}: {row!r}"
+        )
     return {
         "edge_type": row[0],
         "from_type": row[1],
@@ -344,7 +406,9 @@ def fetch_node_links(
         neighbor_label = "coalesce(n.label, e.from_id)"
         neighbor_type = "e.from_type"
         neighbor_id = "e.from_id"
-        join = "LEFT JOIN nodes n ON e.from_type = n.node_type AND e.from_id = n.node_id"
+        join = (
+            "LEFT JOIN nodes n ON e.from_type = n.node_type AND e.from_id = n.node_id"
+        )
     else:
         raise ValueError("direction must be 'in' or 'out'")
 
@@ -356,12 +420,7 @@ def fetch_node_links(
         params.append(edge_type)
 
     utterance_join = ""
-    if (
-        q
-        and q.strip()
-        and node_type in _SPEAKER_NODE_TYPES
-        and edge_type == "SPOKE"
-    ):
+    if q and q.strip() and node_type in _SPEAKER_NODE_TYPES and edge_type == "SPOKE":
         utterance_join = _utterance_text_join(direction)
 
     if q and q.strip():
@@ -417,7 +476,7 @@ def fetch_node_links(
             to_type=row[3],
             to_id=row[4],
             role=row[5] or "",
-            confidence=row[6] or "exact",
+            confidence=row[6] if row[6] is not None else 1.0,
             neighbor_label=row[7] or row[9],
             neighbor_type=row[8],
             neighbor_id=row[9],
@@ -474,7 +533,8 @@ def fetch_edge_detail(
     if row[0]:
         art = conn.execute(
             """
-            SELECT source_artifact_id, source_url, cache_path, parser_version, scraped_at
+            SELECT source_artifact_id, source_url, cache_path, source_content_hash,
+                   block_parser_version, extractor_version, scraped_at
             FROM artifacts
             WHERE source_artifact_id = ?
             LIMIT 1
@@ -486,8 +546,10 @@ def fetch_edge_detail(
                 "source_artifact_id": art[0],
                 "source_url": art[1],
                 "cache_path": art[2],
-                "parser_version": art[3],
-                "scraped_at": art[4],
+                "source_content_hash": art[3],
+                "block_parser_version": art[4],
+                "extractor_version": art[5],
+                "scraped_at": art[6],
             }
 
     return EdgeDetailResponse(
@@ -500,7 +562,7 @@ def fetch_edge_detail(
         source_artifact_id=row[0] or "",
         source_url=row[1] or "",
         cache_path=row[2] or "",
-        confidence=row[3] or "exact",
+        confidence=row[3] if row[3] is not None else 1.0,
         properties_json=row[5] or "",
         artifact=artifact,
     )

@@ -1,5 +1,5 @@
-use quick_xml::events::Event;
 use quick_xml::Reader;
+use quick_xml::events::Event;
 use serde_json::{Map, Value};
 
 /// Parse a single `<QRVADOC>` XML record from the QRVA archive into the same
@@ -52,7 +52,10 @@ pub fn parse_qrva_xml(xml: &str) -> Result<Value, Box<dyn std::error::Error>> {
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 if current_tag.as_deref() == Some(name.as_str()) {
-                    fields.insert(name, Value::String(normalize_field_text(&text_parts.join(""))));
+                    fields.insert(
+                        name,
+                        Value::String(normalize_field_text(&text_parts.join(""))),
+                    );
                     current_tag = None;
                     text_parts.clear();
                 }
@@ -129,10 +132,7 @@ mod tests {
         let value = parse_qrva_xml(SAMPLE_XML).expect("xml parse");
         assert_eq!(value["DOCNAME"], "0000202400002");
         assert_eq!(value["ID"], "293062");
-        assert!(value["AUT"]
-            .as_str()
-            .unwrap()
-            .contains("Demesmaeker"));
+        assert!(value["AUT"].as_str().unwrap().contains("Demesmaeker"));
         assert!(value["TEXTQN"].as_str().unwrap().contains("Dehaene"));
         assert!(value["TEXTA1N"].as_str().unwrap().contains("Artikel 8"));
     }

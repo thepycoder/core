@@ -40,9 +40,7 @@ pub fn build_oral_index(data_dir: &Path) -> Result<HashMap<String, Vec<String>>,
                     if id.is_empty() {
                         continue;
                     }
-                    map.entry(id)
-                        .or_default()
-                        .push(question_ids[i].clone());
+                    map.entry(id).or_default().push(question_ids[i].clone());
                 }
             }
         }
@@ -104,11 +102,8 @@ pub fn collect_oral_written_links(data_dir: &Path) -> Result<Vec<OralWrittenLink
         let docnames = read_string_column(&batch, "docname")?;
         let oral_refs = read_string_column(&batch, "oral_refs")?;
         for i in 0..batch.num_rows() {
-            let (canonical, status, oral_ref) = resolve_canonical_question_id(
-                &question_ids[i],
-                &oral_refs[i],
-                &oral_index,
-            );
+            let (canonical, status, oral_ref) =
+                resolve_canonical_question_id(&question_ids[i], &oral_refs[i], &oral_index);
             let status_str = match status {
                 OralLinkStatus::Exact => "exact",
                 OralLinkStatus::Ambiguous => "ambiguous",
@@ -131,7 +126,12 @@ pub fn collect_oral_written_links(data_dir: &Path) -> Result<Vec<OralWrittenLink
 pub fn canonical_id_map(links: &[OralWrittenLink]) -> HashMap<String, String> {
     links
         .iter()
-        .map(|l| (l.written_question_id.clone(), l.canonical_question_id.clone()))
+        .map(|l| {
+            (
+                l.written_question_id.clone(),
+                l.canonical_question_id.clone(),
+            )
+        })
         .collect()
 }
 
@@ -177,8 +177,7 @@ mod tests {
     fn exact_oral_ref_uses_oral_question() {
         let mut index = HashMap::new();
         index.insert("Q56001442P".to_string(), vec!["56_plenary_1_0".to_string()]);
-        let (id, status, _) =
-            resolve_canonical_question_id("56_written_123", "Q56001442P", &index);
+        let (id, status, _) = resolve_canonical_question_id("56_written_123", "Q56001442P", &index);
         assert_eq!(id, "56_plenary_1_0");
         assert_eq!(status, OralLinkStatus::Exact);
     }
@@ -186,9 +185,11 @@ mod tests {
     #[test]
     fn ambiguous_refs_keep_written_id() {
         let mut index = HashMap::new();
-        index.insert("Q56001442P".to_string(), vec!["a".to_string(), "b".to_string()]);
-        let (id, status, _) =
-            resolve_canonical_question_id("56_written_123", "Q56001442P", &index);
+        index.insert(
+            "Q56001442P".to_string(),
+            vec!["a".to_string(), "b".to_string()],
+        );
+        let (id, status, _) = resolve_canonical_question_id("56_written_123", "Q56001442P", &index);
         assert_eq!(id, "56_written_123");
         assert_eq!(status, OralLinkStatus::Ambiguous);
     }

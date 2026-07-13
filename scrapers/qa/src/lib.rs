@@ -1,5 +1,5 @@
-pub mod aggregate;
 pub mod agenda_checks;
+pub mod aggregate;
 pub mod baseline;
 pub mod check_catalog;
 pub mod coverage_baseline;
@@ -8,6 +8,7 @@ pub mod infrastructure;
 pub mod io;
 pub mod remaining;
 pub mod schema;
+pub mod source_spans;
 pub mod speakers;
 pub mod speech;
 pub mod stats;
@@ -23,7 +24,7 @@ use identity::resolver::Resolver;
 use io::{write_alias_candidates, write_check_details, write_check_summaries};
 use normalize::common::UnresolvedRow;
 use normalize::normalize_utterances;
-use stats::{coverage_console_lines, format_all_issue_stats, QaStatsContext};
+use stats::{QaStatsContext, coverage_console_lines, format_all_issue_stats};
 use std::error::Error;
 use std::path::Path;
 use types::{AliasCandidate, CheckDetail, CheckSummary};
@@ -74,6 +75,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(graph::run_graph_checks(&data_root)?);
     details.extend(infrastructure::run_infrastructure_checks(&data_root)?);
     details.extend(vote_source::run_vote_source_checks(&data_root)?);
+    details.extend(source_spans::run_source_span_checks(&data_root)?);
     details.extend(agenda_checks::run_agenda_checks(&data_root)?);
     let speech_out = speech::run_speech_checks(&data_root)?;
     details.extend(speech_out.details);
@@ -96,11 +98,6 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
             &speech_out.coverage_snapshots,
             &qa_dir.join("speech_coverage_baseline.parquet"),
         )?;
-        eprintln!("[qa] baseline updated at {}", qa_dir.join("checks_baseline.parquet").display());
-        eprintln!(
-            "[qa] coverage baseline updated at {}",
-            qa_dir.join("speech_coverage_baseline.parquet").display()
-        );
     }
 
     write_check_details(
@@ -115,12 +112,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
         coverage_snapshots: &speech_out.coverage_snapshots,
         row_counts_path: Some(row_counts_path.as_path()),
     };
-    write_summary_md(
-        &qa_dir.join("summary.md"),
-        &summaries,
-        &details,
-        &stats_ctx,
-    )?;
+    write_summary_md(&qa_dir.join("summary.md"), &summaries, &details, &stats_ctx)?;
 
     let regressions = if qa_dir.join("checks_baseline.parquet").exists() {
         baseline::compare_to_baseline(&summaries, &qa_dir.join("checks_baseline.parquet"))?
@@ -128,10 +120,15 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     } else {
         Vec::new()
     };
-
     let strict_failed = opts.strict && !regressions.is_empty();
 
-    print_summary(&summaries, &details, &stats_ctx, details.len(), &regressions);
+    print_summary(
+        &summaries,
+        &details,
+        &stats_ctx,
+        details.len(),
+        &regressions,
+    );
 
     Ok(QaRunResult {
         details,
@@ -161,6 +158,18 @@ fn load_unresolved(data_dir: &Path) -> Result<Vec<UnresolvedRow>, Box<dyn Error>
         let raw_fields = identity::parquet_io::read_string_column(&batch, "raw_field")?;
         let source_urls = identity::parquet_io::read_string_column(&batch, "source_url")?;
         let cache_paths = identity::parquet_io::read_string_column(&batch, "cache_path")?;
+        let optional = |name: &str| -> Result<Vec<String>, Box<dyn Error>> {
+            if batch.schema().index_of(name).is_ok() {
+                identity::parquet_io::read_string_column(&batch, name)
+            } else {
+                Ok(vec![String::new(); batch.num_rows()])
+            }
+        };
+        let source_artifact_ids = optional("source_artifact_id")?;
+        let source_content_hashes = optional("source_content_hash")?;
+        let block_parser_versions = optional("block_parser_version")?;
+        let extractor_versions = optional("extractor_version")?;
+        let confidences = optional("confidence")?;
         for i in 0..batch.num_rows() {
             rows.push(UnresolvedRow {
                 raw_name: raw_names[i].clone(),
@@ -175,6 +184,11 @@ fn load_unresolved(data_dir: &Path) -> Result<Vec<UnresolvedRow>, Box<dyn Error>
                 raw_field: raw_fields[i].clone(),
                 source_url: source_urls[i].clone(),
                 cache_path: cache_paths[i].clone(),
+                source_artifact_id: source_artifact_ids[i].clone(),
+                source_content_hash: source_content_hashes[i].clone(),
+                block_parser_version: block_parser_versions[i].clone(),
+                extractor_version: extractor_versions[i].clone(),
+                confidence: confidences[i].parse().unwrap_or(0.0),
             });
         }
     }
@@ -220,8 +234,8 @@ fn print_summary(
     }
     if !regressions.is_empty() {
         eprintln!("[qa] {} baseline regression(s):", regressions.len());
-        for r in regressions {
-            eprintln!("[qa]   - {r}");
+        for regression in regressions {
+            eprintln!("[qa]   - {regression}");
         }
     }
 }
@@ -229,12 +243,33 @@ fn print_summary(
 pub fn registered_check_ids() -> Vec<&'static str> {
     vec![
         "vote.compact_total_vs_member_names",
-        "vote.appendix_bucket_vs_collected_names",
         "vote.compact_tables_vs_appendix_headers",
         "vote.source_inventory_vs_parquet",
+        "vote.appendix_bucket_counts",
+        "vote.decision_evidence",
+        "vote.result_evidence_roles",
+        "vote.unresolved_events",
         "vote.duplicate_person_across_buckets",
         "vote.cast_count_vs_headline",
+        "vote.cast_method_rules",
         "vote.number_sequence",
+        "vote.standard_roll_call_invariants",
+        "vote.no_quorum_invariants",
+        "vote.sitting_standing_invariants",
+        "vote.secret_ballot_invariants",
+        "vote.language_group_sums",
+        "source.span.block_range",
+        "source.span.typed_schema",
+        "source.span.validation_status",
+        "source.span.artifact_id",
+        "source.span.graph_artifact",
+        "source.span.source_content_stale",
+        "source.span.block_parser_stale",
+        "source.span.extractor_version",
+        "source.span.entity_reference",
+        "source.span.extraction_fields",
+        "source.span.allowed_role",
+        "source.span.overlap",
         "graph.edge_endpoints_exist",
         "graph.voted_on_orphan_targets",
         "graph.utterance_spoke_resolved",

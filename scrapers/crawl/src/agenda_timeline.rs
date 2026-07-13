@@ -1,17 +1,15 @@
 use crate::proceeding_entities::{
-    classify_heading_kind, extract_interpellation_ids_from_text,
-    is_french_interpellation_bullet, is_interpellation_bullet_line, is_interpellation_section,
-    is_joint_interpellation_fr_header, is_joint_interpellation_group_start,
-    is_non_question_proceeding_heading,
+    classify_heading_kind, extract_interpellation_ids_from_text, is_french_interpellation_bullet,
+    is_interpellation_bullet_line, is_interpellation_section, is_joint_interpellation_fr_header,
+    is_joint_interpellation_group_start, is_non_question_proceeding_heading,
 };
 use crate::question_boundaries::{
-    classify_question_heading_text, extends_open_question, is_questions_section,
-    starts_new_question_unit, QuestionHeadingRole,
+    QuestionHeadingRole, classify_question_heading_text, extends_open_question,
+    is_questions_section, starts_new_question_unit,
 };
 use crate::report_blocks::{BlockTag, ReportBlock};
 use crate::utils::{clean_text, composite_scoped_id};
 use regex::Regex;
-use scraper::Html;
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +75,8 @@ pub struct AgendaItem {
     pub internal_ids: Vec<String>,
     pub item_id: String,
     pub source_section: String,
+    /// Exact heading blocks that contributed title or identifier fields.
+    pub title_blocks: Vec<u32>,
 }
 
 static AGENDA_NUM: OnceLock<Regex> = OnceLock::new();
@@ -111,7 +111,7 @@ fn is_bilingual_fr_heading(block: &ReportBlock, item: &AgendaItem) -> bool {
 
 fn extend_open_question(
     item: &mut AgendaItem,
-    document: &Html,
+    block_index: u32,
     text: &str,
     role: QuestionHeadingRole,
 ) {
@@ -121,7 +121,8 @@ fn extend_open_question(
                 item.title_nl.push('\n');
             }
             item.title_nl.push_str(text);
-            for id in extract_internal_ids(document, text) {
+            item.title_blocks.push(block_index);
+            for id in extract_internal_ids(text) {
                 if !item.internal_ids.contains(&id) {
                     item.internal_ids.push(id);
                 }
@@ -129,6 +130,7 @@ fn extend_open_question(
         }
         QuestionHeadingRole::FrGroupHeader if item.title_fr.is_empty() => {
             item.title_fr = text.to_string();
+            item.title_blocks.push(block_index);
         }
         _ => {}
     }
@@ -162,7 +164,6 @@ fn push_question_item(
     items: &mut Vec<AgendaItem>,
     open_question_idx: &mut Option<usize>,
     question_seq: &mut i32,
-    document: &Html,
     block: &ReportBlock,
     meeting_kind: MeetingKind,
     session_id: u32,
@@ -174,7 +175,7 @@ fn push_question_item(
     let item_id = composite_scoped_id(session_id, meeting_kind.as_str(), meeting_id, *question_seq);
     *question_seq += 1;
     *open_question_idx = Some(items.len());
-    let internal_ids = extract_internal_ids(document, &block.text);
+    let internal_ids = extract_internal_ids(&block.text);
     let (dossier_id, document_id) = extract_dossier_refs(session_id, &block.text);
     items.push(AgendaItem {
         agenda_id: agenda_id.to_string(),
@@ -188,11 +189,11 @@ fn push_question_item(
         internal_ids,
         item_id,
         source_section: current_section.to_string(),
+        title_blocks: vec![block.index],
     });
 }
 
 pub fn build_agenda_timeline(
-    document: &Html,
     blocks: &[ReportBlock],
     meeting_kind: MeetingKind,
     session_id: u32,
@@ -227,6 +228,7 @@ pub fn build_agenda_timeline(
                     && is_bilingual_fr_heading(block, &items[idx])
                 {
                     items[idx].title_fr = block.text.clone();
+                    items[idx].title_blocks.push(block.index);
                     continue;
                 }
             } else if let Some(item) = items.last_mut() {
@@ -235,6 +237,7 @@ pub fn build_agenda_timeline(
                     && is_bilingual_fr_heading(block, item)
                 {
                     item.title_fr = block.text.clone();
+                    item.title_blocks.push(block.index);
                     continue;
                 }
             }
@@ -261,8 +264,7 @@ pub fn build_agenda_timeline(
                 open_question_idx = None;
 
                 let internal_ids = extract_interpellation_ids_from_text(&block.text);
-                let is_fr =
-                    interpellation_fr_phase || is_french_interpellation_bullet(&block.text);
+                let is_fr = interpellation_fr_phase || is_french_interpellation_bullet(&block.text);
 
                 if is_fr {
                     if let Some(site_id) = internal_ids.first() {
@@ -271,6 +273,7 @@ pub fn build_agenda_timeline(
                                 && it.internal_ids.iter().any(|id| id == site_id)
                         }) {
                             item.title_fr = block.text.clone();
+                            item.title_blocks.push(block.index);
                             item.end_block = blocks.len() as u32;
                             pending_nl = Some((block.index, block.text.clone()));
                             continue;
@@ -310,6 +313,7 @@ pub fn build_agenda_timeline(
                     internal_ids,
                     item_id,
                     source_section: current_section.clone(),
+                    title_blocks: vec![block.index],
                 });
                 continue;
             }
@@ -318,7 +322,7 @@ pub fn build_agenda_timeline(
         if agenda_id.is_none() {
             if extends_open_question(heading_role) {
                 if let Some(idx) = open_question_idx {
-                    extend_open_question(&mut items[idx], document, &block.text, heading_role);
+                    extend_open_question(&mut items[idx], block.index, &block.text, heading_role);
                 }
             } else if should_emit_question_item(
                 meeting_kind,
@@ -331,7 +335,6 @@ pub fn build_agenda_timeline(
                     &mut items,
                     &mut open_question_idx,
                     &mut question_seq,
-                    document,
                     block,
                     meeting_kind,
                     session_id,
@@ -356,13 +359,14 @@ pub fn build_agenda_timeline(
 
         if extends_open_question(heading_role) {
             if let Some(idx) = open_question_idx {
-                extend_open_question(&mut items[idx], document, &block.text, heading_role);
+                extend_open_question(&mut items[idx], block.index, &block.text, heading_role);
             }
             pending_nl = Some((block.index, block.text.clone()));
             continue;
         }
 
-        let item_kind = classify_item_kind(meeting_kind, &current_section, &block.text, heading_role);
+        let item_kind =
+            classify_item_kind(meeting_kind, &current_section, &block.text, heading_role);
 
         if item_kind == ItemKind::Question
             && starts_new_question_unit(heading_role)
@@ -372,7 +376,6 @@ pub fn build_agenda_timeline(
                 &mut items,
                 &mut open_question_idx,
                 &mut question_seq,
-                document,
                 block,
                 meeting_kind,
                 session_id,
@@ -406,7 +409,7 @@ pub fn build_agenda_timeline(
             _ => {}
         }
 
-        let internal_ids = extract_internal_ids(document, &block.text);
+        let internal_ids = extract_internal_ids(&block.text);
         let (dossier_id, document_id) = extract_dossier_refs(session_id, &block.text);
 
         pending_nl = Some((block.index, block.text.clone()));
@@ -423,6 +426,7 @@ pub fn build_agenda_timeline(
             internal_ids,
             item_id,
             source_section: current_section.clone(),
+            title_blocks: vec![block.index],
         });
     }
 
@@ -498,7 +502,7 @@ fn classify_item_kind(
         }
     }
 }
-fn extract_internal_ids(_document: &Html, text: &str) -> Vec<String> {
+fn extract_internal_ids(text: &str) -> Vec<String> {
     internal_id_regex()
         .captures_iter(text)
         .map(|c| format!("Q{}", &c[1]))
@@ -508,16 +512,14 @@ fn extract_internal_ids(_document: &Html, text: &str) -> Vec<String> {
 fn extract_dossier_refs(session_id: u32, text: &str) -> (String, String) {
     dossier_ref_regex()
         .captures(text)
-        .map(|c| {
-            (
-                format!("{}/{}", session_id, &c[1]),
-                c[2].trim().to_string(),
-            )
-        })
+        .map(|c| (format!("{}/{}", session_id, &c[1]), c[2].trim().to_string()))
         .unwrap_or_default()
 }
 
-pub fn agenda_item_for_block<'a>(items: &'a [AgendaItem], block_index: u32) -> Option<&'a AgendaItem> {
+pub fn agenda_item_for_block<'a>(
+    items: &'a [AgendaItem],
+    block_index: u32,
+) -> Option<&'a AgendaItem> {
     items
         .iter()
         .rev()
@@ -533,9 +535,9 @@ pub fn count_agenda_questions_from_cache(
 ) -> Result<usize, Box<dyn std::error::Error>> {
     use crate::report_blocks::{parse_report_blocks, read_report_html};
     let html = read_report_html(cache_path)?;
-    let document = Html::parse_document(&html);
+    let document = scraper::Html::parse_document(&html);
     let blocks = parse_report_blocks(&document);
-    let items = build_agenda_timeline(&document, &blocks, meeting_kind, session_id, meeting_id);
+    let items = build_agenda_timeline(&blocks, meeting_kind, session_id, meeting_id);
     Ok(items
         .iter()
         .filter(|a| a.item_kind == ItemKind::Question)
@@ -550,15 +552,21 @@ pub fn heading_text_from_block(block: &ReportBlock) -> String {
 mod tests {
     use super::*;
     use crate::report_blocks::{parse_report_blocks, read_report_html};
+    use scraper::Html;
 
     fn block(index: u32, tag: BlockTag, text: &str) -> ReportBlock {
+        let text = text.to_string();
         ReportBlock {
             index,
             tag,
-            text: text.to_string(),
+            text: text.clone(),
+            inlines: Vec::new(),
+            table_rows: None,
             lang: None,
             class: None,
             has_oraspr: false,
+            content_hash: crate::artifact_id::content_hash(&text),
+            word_count: text.split_whitespace().count() as u32,
         }
     }
 
@@ -580,14 +588,7 @@ mod tests {
             ),
             block(5, BlockTag::P, "01.01 Vincent Van Quickenborne: speech"),
         ];
-        let document = Html::parse_document("<html></html>");
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            60,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 60);
         let interpellations: Vec<_> = items
             .iter()
             .filter(|i| i.item_kind == ItemKind::Interpellation)
@@ -596,10 +597,12 @@ mod tests {
         assert_eq!(interpellations[0].agenda_id, "01");
         assert!(interpellations[0].title_nl.contains("Van Quickenborne"));
         assert!(interpellations[0].title_fr.contains("Van Quickenborne"));
-        assert!(interpellations[0]
-            .internal_ids
-            .iter()
-            .any(|id| id == "56000109I"));
+        assert!(
+            interpellations[0]
+                .internal_ids
+                .iter()
+                .any(|id| id == "56000109I")
+        );
         assert_eq!(interpellations[0].end_block, blocks.len() as u32);
     }
 
@@ -614,18 +617,14 @@ mod tests {
             block(5, BlockTag::H2, "02 Question de Piet Pieters"),
             block(6, BlockTag::P, "Antwoord content item 2"),
         ];
-        let document = Html::parse_document("<html></html>");
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            1,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 1);
 
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].start_block, 1);
-        assert_eq!(items[0].end_block, 4, "item 1 must end before item 2 heading");
+        assert_eq!(
+            items[0].end_block, 4,
+            "item 1 must end before item 2 heading"
+        );
         assert_eq!(items[1].start_block, 4);
         assert_eq!(items[1].end_block, blocks.len() as u32);
 
@@ -651,14 +650,7 @@ mod tests {
             block(5, BlockTag::H2, "02 Vraag van Piet Pieters"),
             block(6, BlockTag::P, "02.01 Speaker: text"),
         ];
-        let document = Html::parse_document("<html></html>");
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            1,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 1);
 
         assert_eq!(items.len(), 2, "expected two agenda items, got {:?}", items);
         assert_eq!(items[0].end_block, 5);
@@ -676,13 +668,7 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Commission,
-            56,
-            105,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Commission, 56, 105);
         let questions: Vec<_> = items
             .iter()
             .filter(|i| i.item_kind == ItemKind::Question)
@@ -706,15 +692,9 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let utterances = extract_utterances_from_cache(
-            &path,
-            MeetingKind::Commission,
-            56,
-            105,
-            "url",
-            "cache",
-        )
-        .unwrap();
+        let utterances =
+            extract_utterances_from_cache(&path, MeetingKind::Commission, 56, 105, "url", "cache")
+                .unwrap();
         let question_item_ids: std::collections::HashSet<_> = utterances
             .iter()
             .filter(|u| u.item_kind == "question")
@@ -737,13 +717,7 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            82,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 82);
         let questions: Vec<_> = items
             .iter()
             .filter(|i| i.item_kind == ItemKind::Question)
@@ -772,13 +746,7 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            109,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 109);
         let questions: Vec<_> = items
             .iter()
             .filter(|i| i.item_kind == ItemKind::Question)
@@ -799,13 +767,7 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let items = build_agenda_timeline(
-            &document,
-            &blocks,
-            MeetingKind::Plenary,
-            56,
-            117,
-        );
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 117);
 
         for window in items.windows(2) {
             assert!(

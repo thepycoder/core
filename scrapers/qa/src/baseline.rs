@@ -1,5 +1,5 @@
 use crate::io::{read_check_summaries, write_check_summaries};
-use crate::types::{status_rank, CheckSummary};
+use crate::types::{CheckSummary, status_rank};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
@@ -44,9 +44,7 @@ pub fn compare_to_baseline(
             ));
         }
 
-        if cur.count > base.count
-            && matches!(cur.status.as_str(), "fail" | "error" | "warn")
-        {
+        if cur.count > base.count && matches!(cur.status.as_str(), "fail" | "error" | "warn") {
             regressions.push(format!(
                 "{} count increased: {} -> {}",
                 cur.check, base.count, cur.count
@@ -57,7 +55,10 @@ pub fn compare_to_baseline(
     Ok(BaselineDiff { regressions })
 }
 
-pub fn update_baseline(current: &[CheckSummary], baseline_path: &Path) -> Result<(), Box<dyn Error>> {
+pub fn update_baseline(
+    current: &[CheckSummary],
+    baseline_path: &Path,
+) -> Result<(), Box<dyn Error>> {
     let filtered: Vec<CheckSummary> = current
         .iter()
         .filter(|s| s.check != "qa.summary_vs_detail")

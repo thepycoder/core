@@ -1,8 +1,11 @@
-use arrow::array::{Array, ArrayRef, StringArray};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray, UInt32Array,
+    UInt64Array,
+};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
@@ -11,19 +14,65 @@ use std::sync::Arc;
 pub fn read_string_column(batch: &RecordBatch, name: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let idx = batch.schema().index_of(name)?;
     let col = batch.column(idx);
+    macro_rules! stringify {
+        ($array_type:ty) => {
+            if let Some(arr) = col.as_any().downcast_ref::<$array_type>() {
+                return Ok((0..arr.len())
+                    .map(|i| {
+                        if arr.is_null(i) {
+                            String::new()
+                        } else {
+                            arr.value(i).to_string()
+                        }
+                    })
+                    .collect());
+            }
+        };
+    }
+    stringify!(StringArray);
+    stringify!(UInt32Array);
+    stringify!(UInt64Array);
+    stringify!(Int32Array);
+    stringify!(Int64Array);
+    stringify!(BooleanArray);
+    stringify!(Float64Array);
+    Err(format!("column {name} has unsupported type {}", col.data_type()).into())
+}
+
+pub fn read_u32_column(batch: &RecordBatch, name: &str) -> Result<Vec<u32>, Box<dyn Error>> {
+    let idx = batch.schema().index_of(name)?;
+    let col = batch.column(idx);
     let arr = col
         .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| format!("column {name} is not Utf8"))?;
-    let mut out = Vec::with_capacity(arr.len());
-    for i in 0..arr.len() {
-        if arr.is_null(i) {
-            out.push(String::new());
-        } else {
-            out.push(arr.value(i).to_string());
-        }
-    }
-    Ok(out)
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| format!("column {name} is not UInt32"))?;
+    Ok((0..arr.len())
+        .map(|i| if arr.is_null(i) { 0 } else { arr.value(i) })
+        .collect())
+}
+
+pub fn read_bool_column(batch: &RecordBatch, name: &str) -> Result<Vec<bool>, Box<dyn Error>> {
+    let idx = batch.schema().index_of(name)?;
+    let col = batch.column(idx);
+    let arr = col
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .ok_or_else(|| format!("column {name} is not Boolean"))?;
+    Ok((0..arr.len())
+        .map(|i| !arr.is_null(i) && arr.value(i))
+        .collect())
+}
+
+pub fn read_f64_column(batch: &RecordBatch, name: &str) -> Result<Vec<f64>, Box<dyn Error>> {
+    let idx = batch.schema().index_of(name)?;
+    let col = batch.column(idx);
+    let arr = col
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| format!("column {name} is not Float64"))?;
+    Ok((0..arr.len())
+        .map(|i| if arr.is_null(i) { 0.0 } else { arr.value(i) })
+        .collect())
 }
 
 pub fn read_optional_string_column(

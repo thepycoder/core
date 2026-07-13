@@ -13,6 +13,7 @@ scraper = "0.12"
 encoding_rs = "0.8.35"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 arrow = "54.3.0"
 parquet = { version = "54.3.0", features = ["arrow"] }
 

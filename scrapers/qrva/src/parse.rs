@@ -156,25 +156,10 @@ pub fn parse_route_record(
     for slot in 1..=4u8 {
         let status = field_str(
             item,
-            &[
-                &format!("STATUSA{slot}"),
-                &format!("statusa{slot}"),
-            ],
+            &[&format!("STATUSA{slot}"), &format!("statusa{slot}")],
         );
-        let text_nl = field_text(
-            item,
-            &[
-                &format!("TEXTA{slot}N"),
-                &format!("texta{slot}n"),
-            ],
-        );
-        let text_fr = field_text(
-            item,
-            &[
-                &format!("TEXTA{slot}F"),
-                &format!("texta{slot}f"),
-            ],
-        );
+        let text_nl = field_text(item, &[&format!("TEXTA{slot}N"), &format!("texta{slot}n")]);
+        let text_fr = field_text(item, &[&format!("TEXTA{slot}F"), &format!("texta{slot}f")]);
         if status.is_empty() && text_nl.is_empty() && text_fr.is_empty() {
             continue;
         }
@@ -191,27 +176,12 @@ pub fn parse_route_record(
             text_nl,
             text_fr,
             status,
-            answer_num: field_str(
-                item,
-                &[
-                    &format!("NUMA{slot}"),
-                    &format!("numa{slot}"),
-                ],
-            ),
+            answer_num: field_str(item, &[&format!("NUMA{slot}"), &format!("numa{slot}")]),
             publication_ref: field_str(
                 item,
-                &[
-                    &format!("PUBLICA{slot}"),
-                    &format!("publica{slot}"),
-                ],
+                &[&format!("PUBLICA{slot}"), &format!("publica{slot}")],
             ),
-            casa: field_str(
-                item,
-                &[
-                    &format!("CASA{slot}"),
-                    &format!("casa{slot}"),
-                ],
-            ),
+            casa: field_str(item, &[&format!("CASA{slot}"), &format!("casa{slot}")]),
             source_kind: "qrva".to_string(),
             confidence: "exact".to_string(),
             source_url: source_url.clone(),
@@ -286,10 +256,7 @@ pub fn build_staging_from_records(
             oral_refs: oral_set.join(","),
             qrva_route_ids: route_ids.join(","),
             internal_ids: docname_internal_id(&docname),
-            source_url: qrva_detail_url(&field_str(
-                first,
-                &["SDOCNAME", "sdocname"],
-            )),
+            source_url: qrva_detail_url(&field_str(first, &["SDOCNAME", "sdocname"])),
             cache_path: first_cache,
         });
     }

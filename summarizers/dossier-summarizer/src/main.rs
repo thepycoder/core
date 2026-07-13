@@ -1,6 +1,7 @@
 use arrow::array::{Array, StringArray};
 use arrow::datatypes::{DataType, Field};
 use arrow::{datatypes::Schema, record_batch::RecordBatch};
+use crawl::paths::{cache_dir, data_dir};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::{arrow::ArrowWriter, arrow::arrow_reader::ParquetRecordBatchReaderBuilder};
 use reqwest::Client;
@@ -15,7 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex as TokioMutex;
-use crawl::paths::{cache_dir, data_dir};
 
 struct RateLimiter {
     interval_ms: u64,

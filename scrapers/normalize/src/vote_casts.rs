@@ -1,8 +1,14 @@
-use crate::common::{dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID};
-use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::Schema;
-use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
+use arrow::array::{ArrayRef, Float64Array, StringArray, UInt32Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use crawl::paths::cache_dir;
+use crawl::report_blocks::read_report_html;
+use crawl::{BLOCK_PARSER_VERSION, VOTE_EXTRACTOR_VERSION, artifact_id, content_hash};
+use identity::parquet_io::{
+    read_all_rows, read_bool_column, read_string_column, read_u32_column, utf8_field, write_parquet,
+};
 use identity::resolver::{Bucket, Resolution, Resolver};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,20 +16,24 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct VoteCastRow {
     pub vote_cast_id: String,
-    pub vote_id: String,
-    pub session_id: String,
-    pub meeting_id: String,
+    pub result_id: String,
+    pub session_id: u32,
+    pub meeting_id: u32,
     pub person_id: String,
     pub position: String,
     pub raw_name: String,
     pub source_url: String,
     pub cache_path: String,
-    pub confidence: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct VoteReconciliationRow {
-    pub vote_id: String,
+    pub result_id: String,
     pub session_id: String,
     pub meeting_id: String,
     pub yes: String,
@@ -43,111 +53,217 @@ pub struct VoteCastOutput {
     pub reconciliation: Vec<VoteReconciliationRow>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResultMetadata {
+    session_id: u32,
+    meeting_id: u32,
+    method: String,
+    named: bool,
+    source_url: String,
+    cache_path: String,
+}
+
+impl ResultMetadata {
+    fn allows_named_casts(&self) -> bool {
+        self.named
+            && matches!(
+                self.method.as_str(),
+                "roll_call" | "language_group_roll_call"
+            )
+    }
+}
+
 pub fn normalize_vote_casts(
     data_dir: &Path,
     resolver: &Resolver,
 ) -> Result<VoteCastOutput, Box<dyn Error>> {
-    let path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/votes.parquet"));
+    let session = data_dir.join(format!("sessions/{SESSION_ID}/plenary"));
+    let members_path = session.join("vote_result_members.parquet");
+    let results_path = session.join("vote_results.parquet");
+    let tallies_path = session.join("vote_tallies.parquet");
+
     let mut casts = Vec::new();
     let mut unresolved = Vec::new();
     let mut reconciliation = Vec::new();
+    let mut tally_map: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut result_rows: HashMap<String, ResultMetadata> = HashMap::new();
 
-    for batch in read_all_rows(&path)? {
-        let vote_ids = read_string_column(&batch, "vote_id")?;
-        let session_ids = read_string_column(&batch, "session_id")?;
-        let meeting_ids = read_string_column(&batch, "meeting_id")?;
-        let yes_counts = read_string_column(&batch, "yes")?;
-        let no_counts = read_string_column(&batch, "no")?;
-        let abstain_counts = read_string_column(&batch, "abstain")?;
-        let members_yes = read_string_column(&batch, "members_yes")?;
-        let members_no = read_string_column(&batch, "members_no")?;
-        let members_abstain = read_string_column(&batch, "members_abstain")?;
-        let source_urls = read_string_column(&batch, "source_url")?;
-        let cache_paths = read_string_column(&batch, "cache_path")?;
+    if results_path.exists() {
+        for batch in read_all_rows(&results_path)? {
+            let result_ids = read_string_column(&batch, "result_id")?;
+            let session_ids = read_u32_column(&batch, "session_id")?;
+            let meeting_ids = read_u32_column(&batch, "meeting_id")?;
+            let methods = read_string_column(&batch, "method")?;
+            let named = read_bool_column(&batch, "named")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let metadata = ResultMetadata {
+                    session_id: session_ids[i],
+                    meeting_id: meeting_ids[i],
+                    method: methods[i].clone(),
+                    named: named[i],
+                    source_url: source_urls[i].clone(),
+                    cache_path: cache_paths[i].clone(),
+                };
+                if let Some(existing) = result_rows.insert(result_ids[i].clone(), metadata.clone())
+                    && existing != metadata
+                {
+                    return Err(format!(
+                        "conflicting duplicate vote result metadata for {}",
+                        result_ids[i]
+                    )
+                    .into());
+                }
+            }
+        }
+    }
 
-        for i in 0..batch.num_rows() {
-            let vote_id = vote_ids[i].clone();
-            let source_url = source_urls[i].clone();
-            let cache_path = cache_paths[i].clone();
+    if tallies_path.exists() {
+        for batch in read_all_rows(&tallies_path)? {
+            let result_ids = read_string_column(&batch, "result_id")?;
+            let option_keys = read_string_column(&batch, "option_key")?;
+            let dimensions = read_string_column(&batch, "dimension")?;
+            let counts = read_u32_column(&batch, "count")?;
+            for i in 0..batch.num_rows() {
+                if dimensions[i] != "overall" {
+                    continue;
+                }
+                let count = counts[i] as usize;
+                tally_map
+                    .entry(result_ids[i].clone())
+                    .or_default()
+                    .insert(option_keys[i].clone(), count);
+            }
+        }
+    }
 
-            let yes_names = split_csv(&members_yes[i]);
-            let no_names = split_csv(&members_no[i]);
-            let abstain_names = split_csv(&members_abstain[i]);
+    if members_path.exists() {
+        let mut source_hashes: HashMap<String, String> = HashMap::new();
+        let mut seen_members: HashSet<(String, String, u32, String)> = HashSet::new();
+        let mut member_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
 
-            let positions = [
-                ("yes", yes_names),
-                ("no", no_names),
-                ("abstain", abstain_names),
-            ];
+        for batch in read_all_rows(&members_path)? {
+            let result_ids = read_string_column(&batch, "result_id")?;
+            let positions = read_string_column(&batch, "position")?;
+            let seqs = read_u32_column(&batch, "seq")?;
+            let raw_names = read_string_column(&batch, "raw_name")?;
 
-            for (position, names) in positions {
-                for (seq, name) in names.iter().enumerate() {
-                    let detail = resolver.resolve_detail(name, Bucket::Vote);
-                    match &detail.resolution {
-                        Resolution::Resolved(person_id) => {
-                            casts.push(VoteCastRow {
-                                vote_cast_id: format!("{}_{position}_{seq}", vote_id),
-                                vote_id: vote_id.clone(),
-                                session_id: session_ids[i].clone(),
-                                meeting_id: meeting_ids[i].clone(),
-                                person_id: person_id.clone(),
-                                position: position.to_string(),
-                                raw_name: name.clone(),
-                                source_url: source_url.clone(),
-                                cache_path: cache_path.clone(),
-                                confidence: "exact".to_string(),
-                            });
-                        }
-                        Resolution::Unresolved(reason) => {
-                            unresolved.push(UnresolvedRow {
-                                raw_name: detail.raw_name,
-                                typo_corrected: detail.typo_corrected,
-                                norm_primary: detail.norm_primary,
-                                norm_reordered: detail.norm_reordered,
-                                reason: reason_label(reason).to_string(),
-                                source_bucket: "votes".to_string(),
-                                role: position.to_string(),
-                                context_id: vote_id.clone(),
-                                context_label: format!("vote {}", vote_id),
-                                raw_field: name.clone(),
-                                source_url: source_url.clone(),
-                                cache_path: cache_path.clone(),
-                            });
-                        }
+            for i in 0..batch.num_rows() {
+                let result_id = result_ids[i].clone();
+                let position = positions[i].clone();
+                let name = raw_names[i].clone();
+                let seq = seqs[i];
+                if !seen_members.insert((result_id.clone(), position.clone(), seq, name.clone())) {
+                    continue;
+                }
+                let Some(result) = result_rows.get(&result_id) else {
+                    return Err(format!("vote member references unknown result {result_id}").into());
+                };
+                if !result.allows_named_casts() {
+                    continue;
+                }
+                *member_counts
+                    .entry(result_id.clone())
+                    .or_default()
+                    .entry(position.clone())
+                    .or_default() += 1;
+                let detail = resolver.resolve_detail(&name, Bucket::Vote);
+                let source_url = result.source_url.clone();
+                let cache_path = result.cache_path.clone();
+                let source_artifact_id = artifact_id(&source_url, &cache_path);
+                let source_content_hash = source_hashes
+                    .entry(cache_path.clone())
+                    .or_insert_with(|| {
+                        read_report_html(&cache_dir().join(&cache_path))
+                            .map(|html| content_hash(&html))
+                            .unwrap_or_default()
+                    })
+                    .clone();
+                match &detail.resolution {
+                    Resolution::Resolved(person_id) => {
+                        casts.push(VoteCastRow {
+                            vote_cast_id: format!("{result_id}_{position}_{seq}"),
+                            result_id: result_id.clone(),
+                            session_id: result.session_id,
+                            meeting_id: result.meeting_id,
+                            person_id: person_id.clone(),
+                            position: position.clone(),
+                            raw_name: name.clone(),
+                            source_url: source_url.clone(),
+                            cache_path: cache_path.clone(),
+                            source_artifact_id,
+                            source_content_hash,
+                            block_parser_version: BLOCK_PARSER_VERSION.to_string(),
+                            extractor_version: VOTE_EXTRACTOR_VERSION.to_string(),
+                            confidence: 1.0,
+                        });
+                    }
+                    Resolution::Unresolved(reason) => {
+                        unresolved.push(UnresolvedRow {
+                            raw_name: detail.raw_name,
+                            typo_corrected: detail.typo_corrected,
+                            norm_primary: detail.norm_primary,
+                            norm_reordered: detail.norm_reordered,
+                            reason: reason_label(reason).to_string(),
+                            source_bucket: "vote_result_members".to_string(),
+                            role: position.clone(),
+                            context_id: result_id.clone(),
+                            context_label: format!("vote result {result_id}"),
+                            raw_field: name.clone(),
+                            source_url,
+                            cache_path,
+                            source_artifact_id,
+                            source_content_hash,
+                            block_parser_version: BLOCK_PARSER_VERSION.to_string(),
+                            extractor_version: VOTE_EXTRACTOR_VERSION.to_string(),
+                            confidence: 1.0,
+                        });
                     }
                 }
             }
+        }
 
-            let yes_count = yes_counts[i].parse::<usize>().unwrap_or(0);
-            let no_count = no_counts[i].parse::<usize>().unwrap_or(0);
-            let abstain_count = abstain_counts[i].parse::<usize>().unwrap_or(0);
-            let members_yes_count = split_csv(&members_yes[i]).len();
-            let members_no_count = split_csv(&members_no[i]).len();
-            let members_abstain_count = split_csv(&members_abstain[i]).len();
-            let reconciled = yes_count == members_yes_count
-                && no_count == members_no_count
-                && abstain_count == members_abstain_count;
+        let mut result_ids = result_rows.keys().cloned().collect::<Vec<_>>();
+        result_ids.sort();
+        for result_id in result_ids {
+            let result = &result_rows[&result_id];
+            if result.allows_named_casts() {
+                let tallies = tally_map.get(&result_id);
+                let yes_count = tallies.and_then(|t| t.get("yes")).copied().unwrap_or(0);
+                let no_count = tallies.and_then(|t| t.get("no")).copied().unwrap_or(0);
+                let abstain_count = tallies.and_then(|t| t.get("abstain")).copied().unwrap_or(0);
+                let counts = member_counts.get(&result_id);
+                let members_yes_count = counts.and_then(|c| c.get("yes")).copied().unwrap_or(0);
+                let members_no_count = counts.and_then(|c| c.get("no")).copied().unwrap_or(0);
+                let members_abstain_count =
+                    counts.and_then(|c| c.get("abstain")).copied().unwrap_or(0);
 
-            reconciliation.push(VoteReconciliationRow {
-                vote_id: vote_id.clone(),
-                session_id: session_ids[i].clone(),
-                meeting_id: meeting_ids[i].clone(),
-                yes: yes_counts[i].clone(),
-                no: no_counts[i].clone(),
-                abstain: abstain_counts[i].clone(),
-                members_yes_count: members_yes_count.to_string(),
-                members_no_count: members_no_count.to_string(),
-                members_abstain_count: members_abstain_count.to_string(),
-                reconciled: reconciled.to_string(),
-                source_url,
-                cache_path,
-            });
+                let reconciled = yes_count == members_yes_count
+                    && no_count == members_no_count
+                    && abstain_count == members_abstain_count;
+
+                reconciliation.push(VoteReconciliationRow {
+                    result_id: result_id.clone(),
+                    session_id: result.session_id.to_string(),
+                    meeting_id: result.meeting_id.to_string(),
+                    yes: yes_count.to_string(),
+                    no: no_count.to_string(),
+                    abstain: abstain_count.to_string(),
+                    members_yes_count: members_yes_count.to_string(),
+                    members_no_count: members_no_count.to_string(),
+                    members_abstain_count: members_abstain_count.to_string(),
+                    reconciled: reconciled.to_string(),
+                    source_url: result.source_url.clone(),
+                    cache_path: result.cache_path.clone(),
+                });
+            }
         }
     }
 
     casts.sort_by(|a, b| {
-        a.vote_id
-            .cmp(&b.vote_id)
+        a.result_id
+            .cmp(&b.result_id)
             .then(a.position.cmp(&b.position))
             .then(a.person_id.cmp(&b.person_id))
     });
@@ -163,15 +279,19 @@ pub fn normalize_vote_casts(
 pub fn write_vote_casts(path: &Path, rows: &[VoteCastRow]) -> Result<(), Box<dyn Error>> {
     let schema = Schema::new(vec![
         utf8_field("vote_cast_id", false),
-        utf8_field("vote_id", false),
-        utf8_field("session_id", false),
-        utf8_field("meeting_id", false),
+        utf8_field("result_id", false),
+        Field::new("session_id", DataType::UInt32, false),
+        Field::new("meeting_id", DataType::UInt32, false),
         utf8_field("person_id", false),
         utf8_field("position", false),
         utf8_field("raw_name", false),
         utf8_field("source_url", false),
         utf8_field("cache_path", false),
-        utf8_field("confidence", false),
+        utf8_field("source_artifact_id", false),
+        utf8_field("source_content_hash", false),
+        utf8_field("block_parser_version", false),
+        utf8_field("extractor_version", false),
+        Field::new("confidence", DataType::Float64, false),
     ]);
 
     macro_rules! col {
@@ -185,15 +305,25 @@ pub fn write_vote_casts(path: &Path, rows: &[VoteCastRow]) -> Result<(), Box<dyn
         schema,
         vec![
             col!(|r| r.vote_cast_id.clone()),
-            col!(|r| r.vote_id.clone()),
-            col!(|r| r.session_id.clone()),
-            col!(|r| r.meeting_id.clone()),
+            col!(|r| r.result_id.clone()),
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|r| r.session_id).collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(UInt32Array::from(
+                rows.iter().map(|r| r.meeting_id).collect::<Vec<_>>(),
+            )) as ArrayRef,
             col!(|r| r.person_id.clone()),
             col!(|r| r.position.clone()),
             col!(|r| r.raw_name.clone()),
             col!(|r| r.source_url.clone()),
             col!(|r| r.cache_path.clone()),
-            col!(|r| r.confidence.clone()),
+            col!(|r| r.source_artifact_id.clone()),
+            col!(|r| r.source_content_hash.clone()),
+            col!(|r| r.block_parser_version.clone()),
+            col!(|r| r.extractor_version.clone()),
+            Arc::new(Float64Array::from(
+                rows.iter().map(|r| r.confidence).collect::<Vec<_>>(),
+            )) as ArrayRef,
         ],
     )
 }
@@ -203,7 +333,7 @@ pub fn write_vote_reconciliation(
     rows: &[VoteReconciliationRow],
 ) -> Result<(), Box<dyn Error>> {
     let schema = Schema::new(vec![
-        utf8_field("vote_id", false),
+        utf8_field("result_id", false),
         utf8_field("session_id", false),
         utf8_field("meeting_id", false),
         utf8_field("yes", false),
@@ -227,7 +357,7 @@ pub fn write_vote_reconciliation(
         path,
         schema,
         vec![
-            col!(|r| r.vote_id.clone()),
+            col!(|r| r.result_id.clone()),
             col!(|r| r.session_id.clone()),
             col!(|r| r.meeting_id.clone()),
             col!(|r| r.yes.clone()),
@@ -241,4 +371,160 @@ pub fn write_vote_reconciliation(
             col!(|r| r.cache_path.clone()),
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crawl::vote_io::{
+        write_vote_result_members_parquet, write_vote_results_parquet, write_vote_tallies_parquet,
+    };
+    use crawl::vote_types::{VoteResultDraft, VoteResultMemberDraft, VoteTallyDraft};
+    use identity::resolver::PersonRecord;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("normalize_vote_casts_{name}_{nonce}"))
+    }
+
+    fn result(result_id: &str, method: &str, named: bool) -> VoteResultDraft {
+        VoteResultDraft {
+            result_id: result_id.into(),
+            session_id: 56,
+            meeting_id: 1,
+            seq: 1,
+            method: method.into(),
+            named,
+            status: "complete".into(),
+            outcome: "adopted".into(),
+            source_roll_call_number: "1".into(),
+            source_url: "https://example.test/report".into(),
+            cache_path: String::new(),
+        }
+    }
+
+    fn member(result_id: &str, position: &str, seq: u32, name: &str) -> VoteResultMemberDraft {
+        VoteResultMemberDraft {
+            result_id: result_id.into(),
+            position: position.into(),
+            seq,
+            raw_name: name.into(),
+        }
+    }
+
+    fn resolver() -> Resolver {
+        Resolver::build(
+            &[PersonRecord {
+                person_id: "p1".into(),
+                first_name: "Known".into(),
+                last_name: "Member".into(),
+            }],
+            &[],
+        )
+    }
+
+    fn write_inputs(
+        root: &Path,
+        results: &[VoteResultDraft],
+        members: &[VoteResultMemberDraft],
+        tallies: &[VoteTallyDraft],
+    ) {
+        let session = root.join("sessions/56/plenary");
+        std::fs::create_dir_all(&session).unwrap();
+        write_vote_results_parquet(&session.join("vote_results.parquet"), results).unwrap();
+        write_vote_result_members_parquet(&session.join("vote_result_members.parquet"), members)
+            .unwrap();
+        write_vote_tallies_parquet(&session.join("vote_tallies.parquet"), tallies).unwrap();
+    }
+
+    #[test]
+    fn deduplicates_members_per_result_and_reconciles_raw_positions() {
+        let root = test_dir("dedup");
+        let rows = [
+            member("56-1-r1", "yes", 0, "Known Member"),
+            member("56-1-r1", "yes", 0, "Known Member"),
+            member("56-1-r1", "no", 0, "Unknown Member"),
+            member("56-1-r1", "no", 0, "Unknown Member"),
+        ];
+        let tallies = [
+            VoteTallyDraft {
+                result_id: "56-1-r1".into(),
+                tally_kind: "position".into(),
+                option_key: "yes".into(),
+                label_nl: "ja".into(),
+                label_fr: "oui".into(),
+                dimension: "overall".into(),
+                count: 1,
+                selected: false,
+            },
+            VoteTallyDraft {
+                result_id: "56-1-r1".into(),
+                tally_kind: "position".into(),
+                option_key: "no".into(),
+                label_nl: "nee".into(),
+                label_fr: "non".into(),
+                dimension: "overall".into(),
+                count: 1,
+                selected: false,
+            },
+        ];
+        write_inputs(
+            &root,
+            &[result("56-1-r1", "roll_call", true)],
+            &rows,
+            &tallies,
+        );
+
+        let output = normalize_vote_casts(&root, &resolver()).unwrap();
+        assert_eq!(output.casts.len(), 1);
+        assert_eq!(output.unresolved.len(), 1);
+        assert_eq!(output.reconciliation.len(), 1);
+        assert_eq!(output.reconciliation[0].members_yes_count, "1");
+        assert_eq!(output.reconciliation[0].members_no_count, "1");
+        assert_eq!(output.reconciliation[0].reconciled, "true");
+        assert_eq!(output.casts[0].confidence, 1.0);
+        assert_eq!(
+            output.casts[0].source_artifact_id,
+            output.unresolved[0].source_artifact_id
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_named_roll_call_methods_emit_casts() {
+        let root = test_dir("methods");
+        let results = [
+            result("56-1-r1", "roll_call", true),
+            result("56-1-r2", "language_group_roll_call", true),
+            result("56-1-r3", "secret_ballot", false),
+            result("56-1-r4", "sitting_standing", false),
+            result("56-1-r5", "no_quorum", false),
+        ];
+        let members = results
+            .iter()
+            .map(|row| member(&row.result_id, "yes", 0, "Known Member"))
+            .collect::<Vec<_>>();
+        write_inputs(&root, &results, &members, &[]);
+
+        let output = normalize_vote_casts(&root, &resolver()).unwrap();
+        assert_eq!(
+            output
+                .casts
+                .iter()
+                .map(|cast| cast.result_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["56-1-r1", "56-1-r2"]
+        );
+        assert!(
+            output
+                .casts
+                .iter()
+                .all(|cast| !matches!(cast.result_id.as_str(), "56-1-r3" | "56-1-r4" | "56-1-r5"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

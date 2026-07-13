@@ -14,7 +14,7 @@ pub fn run_vote_reconciliation_checks(data_dir: &Path) -> Result<Vec<CheckDetail
 
     let mut details = Vec::new();
     for batch in read_all_rows(&path)? {
-        let vote_ids = read_string_column(&batch, "vote_id")?;
+        let vote_ids = read_string_column(&batch, "result_id")?;
         let session_ids = read_string_column(&batch, "session_id")?;
         let meeting_ids = read_string_column(&batch, "meeting_id")?;
         let yes = read_string_column(&batch, "yes")?;
@@ -37,14 +37,19 @@ pub fn run_vote_reconciliation_checks(data_dir: &Path) -> Result<Vec<CheckDetail
                     "warn",
                     "warn",
                     format!(
-                        "vote {} headline yes={}/no={}/abstain={} vs members {}/{}/{}",
-                        vote_ids[i], yes[i], no[i], abstain[i],
-                        members_yes[i], members_no[i], members_abstain[i]
+                        "result {} headline yes={}/no={}/abstain={} vs members {}/{}/{}",
+                        vote_ids[i],
+                        yes[i],
+                        no[i],
+                        abstain[i],
+                        members_yes[i],
+                        members_no[i],
+                        members_abstain[i]
                     ),
                 )
                 .with_session(&session_ids[i])
                 .with_meeting("plenary", &meeting_ids[i])
-                .with_entity("vote", &vote_ids[i])
+                .with_entity("vote_result", &vote_ids[i])
                 .with_values(
                     format!("yes={} no={} abstain={}", yes[i], no[i], abstain[i]),
                     format!(

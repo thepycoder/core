@@ -219,7 +219,12 @@ impl ActorResolver {
         )
     }
 
-    pub fn resolve_department(&self, deptnum: &str, title_nl: &str, title_fr: &str) -> ActorResolveDetail {
+    pub fn resolve_department(
+        &self,
+        deptnum: &str,
+        title_nl: &str,
+        title_fr: &str,
+    ) -> ActorResolveDetail {
         let display = if !title_nl.is_empty() {
             title_nl
         } else {

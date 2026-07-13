@@ -3,17 +3,17 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::report_blocks::read_report_html;
-use crawl::utils::{clean_text, composite_id, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
-use crawl::{
-    appendix_marker_for_vote, classify_question_heading_bilingual, classify_question_heading_text,
-    extract_proceedings_from_document, extract_utterances_from_document,
-    extract_written_oral_items, has_pending_question_text, oral_written_answer_drafts,
-    parse_compact_vote_number,
-    parse_paragraph_vote_number, parse_report_blocks, write_answers_parquet, write_hearings_parquet,
-    write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
-    InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
+use crawl::utils::{
+    clean_text, composite_id, composite_scoped_id, max_cached_meeting_id, relative_cache_path,
 };
-use identity::convert_name;
+use crawl::{
+    AgendaItem, AnswerDraft, HearingDraft, InterpellationDraft, ItemKind, QuestionHeadingRole,
+    ReportBlock, ReportBlockRow, SourceSpanDraft, UtteranceDraft, VoteAssemblyOutput,
+    classify_question_heading_bilingual, classify_question_heading_text, has_pending_question_text,
+    parse_plenary_meeting_report, write_answers_parquet, write_hearings_parquet,
+    write_interpellations_parquet, write_report_blocks_parquet, write_source_spans_parquet,
+    write_utterances_parquet, write_vote_bundle,
+};
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -28,30 +28,11 @@ use std::sync::{Arc, OnceLock};
 use tokio::fs;
 
 /// REGEXES
-static PARAGRAPH_VOTE_REGEX: OnceLock<Regex> = OnceLock::new();
 static QUESTION_REGEX: OnceLock<Regex> = OnceLock::new();
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_TOPIC_REGEX: OnceLock<Regex> = OnceLock::new();
-static VOTE_REGEX_1: OnceLock<Regex> = OnceLock::new();
-static VOTE_REGEX_2: OnceLock<Regex> = OnceLock::new();
-static VOTE_REGEX_3: OnceLock<Regex> = OnceLock::new();
-
-fn paragraph_vote_regex() -> &'static Regex {
-    PARAGRAPH_VOTE_REGEX.get_or_init(|| {
-        Regex::new(r"\(\s*\d{1,5}(?:\s*\/\s*\d{1,5}(?:\s*-\s*\d{1,5})?)?\s*\)\s*$").unwrap()
-    })
-}
-
-fn vote_bucket_label(label: &str) -> Option<&'static str> {
-    match label.trim() {
-        "Ja" | "Oui" => Some("yes"),
-        "Nee" | "Non" => Some("no"),
-        "Onthoudingen" | "Abstentions" => Some("abstain"),
-        _ => None,
-    }
-}
 
 fn question_regex() -> &'static Regex {
     // NOTE: Handles question IDs in the format of `(56001442P)`
@@ -77,52 +58,19 @@ fn proposition_topic_regex() -> &'static Regex {
     PROPOSITION_TOPIC_REGEX.get_or_init(|| Regex::new(r#"^([^(]*)"#).unwrap())
 }
 
-fn vote_regex_1() -> &'static Regex {
-    VOTE_REGEX_1.get_or_init(|| Regex::new(r#"^(.*)\((\d+)/(\d+(?:-\d+)?)\)\s*$"#).unwrap())
-}
-
-fn vote_regex_2() -> &'static Regex {
-    VOTE_REGEX_2.get_or_init(|| Regex::new(r#"^(.*)\s+\((?:nr\.|n°)\s*(\d+)\)\s*$"#).unwrap())
-}
-
-fn vote_regex_3() -> &'static Regex {
-    VOTE_REGEX_3.get_or_init(|| Regex::new(r#"^([^(]*)"#).unwrap())
-}
-
 /// SELECTORS
 static SELECTOR_SPAN: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_TR: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_TD: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_TABLE: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_H1_OR_H2: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_H1_OR_H2_OR_P: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_H1_OR_H2_OR_TABLE_OR_P: OnceLock<Selector> = OnceLock::new();
-static SELECTOR_P: OnceLock<Selector> = OnceLock::new();
-
-fn selector_p() -> &'static Selector {
-    SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap())
-}
 
 fn selector_span() -> &'static Selector {
     SELECTOR_SPAN.get_or_init(|| Selector::parse("span").unwrap())
 }
-fn selector_tr() -> &'static Selector {
-    SELECTOR_TR.get_or_init(|| Selector::parse("tr").unwrap())
-}
-fn selector_td() -> &'static Selector {
-    SELECTOR_TD.get_or_init(|| Selector::parse("td").unwrap())
-}
 fn selector_table() -> &'static Selector {
     SELECTOR_TABLE.get_or_init(|| Selector::parse("table").unwrap())
 }
-fn selector_h1_or_h2() -> &'static Selector {
-    SELECTOR_H1_OR_H2.get_or_init(|| Selector::parse("h1, h2").unwrap())
-}
 fn selector_h1_or_h2_or_p() -> &'static Selector {
     SELECTOR_H1_OR_H2_OR_P.get_or_init(|| Selector::parse("h1, h2, p").unwrap())
-}
-fn selector_h1_or_h2_or_table_or_p() -> &'static Selector {
-    SELECTOR_H1_OR_H2_OR_TABLE_OR_P.get_or_init(|| Selector::parse("h1, h2, table, p").unwrap())
 }
 
 struct ScrapedMeeting {
@@ -132,26 +80,6 @@ struct ScrapedMeeting {
     time_of_day: String,
     start_time: String,
     end_time: String,
-    source_url: String,
-    cache_path: String,
-}
-
-struct ScrapedVote {
-    vote_id: String,
-    session_id: u32,
-    meeting_id: u32,
-    date: String,
-    title_nl: String,
-    title_fr: String,
-    yes: u32,
-    no: u32,
-    abstain: u32,
-    members_yes: String,
-    members_no: String,
-    members_abstain: String,
-    dossier_id: String,
-    document_id: String,
-    motion_id: String,
     source_url: String,
     cache_path: String,
 }
@@ -198,8 +126,10 @@ struct MeetingOutput {
     meeting: ScrapedMeeting,
     questions: Vec<ScrapedQuestion>,
     propositions: Vec<ScrapedProposition>,
-    votes: Vec<ScrapedVote>,
     notices: Vec<ScrapedNotice>,
+    vote_bundle: VoteAssemblyOutput,
+    report_blocks: Vec<ReportBlockRow>,
+    source_spans: Vec<SourceSpanDraft>,
     hearings: Vec<HearingDraft>,
     interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
@@ -228,20 +158,6 @@ struct PropositionData {
     topic: String,
     dossier_id: Option<String>,
     document_id: Option<String>,
-}
-
-struct VoteData {
-    topic: String,
-    dossier_id: Option<String>,
-    document_id: Option<String>,
-    motion_id: Option<String>,
-}
-
-struct VoteRecord {
-    vote_number: String,
-    yes: u32,
-    no: u32,
-    abstain: u32,
 }
 
 macro_rules! col {
@@ -355,51 +271,6 @@ fn write_propositions(path: &Path, rows: &[ScrapedProposition]) -> Result<(), Bo
     )
 }
 
-fn write_votes(path: &Path, rows: &[ScrapedVote]) -> Result<(), Box<dyn Error>> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("vote_id", DataType::Utf8, false),
-        Field::new("session_id", DataType::Utf8, false),
-        Field::new("meeting_id", DataType::Utf8, false),
-        Field::new("date", DataType::Utf8, false),
-        Field::new("title_nl", DataType::Utf8, false),
-        Field::new("title_fr", DataType::Utf8, false),
-        Field::new("yes", DataType::Utf8, false),
-        Field::new("no", DataType::Utf8, false),
-        Field::new("abstain", DataType::Utf8, false),
-        Field::new("members_yes", DataType::Utf8, false),
-        Field::new("members_no", DataType::Utf8, false),
-        Field::new("members_abstain", DataType::Utf8, false),
-        Field::new("dossier_id", DataType::Utf8, false),
-        Field::new("document_id", DataType::Utf8, false),
-        Field::new("motion_id", DataType::Utf8, false),
-        Field::new("source_url", DataType::Utf8, false),
-        Field::new("cache_path", DataType::Utf8, false),
-    ]));
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(rows, |v| v.vote_id.clone()),
-            col!(rows, |v| v.session_id.to_string()),
-            col!(rows, |v| v.meeting_id.to_string()),
-            col!(rows, |v| v.date.clone()),
-            col!(rows, |v| v.title_nl.clone()),
-            col!(rows, |v| v.title_fr.clone()),
-            col!(rows, |v| v.yes.to_string()),
-            col!(rows, |v| v.no.to_string()),
-            col!(rows, |v| v.abstain.to_string()),
-            col!(rows, |v| v.members_yes.clone()),
-            col!(rows, |v| v.members_no.clone()),
-            col!(rows, |v| v.members_abstain.clone()),
-            col!(rows, |v| v.dossier_id.clone()),
-            col!(rows, |v| v.document_id.clone()),
-            col!(rows, |v| v.motion_id.clone()),
-            col!(rows, |v| v.source_url.clone()),
-            col!(rows, |v| v.cache_path.clone()),
-        ],
-    )
-}
-
 fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("notice_id", DataType::Utf8, false),
@@ -455,9 +326,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if cache_only() {
-        println!(
-            "[meetings-plenary] cache-only: parsing meetings 1..={last_meeting_id}"
-        );
+        println!("[meetings-plenary] cache-only: parsing meetings 1..={last_meeting_id}");
     } else if last_meeting_id == current_meeting_id {
         println!("[meetings-plenary] no new meeting available to download");
     } else {
@@ -471,7 +340,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_questions = Vec::new();
     let mut all_propositions = Vec::new();
     let mut all_notices = Vec::new();
-    let mut all_votes = Vec::new();
+    let mut all_vote_decisions = Vec::new();
+    let mut all_vote_results = Vec::new();
+    let mut all_vote_tallies = Vec::new();
+    let mut all_vote_members = Vec::new();
+    let mut all_vote_span_evidence = Vec::new();
+    let mut all_vote_unresolved = Vec::new();
+    let mut all_report_blocks = Vec::new();
+    let mut all_source_spans = Vec::new();
     let mut all_hearings = Vec::new();
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
@@ -513,7 +389,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_questions.extend(output.questions);
                 all_propositions.extend(output.propositions);
                 all_notices.extend(output.notices);
-                all_votes.extend(output.votes);
+                all_vote_decisions.extend(output.vote_bundle.decisions);
+                all_vote_results.extend(output.vote_bundle.results);
+                all_vote_tallies.extend(output.vote_bundle.tallies);
+                all_vote_members.extend(output.vote_bundle.members);
+                all_vote_span_evidence.extend(output.vote_bundle.span_evidence);
+                all_vote_unresolved.extend(output.vote_bundle.unresolved_events);
+                all_report_blocks.extend(output.report_blocks);
+                append_source_spans(&mut all_source_spans, output.source_spans);
                 all_hearings.extend(output.hearings);
                 all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
@@ -545,7 +428,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     write_questions(&session_dir.join("questions.parquet"), &all_questions)?;
     write_propositions(&session_dir.join("propositions.parquet"), &all_propositions)?;
     write_notices(&session_dir.join("notices.parquet"), &all_notices)?;
-    write_votes(&session_dir.join("votes.parquet"), &all_votes)?;
+    let vote_bundle = VoteAssemblyOutput {
+        decisions: all_vote_decisions,
+        results: all_vote_results,
+        tallies: all_vote_tallies,
+        members: all_vote_members,
+        span_evidence: all_vote_span_evidence,
+        unresolved_events: all_vote_unresolved,
+    };
+    write_vote_bundle(&session_dir, &vote_bundle)?;
+
+    let derived_dir = data_dir().join(format!("derived/sessions/{session_id}/plenary"));
+    std::fs::create_dir_all(&derived_dir)?;
+    write_report_blocks_parquet(
+        &derived_dir.join("report_blocks.parquet"),
+        &all_report_blocks,
+    )?;
+    write_source_spans_parquet(&derived_dir.join("source_spans.parquet"), &all_source_spans)?;
     write_hearings_parquet(&session_dir.join("hearings.parquet"), &all_hearings)?;
     write_interpellations_parquet(
         &session_dir.join("interpellations.parquet"),
@@ -560,6 +459,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         web_request_count
     );
     Ok(())
+}
+
+fn append_source_spans(target: &mut Vec<SourceSpanDraft>, rows: Vec<SourceSpanDraft>) {
+    target.extend(rows);
 }
 
 fn record_dossier(map: &mut HashMap<String, String>, id: &str, date: &str) {
@@ -664,25 +567,30 @@ async fn parse_meeting_from_cache(
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect();
 
-    let questions = extract_questions(
+    let parsed = parse_plenary_meeting_report(
         &document,
+        session_id,
+        meeting_id,
+        &date,
+        &url,
+        &cache_path,
+        &crawl::content_hash(&content),
+    );
+    for decision in &parsed.votes.decisions {
+        if !decision.dossier_id.is_empty() {
+            record_dossier(encountered_dossier_ids, &decision.dossier_id, &date);
+        }
+    }
+    let mut questions = extract_questions_from_agenda(
+        &parsed.agenda,
         session_id,
         meeting_id,
         &typo_map,
         &url,
         &cache_path,
-    )
-    .await?;
-    let mut questions = questions;
-    let blocks = parse_report_blocks(&document);
-    let oral_written_items = extract_written_oral_items(
-        &document,
-        &blocks,
-        MeetingKind::Plenary,
-        session_id,
-        meeting_id,
-    );
-    for item in &oral_written_items {
+    )?;
+    let oral_written_items = &parsed.oral_written_items;
+    for item in oral_written_items {
         if let Some(q) = questions
             .iter_mut()
             .find(|q| q.question_id == item.question_id)
@@ -692,16 +600,8 @@ async fn parse_meeting_from_cache(
             q.treatment_mode = "oral_written".to_string();
         }
     }
-    let answers = oral_written_answer_drafts(
-        &oral_written_items,
-        MeetingKind::Plenary,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
     let propositions = extract_propositions(
-        &document,
+        &parsed.blocks,
         session_id,
         meeting_id,
         &date,
@@ -710,42 +610,18 @@ async fn parse_meeting_from_cache(
         &cache_path,
     )
     .await?;
-    let notices = extract_notices(
-        &document,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    )
-    .await?;
-    let votes = extract_votes(
-        &document,
-        session_id,
-        meeting_id,
-        &date,
-        encountered_dossier_ids,
-        &url,
-        &cache_path,
-    )
-    .await?;
-
-    let utterances = extract_utterances_from_document(
-        &document,
-        MeetingKind::Plenary,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
-
-    let (hearings, interpellations) = extract_proceedings_from_document(
-        &document,
-        MeetingKind::Plenary,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    );
+    let notices =
+        extract_notices(&parsed.blocks, session_id, meeting_id, &url, &cache_path).await?;
+    let crawl::MeetingParseOutput {
+        votes,
+        report_block_rows: report_blocks,
+        source_spans,
+        hearings,
+        interpellations,
+        utterances,
+        answers,
+        ..
+    } = parsed;
 
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
@@ -761,7 +637,9 @@ async fn parse_meeting_from_cache(
         questions,
         propositions,
         notices,
-        votes,
+        vote_bundle: votes,
+        report_blocks,
+        source_spans,
         hearings,
         interpellations,
         utterances,
@@ -769,6 +647,45 @@ async fn parse_meeting_from_cache(
     })
 }
 
+fn extract_questions_from_agenda(
+    agenda: &[AgendaItem],
+    session_id: u32,
+    meeting_id: u32,
+    typo_map: &HashMap<String, String>,
+    source_url: &str,
+    cache_path: &str,
+) -> Result<Vec<ScrapedQuestion>, Box<dyn Error>> {
+    agenda
+        .iter()
+        .filter(|item| item.item_kind == ItemKind::Question)
+        .map(|item| {
+            let data_nl = extract_question_data(typo_map, &item.title_nl)?;
+            let data_fr = extract_question_data(typo_map, &item.title_fr)?;
+            let mut internal_ids = item.internal_ids.clone();
+            internal_ids.extend(data_nl.internal_ids);
+            internal_ids.extend(data_fr.internal_ids);
+            internal_ids.sort();
+            internal_ids.dedup();
+            Ok(ScrapedQuestion {
+                question_id: item.item_id.clone(),
+                session_id,
+                meeting_id,
+                questioners: data_nl.questioners.join(","),
+                respondents: data_nl.respondents.join(","),
+                topics_nl: data_nl.topics.join(";"),
+                topics_fr: data_fr.topics.join(";"),
+                internal_ids: internal_ids.join(","),
+                question_body_nl: String::new(),
+                question_body_fr: String::new(),
+                treatment_mode: String::new(),
+                source_url: source_url.to_string(),
+                cache_path: cache_path.to_string(),
+            })
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
 async fn extract_questions(
     document: &Html,
     session_id: u32,
@@ -812,8 +729,7 @@ async fn extract_questions(
     };
 
     // The keywords that indicate the questions section has started.
-    let questions_section_keywords =
-        crawl::question_boundaries::QUESTIONS_SECTION_KEYWORDS;
+    let questions_section_keywords = crawl::question_boundaries::QUESTIONS_SECTION_KEYWORDS;
 
     for element in document.select(selector_h1_or_h2_or_p()) {
         let tag = element.value().name();
@@ -834,12 +750,8 @@ async fn extract_questions(
                 found_questions_section = true;
                 processing = true;
             } else if found_questions_section {
-                if let Some(q) = flush_question(
-                    question_seq,
-                    &previous_nl,
-                    &previous_fr,
-                    typo_map,
-                )? {
+                if let Some(q) = flush_question(question_seq, &previous_nl, &previous_fr, typo_map)?
+                {
                     questions.push(q);
                 }
                 break;
@@ -868,10 +780,8 @@ async fn extract_questions(
                 }
             }
 
-            let heading_role = classify_question_heading_bilingual(
-                found_nl.as_deref(),
-                found_fr.as_deref(),
-            );
+            let heading_role =
+                classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref());
 
             if matches!(
                 heading_role,
@@ -887,12 +797,9 @@ async fn extract_questions(
 
             if is_group_start || is_single {
                 if has_pending_question_text(&previous_nl, &previous_fr) {
-                    if let Some(q) = flush_question(
-                        question_seq,
-                        &previous_nl,
-                        &previous_fr,
-                        typo_map,
-                    )? {
+                    if let Some(q) =
+                        flush_question(question_seq, &previous_nl, &previous_fr, typo_map)?
+                    {
                         questions.push(q);
                         question_seq += 1;
                     }
@@ -932,12 +839,8 @@ async fn extract_questions(
                 .to_string();
 
             if text.contains("Het incident is gesloten") || text.contains("L'incident est clos") {
-                if let Some(q) = flush_question(
-                    question_seq,
-                    &previous_nl,
-                    &previous_fr,
-                    typo_map,
-                )? {
+                if let Some(q) = flush_question(question_seq, &previous_nl, &previous_fr, typo_map)?
+                {
                     questions.push(q);
                     question_seq += 1;
                 }
@@ -949,12 +852,7 @@ async fn extract_questions(
     }
 
     if has_pending_question_text(&previous_nl, &previous_fr) {
-        if let Some(q) = flush_question(
-            question_seq,
-            &previous_nl,
-            &previous_fr,
-            typo_map,
-        )? {
+        if let Some(q) = flush_question(question_seq, &previous_nl, &previous_fr, typo_map)? {
             questions.push(q);
         }
     }
@@ -967,8 +865,20 @@ async fn extract_questions(
 /// - The notices always have a <h2> in Dutch, and another <h2> in French. The language indicators (lang="NL" for example) are often wrong
 ///   so we decide NL/FR based on position: NL comes first, then FR.
 /// - Some notices are included within the propositions section. These are detected and stored as notices.
+fn block_heading_title(block: &ReportBlock) -> String {
+    let text = clean_text(&block.text).replace('"', "'");
+    let without_number = crawl::extract_agenda_number(&text)
+        .and_then(|number| text.strip_prefix(&number))
+        .unwrap_or(&text);
+    without_number
+        .trim()
+        .trim_start_matches('-')
+        .trim()
+        .to_string()
+}
+
 async fn extract_propositions(
-    document: &Html,
+    blocks: &[ReportBlock],
     session_id: u32,
     meeting_id: u32,
     date: &str,
@@ -985,17 +895,9 @@ async fn extract_propositions(
 
     let mut all_titles: Vec<(Option<u32>, String, bool)> = Vec::new();
 
-    for element in document.select(selector_h1_or_h2()) {
-        let tag = element.value().name();
-
-        if tag == "h1" {
-            let text = element
-                .text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .replace("\n", " ")
-                .trim()
-                .to_lowercase();
+    for block in blocks {
+        if block.tag == crawl::BlockTag::H1 {
+            let text = block.text.to_lowercase();
             let is_dutch_propositions_header = proposition_keywords_nl
                 .iter()
                 .any(|&keyword| text.contains(keyword));
@@ -1012,44 +914,13 @@ async fn extract_propositions(
             continue;
         }
 
-        if !processing || tag != "h2" {
+        if !processing || block.tag != crawl::BlockTag::H2 {
             continue;
         }
 
-        // Extract the agenda number from pure-digit spans.
-        let number: Option<u32> = element
-            .select(selector_span())
-            .filter_map(|span| {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" "))
-                    .trim()
-                    .to_string();
-                if !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit()) {
-                    raw.parse().ok()
-                } else {
-                    None
-                }
-            })
-            .next();
-
-        // Collect the actual title text, skipping pure-digit spans.
-        let text: String = element
-            .select(selector_span())
-            .filter_map(|span| {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" "))
-                    .replace("\"", "'")
-                    .trim()
-                    .to_string();
-                if raw.is_empty() || raw.chars().all(|c| c.is_ascii_digit()) {
-                    None
-                } else {
-                    Some(raw)
-                }
-            })
-            .collect::<Vec<_>>()
-            .last() // NOTE: We pick the last one but why? Otherwise I got duplicates.
-            .unwrap()
-            .trim()
-            .to_string();
+        let number =
+            crawl::extract_agenda_number(&block.text).and_then(|value| value.parse::<u32>().ok());
+        let text = block_heading_title(block);
 
         if text.is_empty() {
             continue;
@@ -1117,7 +988,7 @@ async fn extract_propositions(
 ///   so we decide NL/FR based on position: NL comes first, then FR.
 /// - Some notices are not put under a separate <h1> header but are included wihin the propositions sector. This is handled in the extract_propositions function.
 async fn extract_notices(
-    document: &Html,
+    blocks: &[ReportBlock],
     session_id: u32,
     meeting_id: u32,
     source_url: &str,
@@ -1132,17 +1003,9 @@ async fn extract_notices(
 
     let mut all_titles: Vec<(Option<u32>, String, bool)> = Vec::new();
 
-    for element in document.select(selector_h1_or_h2()) {
-        let tag = element.value().name();
-
-        if tag == "h1" {
-            let text = element
-                .text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .replace("\n", " ")
-                .trim()
-                .to_lowercase();
+    for block in blocks {
+        if block.tag == crawl::BlockTag::H1 {
+            let text = block.text.to_lowercase();
             let is_dutch_notice_header = notice_keywords_nl
                 .iter()
                 .any(|&keyword| text.contains(keyword));
@@ -1159,44 +1022,13 @@ async fn extract_notices(
             continue;
         }
 
-        if !processing || tag != "h2" {
+        if !processing || block.tag != crawl::BlockTag::H2 {
             continue;
         }
 
-        // Extract the agenda number from pure-digit spans.
-        let number: Option<u32> = element
-            .select(selector_span())
-            .filter_map(|span| {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" "))
-                    .trim()
-                    .to_string();
-                if !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit()) {
-                    raw.parse().ok()
-                } else {
-                    None
-                }
-            })
-            .next();
-
-        // Collect the actual title text, skipping pure-digit spans.
-        let text: String = element
-            .select(selector_span())
-            .filter_map(|span| {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" "))
-                    .replace("\"", "'")
-                    .trim()
-                    .to_string();
-                if raw.is_empty() || raw.chars().all(|c| c.is_ascii_digit()) {
-                    None
-                } else {
-                    Some(raw)
-                }
-            })
-            .collect::<Vec<_>>()
-            .last() // NOTE: We pick the last one but why? Otherwise I got duplicates.
-            .unwrap()
-            .trim()
-            .to_string();
+        let number =
+            crawl::extract_agenda_number(&block.text).and_then(|value| value.parse::<u32>().ok());
+        let text = block_heading_title(block);
 
         if text.is_empty() {
             continue;
@@ -1248,392 +1080,6 @@ async fn extract_notices(
     Ok(notices)
 }
 
-struct CachedVote {
-    yes: u32,
-    no: u32,
-    abstain: u32,
-    yes_names: String,
-    no_names: String,
-    abstain_names: String,
-}
-
-async fn extract_votes(
-    document: &Html,
-    session_id: u32,
-    meeting_id: u32,
-    date: &str,
-    encountered_dossier_ids: &mut HashMap<String, String>,
-    source_url: &str,
-    cache_path: &str,
-) -> Result<Vec<ScrapedVote>, Box<dyn Error>> {
-    let mut votes = Vec::new();
-    let mut vote_text_nl = String::new();
-    let mut vote_text_fr = String::new();
-    let mut previous_vote_title_nl = String::new();
-    let mut previous_vote_title_fr = String::new();
-    let mut found_votes_section = false;
-    let mut vote_seq: i32 = 0;
-    let mut collecting_grouped_vote = false;
-    let mut known_vote_results: HashMap<String, CachedVote> = HashMap::new();
-
-    // The keywords that indicate the votes section has started.
-    let votes_section_keywords = ["naamstemmingen", "naamstemming"];
-
-    for element in document.select(selector_h1_or_h2_or_table_or_p()) {
-        let tag = element.value().name();
-
-        if tag == "h1" {
-            let text = element
-                .text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .replace("\n", " ")
-                .trim()
-                .to_lowercase();
-
-            if votes_section_keywords
-                .iter()
-                .any(|&keyword| text.contains(keyword))
-            {
-                found_votes_section = true;
-            }
-        }
-
-        if !found_votes_section {
-            continue;
-        }
-
-        // Encountered a <p> element that is not part of a vote section (i.e. not inside a <table>).
-        if tag == "p"
-            && !element
-                .ancestors()
-                .any(|a| a.value().as_element().is_some_and(|e| e.name() == "table"))
-        {
-            let spans: Vec<_> = element.select(selector_span()).collect();
-
-            // Sometimes, a vote result is a <p> element and it reuses the same results from a previous vote.
-            if let Some(span) = spans.last() {
-                let text =
-                    clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-
-                if let Some(vote_number) = parse_paragraph_vote_number(&text) {
-                    // Get vote results from known results.
-                    if let Some(known_vote) = known_vote_results.get(&vote_number) {
-                        // Look back at last title and extract data.
-                        let data_nl = extract_vote_data(previous_vote_title_nl.clone())?;
-                        let data_fr = extract_vote_data(previous_vote_title_fr.clone())?;
-                        if let Some(ref id) = data_nl.dossier_id.clone() {
-                            record_dossier(encountered_dossier_ids, id, date);
-                        }
-
-                        // Push vote.
-                        votes.push(ScrapedVote {
-                            vote_id: composite_id(session_id, meeting_id, vote_seq),
-                            session_id,
-                            meeting_id,
-                            date: date.to_string(),
-                            title_nl: if data_nl.topic.is_empty() {
-                                vote_text_nl.clone()
-                            } else {
-                                data_nl.topic
-                            },
-                            title_fr: if data_fr.topic.is_empty() {
-                                vote_text_fr.clone()
-                            } else {
-                                data_fr.topic
-                            },
-                            yes: known_vote.yes,
-                            no: known_vote.no,
-                            abstain: known_vote.abstain,
-                            members_yes: convert_voter_names(&known_vote.yes_names),
-                            members_no: convert_voter_names(&known_vote.no_names),
-                            members_abstain: convert_voter_names(&known_vote.abstain_names),
-                            dossier_id: data_nl.dossier_id.unwrap_or_default(),
-                            document_id: data_nl.document_id.unwrap_or_default(),
-                            motion_id: data_nl.motion_id.unwrap_or_default(),
-                            source_url: source_url.to_string(),
-                            cache_path: cache_path.to_string(),
-                        });
-                        vote_seq += 1;
-                    }
-                }
-            }
-        }
-
-        // Sometimes, a vote is a <p> element and not a <h2> element.
-        let is_vote_title_as_paragraph = {
-            let spans: Vec<_> = element.select(selector_span()).collect();
-            spans.last().map_or(false, |span| {
-                let text =
-                    clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                paragraph_vote_regex().is_match(&text)
-            })
-        };
-        // Encountered a <p> element that looks like a vote title.
-        if tag == "p" && is_vote_title_as_paragraph {
-            let spans: Vec<_> = element.select(selector_span()).collect();
-            let mut nl_text = String::new();
-            let mut fr_text = String::new();
-            let mut dossier_ref = String::new();
-            // Determine the paragraph's primary language from its class attribute.
-            let p_class = element.value().attr("class").unwrap_or("");
-            let is_nl_paragraph = p_class.contains("NL");
-            let is_fr_paragraph = p_class.contains("FR");
-            for span in spans {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                // Skip dossier reference spans like (297/10) — these have swapped lang attrs in source HTML.
-                if raw.trim().starts_with('(') {
-                    dossier_ref = raw.trim().to_string();
-                    continue;
-                }
-                match span.value().attr("lang") {
-                    Some("FR") => fr_text.push_str(&raw),
-                    Some("NL") | Some("NL-BE") => {
-                        // Source HTML sometimes mis-tags French content as NL-BE.
-                        // Use the paragraph class as the primary signal, falling back
-                        // to content-based detection when the class is also ambiguous.
-                        if is_fr_paragraph || (is_likely_french(&raw) && !is_likely_dutch(&raw)) {
-                            fr_text.push_str(&raw);
-                        } else {
-                            nl_text.push_str(&raw);
-                        }
-                    }
-                    _ => {
-                        // No lang attr: use paragraph class, then content detection, then
-                        // fall back to "first span is NL, second is FR".
-                        if is_nl_paragraph {
-                            nl_text.push_str(&raw);
-                        } else if is_fr_paragraph {
-                            fr_text.push_str(&raw);
-                        } else if is_likely_french(&raw) && !is_likely_dutch(&raw) {
-                            fr_text.push_str(&raw);
-                        } else if nl_text.is_empty() {
-                            nl_text.push_str(&raw);
-                        } else {
-                            fr_text.push_str(&raw);
-                        }
-                    }
-                }
-            }
-
-            // Append the dossier ref to both titles so extract_vote_data can parse it.
-            // e.g. "Stemming over amendement nr. 13 ... (297/10)"
-            if !dossier_ref.is_empty() {
-                if !nl_text.is_empty() {
-                    nl_text.push(' ');
-                    nl_text.push_str(&dossier_ref);
-                }
-                if !fr_text.is_empty() {
-                    fr_text.push(' ');
-                    fr_text.push_str(&dossier_ref);
-                }
-            }
-
-            // Only update the title for the language this paragraph is actually for.
-            // This avoids clobbering the other language's title when the source HTML
-            // has swapped lang attrs on reference spans like (297/10).
-            if is_nl_paragraph && !nl_text.trim().is_empty() {
-                previous_vote_title_nl = nl_text.trim().to_string();
-            } else if is_fr_paragraph && !fr_text.trim().is_empty() {
-                previous_vote_title_fr = fr_text.trim().to_string();
-            } else {
-                // Fallback: paragraph class doesn't tell us the language,
-                // so update whichever fields we actually extracted text for.
-                if !nl_text.trim().is_empty() {
-                    previous_vote_title_nl = nl_text.trim().to_string();
-                }
-                if !fr_text.trim().is_empty() {
-                    previous_vote_title_fr = fr_text.trim().to_string();
-                }
-            }
-        }
-
-        // Encountered a regular vote title.
-        if tag == "h2" {
-            // Collect all spans tagged NL/NL-BE. Source HTML sometimes mis-tags French
-            // content as NL-BE (e.g. "Chambre des représentants" with lang="NL-BE"),
-            // so we verify with is_likely_french / is_likely_dutch and reroute if needed.
-            let nl_spans: Vec<_> = element
-                .select(selector_span())
-                .filter(|s| matches!(s.value().attr("lang"), Some("NL") | Some("NL-BE")))
-                .collect();
-            if let Some(span) = nl_spans.last() {
-                let raw = clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-
-                // Detect mislabelled span: looks French and not Dutch → reroute to FR bucket.
-                let (nl_candidate, fr_candidate) =
-                    if is_likely_french(&raw) && !is_likely_dutch(&raw) {
-                        (String::new(), raw)
-                    } else {
-                        (raw, String::new())
-                    };
-
-                // Apply to NL bucket.
-                if !nl_candidate.is_empty() {
-                    vote_text_nl = nl_candidate;
-                    if !vote_text_nl.starts_with("-") {
-                        previous_vote_title_nl = vote_text_nl.clone();
-                        collecting_grouped_vote = true;
-                    } else if collecting_grouped_vote {
-                        previous_vote_title_nl.push('\n');
-                        previous_vote_title_nl.push_str(&vote_text_nl);
-                    } else {
-                        if !previous_vote_title_nl.is_empty() {
-                            collecting_grouped_vote = false;
-                        }
-                        previous_vote_title_nl.clear();
-                    }
-                }
-
-                // Apply rerouted FR candidate (mislabelled NL-BE span that is actually French).
-                if !fr_candidate.is_empty() {
-                    vote_text_fr = fr_candidate;
-                    if !vote_text_fr.starts_with("-") {
-                        previous_vote_title_fr = vote_text_fr.clone();
-                        collecting_grouped_vote = true;
-                    } else if collecting_grouped_vote {
-                        previous_vote_title_fr.push('\n');
-                        previous_vote_title_fr.push_str(&vote_text_fr);
-                    } else {
-                        if !previous_vote_title_fr.is_empty() {
-                            collecting_grouped_vote = false;
-                        }
-                        previous_vote_title_fr.clear();
-                    }
-                }
-            }
-
-            // Find FR title from spans explicitly tagged lang="FR".
-            let fr_spans: Vec<_> = element
-                .select(selector_span())
-                .filter(|s| s.value().attr("lang") == Some("FR"))
-                .collect();
-            if let Some(span) = fr_spans.last() {
-                vote_text_fr =
-                    clean_text(&span.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
-                if !vote_text_fr.is_empty() && !vote_text_fr.starts_with("-") {
-                    previous_vote_title_fr = vote_text_fr.clone();
-                    collecting_grouped_vote = true;
-                } else if collecting_grouped_vote && vote_text_fr.starts_with("-") {
-                    previous_vote_title_fr.push('\n');
-                    previous_vote_title_fr.push_str(&vote_text_fr);
-                } else {
-                    if !previous_vote_title_fr.is_empty() {
-                        collecting_grouped_vote = false;
-                    }
-                    previous_vote_title_fr.clear();
-                }
-            }
-        }
-
-        // Encountered a vote table.
-        if tag == "table" {
-            // Extract vote + names from table.
-            let vote = extract_vote_from_table(element);
-            if vote.yes == 0 && vote.no == 0 && vote.abstain == 0 {
-                continue;
-            }
-
-            // Get names from vote appendix in document.
-            let (yes_names, no_names, abstain_names) =
-                extract_voter_names(document, &vote.vote_number.trim());
-
-            // Store vote in known results so other votes can reuse it.
-            known_vote_results.insert(
-                vote.vote_number.clone().trim().to_string(),
-                CachedVote {
-                    yes: vote.yes,
-                    no: vote.no,
-                    abstain: vote.abstain,
-                    yes_names: yes_names.clone(),
-                    no_names: no_names.clone(),
-                    abstain_names: abstain_names.clone(),
-                },
-            );
-
-            // Look back at last title and extract data.
-            let data_nl = extract_vote_data(previous_vote_title_nl.clone())?;
-            let data_fr = extract_vote_data(previous_vote_title_fr.clone())?;
-            if let Some(ref id) = data_nl.dossier_id.clone() {
-                record_dossier(encountered_dossier_ids, id, date);
-            }
-
-            // Push vote.
-            votes.push(ScrapedVote {
-                vote_id: composite_id(session_id, meeting_id, vote_seq),
-                session_id,
-                meeting_id,
-                date: date.to_string(),
-                title_nl: if data_nl.topic.is_empty() {
-                    vote_text_nl.clone()
-                } else {
-                    data_nl.topic
-                },
-                title_fr: if data_fr.topic.is_empty() {
-                    vote_text_fr.clone()
-                } else {
-                    data_fr.topic
-                },
-                yes: vote.yes,
-                no: vote.no,
-                abstain: vote.abstain,
-                members_yes: convert_voter_names(&yes_names),
-                members_no: convert_voter_names(&no_names),
-                members_abstain: convert_voter_names(&abstain_names),
-                dossier_id: data_nl.dossier_id.unwrap_or_default(),
-                document_id: data_nl.document_id.unwrap_or_default(),
-                motion_id: data_nl.motion_id.unwrap_or_default(),
-                source_url: source_url.to_string(),
-                cache_path: cache_path.to_string(),
-            });
-            vote_seq += 1;
-        }
-    }
-    Ok(votes)
-}
-
-/// Extracts vote data (topic/dossier/document/motion) from the vote title.
-fn extract_vote_data(vote_text: String) -> Result<VoteData, Box<dyn Error>> {
-    // Try regex 1
-    if let Some(captures) = vote_regex_1().captures(&vote_text) {
-        return Ok(VoteData {
-            topic: captures[1].trim().to_string(),
-            dossier_id: Some(captures[2].trim().to_string()),
-            document_id: Some(captures[3].trim().to_string()),
-            motion_id: None,
-        });
-    }
-
-    // Try regex 2
-    if let Some(captures) = vote_regex_2().captures(&vote_text) {
-        return Ok(VoteData {
-            topic: captures[1].trim().to_string(),
-            dossier_id: None,
-            document_id: None,
-            motion_id: Some(captures[2].trim().to_string()),
-        });
-    }
-
-    // Try regex 3
-    if let Some(c) = vote_regex_3().captures(&vote_text) {
-        return Ok(VoteData {
-            topic: c[1].trim().to_string(),
-            dossier_id: None,
-            document_id: None,
-            motion_id: None,
-        });
-    }
-    Err("No regex matched for vote text".into())
-}
-
-fn convert_voter_names(raw: &str) -> String {
-    raw.split(',')
-        .map(|name| convert_name(name.trim()))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Extract NL/FR spans, swapping where misclassified by the source HTML.
 fn extract_bilingual_spans(element: &ElementRef) -> (Option<String>, Option<String>) {
     let french_indicators = ["questions jointes"];
     let dutch_indicators = ["samengevoegde vragen"];
@@ -1802,140 +1248,6 @@ fn extract_question_data(
     })
 }
 
-/// Extracts a vote record from a table element.
-fn extract_vote_from_table(table: ElementRef) -> VoteRecord {
-    let mut vote_number = String::new();
-    let mut processing = false;
-    let mut yes = 0u32;
-    let mut no = 0u32;
-    let mut abstain = 0u32;
-
-    for (i, row) in table.select(selector_tr()).enumerate() {
-        let cells: Vec<_> = row.select(selector_td()).collect();
-        if i == 0 {
-            let text = row.text().collect::<Vec<_>>().join(" ").trim().to_string();
-            if let Some(number) = parse_compact_vote_number(&text) {
-                vote_number = number;
-                processing = true;
-            }
-            continue;
-        }
-        if processing && cells.len() >= 2 {
-            let label = cells[0]
-                .text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_string();
-            let value_str = cells[1].text().collect::<Vec<_>>().join(" ");
-            if let Ok(v) = value_str.trim().parse::<u32>() {
-                match vote_bucket_label(&label) {
-                    Some("yes") => yes = v,
-                    Some("no") => no = v,
-                    Some("abstain") => abstain = v,
-                    _ => {}
-                }
-            }
-        }
-    }
-    VoteRecord {
-        vote_number,
-        yes,
-        no,
-        abstain,
-    }
-}
-
-fn extract_voter_names(document: &Html, vote_index: &str) -> (String, String, String) {
-    let mut tables = Vec::new();
-    for paragraph in document.select(selector_p()) {
-        let text = clean_text(&paragraph.text().collect::<Vec<_>>().join(" "));
-        if !appendix_marker_for_vote(&text, vote_index) {
-            continue;
-        }
-
-        let mut node = paragraph.next_sibling();
-        while let Some(n) = node {
-            if let Some(el) = ElementRef::wrap(n) {
-                if el.value().name() == "table" {
-                    tables.push(el);
-                    if tables.len() == 3 {
-                        break;
-                    }
-                }
-            }
-            node = n.next_sibling();
-        }
-        break;
-    }
-
-    let mut yes_voters = String::new();
-    let mut no_voters = String::new();
-    let mut abstain_voters = String::new();
-    let vote_types = [&mut yes_voters, &mut no_voters, &mut abstain_voters];
-
-    for (i, table) in tables.iter().enumerate() {
-        let mut tds = table.select(selector_td());
-        tds.next();
-        let count: usize = tds
-            .next()
-            .map(|td| {
-                td.text()
-                    .collect::<Vec<_>>()
-                    .join(" ")
-                    .trim()
-                    .parse()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
-        if count == 0 {
-            *vote_types[i] = String::new();
-            continue;
-        }
-
-        let mut node = table.next_sibling();
-        let mut collected_names = Vec::new();
-
-        while let Some(n) = node {
-            if let Some(el) = ElementRef::wrap(n) {
-                if el.value().name() == "table" {
-                    break;
-                }
-                if el.value().name() == "p" {
-                    let raw = el
-                        .text()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .trim()
-                        .to_string();
-                    let looks_like_names = raw
-                        .chars()
-                        .next()
-                        .map(|c| c.is_alphabetic())
-                        .unwrap_or(false)
-                        && !raw.contains("Vote nominatif")
-                        && !raw.contains("Naamstemming")
-                        && raw.chars().any(|c| c.is_alphabetic());
-                    if looks_like_names {
-                        let trimmed = raw.trim_end_matches(',').trim().to_string();
-                        collected_names.push(trimmed);
-                    }
-                }
-            }
-            node = n.next_sibling();
-        }
-
-        if !collected_names.is_empty() {
-            *vote_types[i] = collected_names
-                .join(", ")
-                .replace(", ", ",")
-                .replace(",\n", ",")
-                .replace('\n', " ");
-        }
-    }
-    (yes_voters, no_voters, abstain_voters)
-}
-
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
     let first_table = document
         .select(selector_table())
@@ -2028,6 +1340,8 @@ fn extract_time_from_document(document: &Html, keyword: &str) -> Result<String, 
 #[cfg(test)]
 mod question_extract_tests {
     use super::*;
+    use arrow::array::StringArray;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use scraper::Html;
     use std::collections::HashMap;
     use std::fs::read_to_string;
@@ -2035,14 +1349,8 @@ mod question_extract_tests {
 
     fn cached_plenary_html(meeting_id: u32) -> Option<PathBuf> {
         dotenvy::dotenv().ok();
-        let path = cache_dir().join(format!(
-            "sessions/56/meetings/plenary/56-{meeting_id}.html"
-        ));
-        if path.exists() {
-            Some(path)
-        } else {
-            None
-        }
+        let path = cache_dir().join(format!("sessions/56/meetings/plenary/56-{meeting_id}.html"));
+        if path.exists() { Some(path) } else { None }
     }
 
     #[tokio::test]
@@ -2078,26 +1386,31 @@ mod question_extract_tests {
         let content = read_report_html(&path).unwrap();
         let document = Html::parse_document(&content);
         let date = extract_date_from_document(&document).unwrap();
-        let mut encountered_dossier_ids = HashMap::new();
-        let votes = extract_votes(
+        let parsed = crawl::parse_plenary_meeting_report(
             &document,
             56,
             60,
             &date,
-            &mut encountered_dossier_ids,
             "http://example.test",
             "sessions/56/meetings/plenary/56-60.html",
-        )
-        .await
-        .expect("extract votes from cached meeting 60");
-        assert!(
-            votes.len() >= 50,
-            "expected many votes for meeting 60, got {}",
-            votes.len()
+            &crawl::content_hash(&content),
         );
         assert!(
-            votes.iter().any(|v| v.yes > 0 || v.no > 0),
-            "expected at least one vote with yes/no totals"
+            parsed.votes.decisions.len() >= 50,
+            "expected many vote decisions for meeting 60, got {}",
+            parsed.votes.decisions.len()
+        );
+        assert!(
+            parsed
+                .votes
+                .tallies
+                .iter()
+                .any(|t| t.option_key == "yes" && t.count > 0),
+            "expected at least one vote with yes tallies"
+        );
+        assert!(
+            !parsed.source_spans.is_empty(),
+            "expected provenance spans for meeting 60"
         );
     }
 
@@ -2116,5 +1429,101 @@ mod question_extract_tests {
             "meeting 82 returned {} questions",
             output.questions.len()
         );
+    }
+
+    #[tokio::test]
+    async fn staged_heading_entity_ids_match_provenance_spans() {
+        let html = r#"
+            <h1>Voorstellen</h1>
+            <h2><span>01</span><span>Voorstel over testen (56/1)</span></h2>
+            <h2><span>Proposition relative aux tests (56/1)</span></h2>
+            <h1>Mededelingen</h1>
+            <h2><span>02</span><span>Mededeling over testen</span></h2>
+            <h2><span>Communication relative aux tests</span></h2>
+        "#;
+        let document = Html::parse_document(html);
+        let parsed = parse_plenary_meeting_report(
+            &document,
+            56,
+            9,
+            "2026-01-01",
+            "url",
+            "cache",
+            &crawl::content_hash(html),
+        );
+        let mut dossiers = HashMap::new();
+        let propositions = extract_propositions(
+            &parsed.blocks,
+            56,
+            9,
+            "2026-01-01",
+            &mut dossiers,
+            "url",
+            "cache",
+        )
+        .await
+        .unwrap();
+        let notices = extract_notices(&parsed.blocks, 56, 9, "url", "cache")
+            .await
+            .unwrap();
+        assert_eq!(propositions.len(), 1);
+        assert_eq!(notices.len(), 1);
+        assert!(parsed.source_spans.iter().any(|span| {
+            span.entity_type == "Proposition"
+                && span.entity_id == propositions[0].proposition_id
+                && span.span_role == "proposition_body"
+        }));
+        assert!(parsed.source_spans.iter().any(|span| {
+            span.entity_type == "Notice"
+                && span.entity_id == notices[0].notice_id
+                && span.span_role == "notice_body"
+        }));
+    }
+
+    #[test]
+    fn production_aggregation_persists_unresolved_span_rows() {
+        let html = "<html></html>";
+        let parsed = parse_plenary_meeting_report(
+            &Html::parse_document(html),
+            56,
+            99,
+            "2026-01-01",
+            "url",
+            "cache",
+            &crawl::content_hash(html),
+        );
+        assert!(parsed.source_spans.iter().any(|span| {
+            span.validation_status == "unresolved"
+                && span.unresolved_reason == "invalid_half_open_range"
+        }));
+
+        let mut aggregated = Vec::new();
+        append_source_spans(&mut aggregated, parsed.source_spans);
+        let path = std::env::temp_dir().join(format!(
+            "plenary-source-spans-{}-{}.parquet",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        write_source_spans_parquet(&path, &aggregated).unwrap();
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(File::open(&path).unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let statuses = batch
+            .column_by_name("validation_status")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let reasons = batch
+            .column_by_name("unresolved_reason")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(statuses.value(0), "unresolved");
+        assert_eq!(reasons.value(0), "invalid_half_open_range");
+        std::fs::remove_file(path).unwrap();
     }
 }

@@ -12,7 +12,7 @@ EDGE_ENTITY_RE = re.compile(
 
 RECONCILIATION_CHECKS = {
     "vote.compact_total_vs_member_names",
-    "vote.appendix_bucket_vs_collected_names",
+    "vote.appendix_bucket_counts",
 }
 
 
@@ -39,7 +39,7 @@ def cluster_rows(rows: list[DetailRow]) -> list[Cluster]:
     }
 
     for check_id, check_rows in sorted(by_check.items()):
-        if check_id == "vote.appendix_bucket_vs_collected_names":
+        if check_id == "vote.appendix_bucket_counts":
             continue
         if check_id == "vote.cast_count_vs_headline":
             clusters.extend(
@@ -54,7 +54,7 @@ def cluster_rows(rows: list[DetailRow]) -> list[Cluster]:
             else:
                 clusters.extend(handler(check_rows))
 
-    appendix_rows = by_check.get("vote.appendix_bucket_vs_collected_names", [])
+    appendix_rows = by_check.get("vote.appendix_bucket_counts", [])
     for row in appendix_rows:
         vote_id = row.entity_id
         existing = next(

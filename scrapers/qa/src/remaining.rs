@@ -73,7 +73,10 @@ fn check_meeting_metadata(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn E
                         "meeting.date_source_vs_parquet",
                         "info",
                         "info",
-                        format!("meeting {} date {} not verbatim in source", meeting_ids[i], dates[i]),
+                        format!(
+                            "meeting {} date {} not verbatim in source",
+                            meeting_ids[i], dates[i]
+                        ),
                     )
                     .with_meeting("commission", &meeting_ids[i])
                     .with_source(&source_urls[i], cache_path),
@@ -102,33 +105,52 @@ fn check_meeting_metadata(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn E
 }
 
 fn check_vote_plausibility(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
-    let path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/votes.parquet"));
-    if !path.exists() {
+    let tallies_path = data_dir.join(format!(
+        "sessions/{SESSION_ID}/plenary/vote_tallies.parquet"
+    ));
+    let results_path = data_dir.join(format!(
+        "sessions/{SESSION_ID}/plenary/vote_results.parquet"
+    ));
+    if !tallies_path.exists() || !results_path.exists() {
         return Ok(Vec::new());
     }
+
+    let mut totals_by_result: HashMap<String, i32> = HashMap::new();
+    for batch in read_all_rows(&tallies_path)? {
+        let result_ids = read_string_column(&batch, "result_id")?;
+        let option_keys = read_string_column(&batch, "option_key")?;
+        let dimensions = read_string_column(&batch, "dimension")?;
+        let counts = read_string_column(&batch, "count")?;
+        for i in 0..batch.num_rows() {
+            if dimensions[i] != "overall" {
+                continue;
+            }
+            if !matches!(option_keys[i].as_str(), "yes" | "no" | "abstain") {
+                continue;
+            }
+            *totals_by_result.entry(result_ids[i].clone()).or_default() +=
+                counts[i].parse().unwrap_or(0);
+        }
+    }
+
     let mut details = Vec::new();
-    for batch in read_all_rows(&path)? {
-        let vote_ids = read_string_column(&batch, "vote_id")?;
-        let yes = read_string_column(&batch, "yes")?;
-        let no = read_string_column(&batch, "no")?;
-        let abstain = read_string_column(&batch, "abstain")?;
+    for batch in read_all_rows(&results_path)? {
+        let result_ids = read_string_column(&batch, "result_id")?;
         let meeting_ids = read_string_column(&batch, "meeting_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
-            let total: i32 = yes[i].parse().unwrap_or(0)
-                + no[i].parse().unwrap_or(0)
-                + abstain[i].parse().unwrap_or(0);
+            let total = totals_by_result.get(&result_ids[i]).copied().unwrap_or(0);
             if total > 150 {
                 details.push(
                     CheckDetail::new(
                         "vote.total_plausibility",
                         "warn",
                         "warn",
-                        format!("vote {} total {total} > 150", vote_ids[i]),
+                        format!("result {} total {total} > 150", result_ids[i]),
                     )
                     .with_meeting("plenary", &meeting_ids[i])
-                    .with_entity("vote", &vote_ids[i])
+                    .with_entity("vote_result", &result_ids[i])
                     .with_source(&source_urls[i], &cache_paths[i]),
                 );
             }
@@ -162,7 +184,10 @@ fn check_motion_ids(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>>
                         "vote.motion_id_when_referenced",
                         "info",
                         "info",
-                        format!("vote {} title references motion but motion_id empty", vote_ids[i]),
+                        format!(
+                            "vote {} title references motion but motion_id empty",
+                            vote_ids[i]
+                        ),
                     )
                     .with_meeting("plenary", &meeting_ids[i])
                     .with_entity("vote", &vote_ids[i])
@@ -222,10 +247,7 @@ fn check_fk_meetings(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>
                             "fk.questions_votes_to_meetings",
                             "error",
                             "fail",
-                            format!(
-                                "{} meeting_id {} not in meetings.parquet",
-                                ids[i], mids[i]
-                            ),
+                            format!("{} meeting_id {} not in meetings.parquet", ids[i], mids[i]),
                         )
                         .with_meeting(kind, &mids[i])
                         .with_entity("row", &ids[i]),

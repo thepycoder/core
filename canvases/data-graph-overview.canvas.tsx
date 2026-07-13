@@ -50,8 +50,9 @@ const NODES: NodeDef[] = [
   { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "43,431 full-session rows; PART_OF Question/Hearing/Interpellation" },
   { id: "Question", label: "Question", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq} | 56_written_{DOCNAME}", note: "Oral + QRVA written; oral-written inline bodies" },
   { id: "Answer", label: "Answer", domain: "proceedings", status: "working", idKey: "56_qrva_{route}_a{slot} | {question_id}_a1", note: "QRVA slots + integraal oral-written blocks" },
-  { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{meeting_id, vote_id}", note: "Plenary integraal + appendix" },
-  { id: "VoteCast", label: "VoteCast", domain: "proceedings", status: "partial", idKey: "{vote_id, person_id, position}", note: "Graph uses CAST Person→Vote (no node yet)" },
+  { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-v{seq}", note: "Decision/matter; block-native assembly" },
+  { id: "VoteResult", label: "VoteResult", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-r{seq}", note: "Reusable roll-call/secret/sitting-standing/quorum evidence" },
+  { id: "VoteCast", label: "VoteCast", domain: "proceedings", status: "working", idKey: "{result_id, person_id, position}", note: "Normalized from vote_result_members; graph CAST Person→VoteResult" },
   { id: "Motion", label: "Motion", domain: "proceedings", status: "planned", idKey: "motion id + context", note: "Referenced in vote parsing, not modelled" },
   { id: "Hearing", label: "Hearing", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Commission hoorzitting/audition; hearings.parquet" },
   { id: "Interpellation", label: "Interpellation", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Plenary Interpellatie van; internal_ids …I" },
@@ -64,6 +65,9 @@ const NODES: NodeDef[] = [
   { id: "Remuneration", label: "Remuneration", domain: "enrichment", status: "scraped", idKey: "{person, year, mandate}", note: "regimand.be; name match only" },
   { id: "MediaRecording", label: "MediaRecording", domain: "enrichment", status: "planned", idKey: "media id", note: "media.dekamer.be; fuzzy date match" },
   { id: "InterventionAnalysis", label: "InterventionAnalysis", domain: "enrichment", status: "planned", idKey: "dossier / meeting ref", note: "Structured speaker/topic data" },
+  { id: "SourceArtifact", label: "SourceArtifact", domain: "foundation", status: "working", idKey: "source_artifact_id", note: "graph/source_artifacts.parquet; hash of url+cache_path" },
+  { id: "ReportBlock", label: "ReportBlock", domain: "proceedings", status: "working", idKey: "{artifact_id, block_index}", note: "Derived structured blocks from integraal HTML" },
+  { id: "SourceSpan", label: "SourceSpan", domain: "proceedings", status: "working", idKey: "span_id", note: "Block-range provenance for votes, utterances, hearings…" },
 ];
 
 // ── Edge catalog ─────────────────────────────────────────────────────────────
@@ -107,16 +111,21 @@ const EDGES: EdgeDef[] = [
   { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "6,798 via ActorResolver" },
   { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Regex from proposition/vote titles" },
   { type: "DISCUSSED_IN", from: "Dossier", to: "Meeting", status: "planned", note: "Dossier fiche calendar not ingested" },
+  { type: "HAS_RESULT", from: "Vote", to: "VoteResult", status: "working", note: "votes.result_id → reusable evidence" },
   { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "145 orphan refs to partial ids" },
   { type: "VOTED_ON", from: "Vote", to: "Document", status: "working", note: "From vote title parsing" },
   { type: "VOTED_ON", from: "Vote", to: "Motion", status: "partial", note: "motion_id partially parsed" },
-  { type: "CAST", from: "Person", to: "Vote", status: "working", note: "189,496 casts; 6 vote mismatches" },
+  { type: "CAST", from: "Person", to: "VoteResult", status: "working", note: "Named roll-call only; shared across reused results" },
   { type: "TAGGED_WITH", from: "Dossier", to: "Topic", status: "working", note: "Eurovoc on dossier fiche" },
   { type: "TAGGED_WITH", from: "Utterance", to: "Topic", status: "planned", note: "NLP / intervention analysis" },
   { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "FLWB hierarchy" },
   { type: "DECLARES_INTEREST", from: "Person", to: "LobbyOrg", status: "planned", note: "Lobby register not linked" },
   { type: "EARNED", from: "Person", to: "Remuneration", status: "scraped", note: "Name match only" },
   { type: "RECORDED_IN", from: "Meeting", to: "MediaRecording", status: "planned", note: "Not scraped" },
+  { type: "REGISTERED_AS", from: "Meeting", to: "SourceArtifact", status: "working", note: "Scrape registers integraal HTML/PDF artifacts" },
+  { type: "PARSED_TO", from: "SourceArtifact", to: "ReportBlock", status: "working", note: "meeting_parse → report_blocks.parquet" },
+  { type: "EVIDENCES", from: "SourceSpan", to: "Vote", status: "working", note: "Also utterances, questions, hearings, interpellations" },
+  { type: "LOCATED_IN", from: "SourceSpan", to: "ReportBlock", status: "working", note: "block_start/block_end half-open range" },
 ];
 
 // Layout edges: structural spine for DAG positioning (may include cycles → back-edges)
@@ -149,17 +158,22 @@ const LAYOUT_EDGES = [
   { from: "Dossier", to: "Topic" },
   { from: "Document", to: "Amendment" },
   { from: "Document", to: "Report" },
+  { from: "Vote", to: "VoteResult" },
   { from: "Vote", to: "Dossier" },
   { from: "Vote", to: "Document" },
   { from: "Vote", to: "Motion" },
-  { from: "Person", to: "VoteCast" },
-  { from: "VoteCast", to: "Vote" },
+  { from: "Person", to: "VoteResult" },
   { from: "Person", to: "Document" },
   { from: "Person", to: "LobbyOrg" },
   { from: "Person", to: "Remuneration" },
   { from: "Meeting", to: "InterventionAnalysis" },
   { from: "Meeting", to: "Dossier" },
   { from: "Dossier", to: "Meeting" },
+  { from: "Meeting", to: "SourceArtifact" },
+  { from: "SourceArtifact", to: "ReportBlock" },
+  { from: "ReportBlock", to: "SourceSpan" },
+  { from: "SourceSpan", to: "Vote" },
+  { from: "SourceSpan", to: "Utterance" },
 ];
 
 const DOMAIN_LABELS: Record<Domain, string> = {
@@ -495,12 +509,12 @@ export default function DataGraphOverview() {
       <Grid columns={4} gap={12}>
         <Stat label="Node types" value={String(NODES.length)} tone="info" />
         <Stat label="Edge types" value={String(EDGES.length)} tone="info" />
-        <Stat label="Graph nodes (built)" value="55,282" tone="success" />
-        <Stat label="Graph edges (built)" value="332,982" tone="success" />
+        <Stat label="Graph nodes (built)" value="78,291" tone="success" />
+        <Stat label="Graph edges (built)" value="354,223" tone="success" />
       </Grid>
 
       <Card>
-        <CardHeader trailing="23 node types">
+        <CardHeader trailing={`${NODES.length} node types`}>
           Implementation coverage
         </CardHeader>
         <CardBody>
@@ -524,7 +538,7 @@ export default function DataGraphOverview() {
               ))}
             </Row>
             <Text size="small" tone="tertiary">
-              Source: DATA_GRAPH.md coverage table · branch stage-viz · last build 2026-07-07
+              Built counts refresh after `just build-graph` · provenance flow: Meeting → SourceArtifact → ReportBlock ← SourceSpan → entities
             </Text>
           </Stack>
         </CardBody>

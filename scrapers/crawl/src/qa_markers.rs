@@ -44,9 +44,7 @@ pub fn check_markers_vs_utterances(
     let ok = if marker_total == 0 {
         utterance_rows == 0
     } else {
-        utterance_rows > 0
-            && utterance_rows <= marker_total
-            && utterance_rows * 2 >= turn_markers
+        utterance_rows > 0 && utterance_rows <= marker_total && utterance_rows * 2 >= turn_markers
     };
 
     let detail = format!(
@@ -127,7 +125,11 @@ mod tests {
         if checked == 0 {
             return;
         }
-        assert_eq!(checked, BASELINE.len(), "not all baseline fixtures were found");
+        assert_eq!(
+            checked,
+            BASELINE.len(),
+            "not all baseline fixtures were found"
+        );
     }
 
     #[test]
@@ -234,7 +236,10 @@ mod tests {
                     .iter()
                     .filter(|u| u.item_kind == "question" && !u.item_id.is_empty())
                     .collect();
-                assert!(!question_rows.is_empty(), "commission 17 question utterances");
+                assert!(
+                    !question_rows.is_empty(),
+                    "commission 17 question utterances"
+                );
             }
         }
     }

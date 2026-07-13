@@ -15,16 +15,23 @@ from app.models import (
     IssuesResponse,
     NodeDetailResponse,
     NodeLinksResponse,
+    ReportCoverageResponse,
+    ReportMeetingsResponse,
     SearchResponse,
     StatsResponse,
     SubgraphResponse,
     UnresolvedResponse,
 )
 from app.queries.issues import fetch_issues
-from app.queries.node_detail import fetch_edge_detail, fetch_node_detail, fetch_node_links
+from app.queries.node_detail import (
+    fetch_edge_detail,
+    fetch_node_detail,
+    fetch_node_links,
+)
 from app.queries.search import fetch_search
 from app.queries.stats import fetch_stats
 from app.queries.subgraph import fetch_expand, fetch_subgraph
+from app.queries.report_coverage import fetch_report_coverage, list_report_meetings
 from app.queries.unresolved import fetch_unresolved, fetch_unresolved_context
 
 router = APIRouter(prefix="/api")
@@ -34,8 +41,7 @@ router = APIRouter(prefix="/api")
 def health() -> HealthResponse:
     db = get_db()
     files = [
-        HealthFileStatus(path=path, exists=exists)
-        for path, exists in db.file_status()
+        HealthFileStatus(path=path, exists=exists) for path, exists in db.file_status()
     ]
     duckdb_ok = db.has_view_data("nodes") or db.has_view_data("edges")
     return HealthResponse(
@@ -74,7 +80,9 @@ def subgraph(
     hops: int = Query(default=1, ge=1, le=2),
     edge_types: str | None = Query(default=None),
 ) -> SubgraphResponse:
-    types = [t.strip() for t in edge_types.split(",") if t.strip()] if edge_types else None
+    types = (
+        [t.strip() for t in edge_types.split(",") if t.strip()] if edge_types else None
+    )
     return fetch_subgraph(get_db().conn, seed_type, seed_id, hops, types)
 
 
@@ -139,23 +147,67 @@ def unresolved_context(raw_name: str) -> UnresolvedResponse:
 
 @router.get("/artifact/{source_artifact_id}", response_model=ArtifactResponse)
 def artifact(source_artifact_id: str) -> ArtifactResponse:
-    row = get_db().conn.execute(
-        """
-        SELECT source_artifact_id, source_url, cache_path, parser_version, scraped_at
+    row = (
+        get_db()
+        .conn.execute(
+            """
+        SELECT source_artifact_id, source_url, cache_path, source_content_hash,
+               block_parser_version, extractor_version, scraped_at
         FROM artifacts
         WHERE source_artifact_id = ?
         LIMIT 1
         """,
-        [source_artifact_id],
-    ).fetchone()
+            [source_artifact_id],
+        )
+        .fetchone()
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return ArtifactResponse(
         source_artifact_id=row[0],
         source_url=row[1] or "",
         cache_path=row[2] or "",
-        parser_version=row[3] or "",
-        scraped_at=row[4] or "",
+        source_content_hash=row[3] or "",
+        block_parser_version=row[4] or "",
+        extractor_version=row[5] or "",
+        scraped_at=row[6] or "",
+    )
+
+
+@router.get("/reports/meetings", response_model=ReportMeetingsResponse)
+def report_meetings(
+    session_id: str = Query(..., pattern=r"^\d+$"),
+    meeting_kind: str = Query(..., pattern=r"^(plenary|commission)$"),
+) -> ReportMeetingsResponse:
+    return ReportMeetingsResponse(
+        meetings=list_report_meetings(get_db().conn, session_id, meeting_kind)
+    )
+
+
+@router.get(
+    "/reports/{session_id}/{meeting_kind}/{meeting_id}",
+    response_model=ReportCoverageResponse,
+)
+def report_coverage(
+    session_id: str,
+    meeting_kind: str,
+    meeting_id: str,
+    entity_type: list[str] | None = Query(default=None),
+    coverage_kind: list[str] | None = Query(default=None),
+    span_role: list[str] | None = Query(default=None),
+) -> ReportCoverageResponse:
+    if not session_id.isdigit() or not meeting_id.isdigit():
+        raise HTTPException(status_code=400, detail="Invalid session or meeting id")
+    if meeting_kind not in {"plenary", "commission"}:
+        raise HTTPException(status_code=400, detail="Invalid meeting kind")
+    return fetch_report_coverage(
+        get_db().conn,
+        meeting_id,
+        session_id=session_id,
+        meeting_kind=meeting_kind,
+        entity_types=entity_type,
+        coverage_kinds=coverage_kind,
+        span_roles=span_role,
     )
 
 

@@ -1,12 +1,12 @@
 //! Supplemental distribution stats for QA summary output.
 
-use crate::types::{CheckDetail, CoverageBaselineRow};
+use crate::types::{CheckDetail, MeetingCoverageSnapshot};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 pub struct QaStatsContext<'a> {
-    pub coverage_snapshots: &'a [CoverageBaselineRow],
+    pub coverage_snapshots: &'a [MeetingCoverageSnapshot],
     pub row_counts_path: Option<&'a Path>,
 }
 
@@ -59,7 +59,7 @@ pub fn corpus_overview(ctx: &QaStatsContext<'_>) -> Option<String> {
     }
 }
 
-fn coverage_distribution_stats(snapshots: &[CoverageBaselineRow]) -> Option<String> {
+fn coverage_distribution_stats(snapshots: &[MeetingCoverageSnapshot]) -> Option<String> {
     if snapshots.is_empty() {
         return None;
     }
@@ -88,7 +88,11 @@ fn coverage_distribution_stats(snapshots: &[CoverageBaselineRow]) -> Option<Stri
     }
 
     let mut lowest: Vec<_> = snapshots.iter().collect();
-    lowest.sort_by(|a, b| a.ratio.partial_cmp(&b.ratio).unwrap_or(std::cmp::Ordering::Equal));
+    lowest.sort_by(|a, b| {
+        a.ratio
+            .partial_cmp(&b.ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     lines.push(String::new());
     lines.push("**Lowest ratios:**".to_string());
     for row in lowest.iter().take(8) {
@@ -102,7 +106,7 @@ fn coverage_distribution_stats(snapshots: &[CoverageBaselineRow]) -> Option<Stri
 }
 
 /// Compact lines for stderr (one per kind + lowest outliers).
-pub fn coverage_console_lines(snapshots: &[CoverageBaselineRow]) -> Vec<String> {
+pub fn coverage_console_lines(snapshots: &[MeetingCoverageSnapshot]) -> Vec<String> {
     if snapshots.is_empty() {
         return Vec::new();
     }
@@ -123,7 +127,11 @@ pub fn coverage_console_lines(snapshots: &[CoverageBaselineRow]) -> Vec<String> 
         ));
     }
     let mut lowest: Vec<_> = snapshots.iter().collect();
-    lowest.sort_by(|a, b| a.ratio.partial_cmp(&b.ratio).unwrap_or(std::cmp::Ordering::Equal));
+    lowest.sort_by(|a, b| {
+        a.ratio
+            .partial_cmp(&b.ratio)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let worst: Vec<String> = lowest
         .iter()
         .take(5)
@@ -347,12 +355,12 @@ fn generic_meeting_kind_stats(check_id: &str, details: &[CheckDetail]) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::CoverageBaselineRow;
+    use crate::types::MeetingCoverageSnapshot;
 
     #[test]
     fn coverage_distribution_table() {
         let snapshots = vec![
-            CoverageBaselineRow {
+            MeetingCoverageSnapshot {
                 meeting_kind: "plenary".into(),
                 meeting_id: "1".into(),
                 source_words: 1000,
@@ -360,7 +368,7 @@ mod tests {
                 ratio: 0.9,
                 updated_at: String::new(),
             },
-            CoverageBaselineRow {
+            MeetingCoverageSnapshot {
                 meeting_kind: "plenary".into(),
                 meeting_id: "2".into(),
                 source_words: 1000,
@@ -368,7 +376,7 @@ mod tests {
                 ratio: 0.5,
                 updated_at: String::new(),
             },
-            CoverageBaselineRow {
+            MeetingCoverageSnapshot {
                 meeting_kind: "commission".into(),
                 meeting_id: "3".into(),
                 source_words: 1000,
@@ -385,9 +393,11 @@ mod tests {
 
     #[test]
     fn inventory_gap_stats_parses_expected_actual() {
-        let details = vec![CheckDetail::new("vote.source_inventory_vs_parquet", "warn", "warn", "gap")
-            .with_meeting("plenary", "129")
-            .with_values("12", "10")];
+        let details = vec![
+            CheckDetail::new("vote.source_inventory_vs_parquet", "warn", "warn", "gap")
+                .with_meeting("plenary", "129")
+                .with_values("12", "10"),
+        ];
         let stats = inventory_gap_stats(&details).unwrap();
         assert!(stats.contains("gap 2"));
         assert!(stats.contains("meeting 129"));

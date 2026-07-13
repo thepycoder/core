@@ -11,6 +11,9 @@ arrow = "54.3.0"
 serde_json = "1.0"
 dotenvy = "0.15.7"
 
+[dev-dependencies]
+normalize = { path = "../normalize" }
+
 [lib]
 name = "graph"
 path = "src/lib.rs"

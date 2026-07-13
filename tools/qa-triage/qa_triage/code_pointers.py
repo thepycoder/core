@@ -28,14 +28,14 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         },
         {
             "path": "scrapers/plenary-meetings/src/main.rs",
-            "symbol": "extract_votes",
+            "symbol": "parse_plenary_meeting_report",
             "note": "dossier_id / motion_id parsed from vote titles.",
         },
     ],
     "vote.cast_count_vs_headline": [
         {
-            "path": "scrapers/normalize/src/votes.rs",
-            "symbol": "vote_casts normalization",
+            "path": "scrapers/normalize/src/vote_casts.rs",
+            "symbol": "normalize_vote_casts",
             "note": "Name lists resolved to person_id; unresolved names drop CAST edges.",
         },
         {
@@ -46,26 +46,19 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         {
             "path": "scrapers/qa/src/vote_source.rs",
             "symbol": "run_vote_source_checks",
-            "note": "Compares cast counts to headline totals.",
+            "note": "Compares cast counts to headline totals for roll_call and language_group_roll_call.",
         },
     ],
     "vote.compact_total_vs_member_names": [
         {
-            "path": "scrapers/plenary-meetings/src/main.rs",
-            "symbol": "vote appendix parsing",
-            "note": "Headline totals vs members_* CSV from HTML.",
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "assemble_votes_from_blocks",
+            "note": "Headline totals vs appendix member buckets from HTML.",
         },
         {
-            "path": "scrapers/normalize/src/vote_reconciliation.rs",
-            "symbol": "reconciliation",
+            "path": "scrapers/normalize/src/vote_casts.rs",
+            "symbol": "normalize_vote_casts",
             "note": "Derived vote_reconciliation.parquet.",
-        },
-    ],
-    "vote.appendix_bucket_vs_collected_names": [
-        {
-            "path": "scrapers/plenary-meetings/src/main.rs",
-            "symbol": "extract_voter_names",
-            "note": "Sibling-walk parser for appendix name paragraphs.",
         },
     ],
     "vote.source_inventory_vs_parquet": [
@@ -75,9 +68,221 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Independent HTML vote number inventory.",
         },
         {
-            "path": "scrapers/plenary-meetings/src/main.rs",
-            "symbol": "extract_votes",
-            "note": "Staging vote row writer.",
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "inventory_result_occurrences",
+            "note": "Per-result occurrence crosscheck vs vote_results.parquet.",
+        },
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "assemble_votes_from_blocks",
+            "note": "Staging vote result writer.",
+        },
+    ],
+    "vote.appendix_bucket_counts": [
+        {
+            "path": "scrapers/crawl/src/vote_inventory.rs",
+            "symbol": "parse_appendix_buckets",
+            "note": "Independent ordered appendix count/name inventory.",
+        },
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "appendix occurrence matching",
+            "note": "Production parser maps each result to the same ordered appendix occurrence.",
+        },
+    ],
+    "vote.decision_evidence": [
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_vote_evidence",
+            "note": "Joins Vote and VoteResult rows to valid source-span roles.",
+        },
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "push_title_spans",
+            "note": "Emits per-decision title evidence.",
+        },
+    ],
+    "vote.result_evidence_roles": [
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_vote_evidence",
+            "note": "Defines method-aware required result evidence.",
+        },
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "assemble_votes_from_blocks",
+            "note": "Emits result, appendix, candidate, threshold, and proclamation evidence.",
+        },
+    ],
+    "vote.unresolved_events": [
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "push_unresolved",
+            "note": "Retains formal events that cannot be assembled safely.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_unresolved_vote_events",
+            "note": "Surfaces unresolved event rows without suppression.",
+        },
+    ],
+    "vote.no_quorum_invariants": [
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "quorum failure handling",
+            "note": "Participation tallies without yes/no/abstain.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_method_invariants",
+            "note": "QA guardrails for no_quorum results.",
+        },
+    ],
+    "vote.standard_roll_call_invariants": [
+        {
+            "path": "scrapers/crawl/src/vote_events.rs",
+            "symbol": "parse_roll_call_table",
+            "note": "Retains optional and explicit-zero standard tally values.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_method_invariants",
+            "note": "Requires all standard overall tally rows.",
+        },
+    ],
+    "vote.secret_ballot_invariants": [
+        {
+            "path": "scrapers/crawl/src/vote_events.rs",
+            "symbol": "parse_secret_ballot_table",
+            "note": "Parses voters, valid, blank/invalid, and threshold statistics.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_method_invariants",
+            "note": "Checks secret aggregate equations and cast prohibition.",
+        },
+    ],
+    "vote.sitting_standing_invariants": [
+        {
+            "path": "scrapers/crawl/src/vote_assembly.rs",
+            "symbol": "sitting_standing_context",
+            "note": "Assembles formal prose outcomes without tallies.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_method_invariants",
+            "note": "Requires outcome and forbids tallies/casts.",
+        },
+    ],
+    "vote.cast_method_rules": [
+        {
+            "path": "scrapers/normalize/src/vote_casts.rs",
+            "symbol": "normalize_vote_casts",
+            "note": "Only named roll-call methods may emit casts.",
+        },
+    ],
+    "vote.language_group_sums": [
+        {
+            "path": "scrapers/crawl/src/vote_events.rs",
+            "symbol": "parse_roll_call_table",
+            "note": "Language-group N/Tot/F table parsing.",
+        },
+        {
+            "path": "scrapers/qa/src/vote_source.rs",
+            "symbol": "check_method_invariants",
+            "note": "NL+FR sum validation per option.",
+        },
+    ],
+    "source.span.block_range": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "run_source_span_checks",
+            "note": "Half-open range validation against report_blocks.",
+        },
+        {
+            "path": "scrapers/crawl/src/meeting_parse.rs",
+            "symbol": "assembly_spans",
+            "note": "Span emission from vote assembly evidence.",
+        },
+    ],
+    "source.span.entity_reference": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "run_source_span_checks",
+            "note": "Vote/VoteResult/Meeting FK validation.",
+        },
+    ],
+    "source.span.typed_schema": [
+        {
+            "path": "scrapers/crawl/src/source_spans.rs",
+            "symbol": "write_source_spans_parquet",
+            "note": "Canonical typed source-span schema.",
+        },
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "run_source_span_checks",
+            "note": "Validates typed bounds and confidence.",
+        },
+    ],
+    "source.span.validation_status": [
+        {
+            "path": "scrapers/crawl/src/source_spans.rs",
+            "symbol": "validate_source_spans",
+            "note": "Assigns valid/unresolved status and reasons.",
+        },
+    ],
+    "source.span.graph_artifact": [
+        {
+            "path": "scrapers/graph/src/build.rs",
+            "symbol": "ArtifactRow",
+            "note": "Materializes graph source-artifact provenance.",
+        },
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "load_graph_artifacts",
+            "note": "Checks every span artifact against graph artifacts.",
+        },
+    ],
+    "source.span.source_content_stale": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "run_source_span_checks",
+            "note": "Compares source hashes across all provenance layers.",
+        },
+    ],
+    "source.span.block_parser_stale": [
+        {
+            "path": "scrapers/crawl/src/artifact_id.rs",
+            "symbol": "BLOCK_PARSER_VERSION",
+            "note": "Current canonical parser version.",
+        },
+    ],
+    "source.span.extractor_version": [
+        {
+            "path": "scrapers/crawl/src/artifact_id.rs",
+            "symbol": "VOTE_EXTRACTOR_VERSION, MEETING_SCOPE_EXTRACTOR_VERSION",
+            "note": "Current canonical extractor versions.",
+        },
+    ],
+    "source.span.extraction_fields": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "field_allowed_for_entity",
+            "note": "Canonical entity-specific field-name rules.",
+        },
+    ],
+    "source.span.allowed_role": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "ALLOWED_ROLES",
+            "note": "Canonical semantic role catalog.",
+        },
+    ],
+    "source.span.overlap": [
+        {
+            "path": "scrapers/qa/src/source_spans.rs",
+            "symbol": "check_overlaps",
+            "note": "Allows scope overlap but rejects conflicting extraction spans.",
         },
     ],
     "utterance.speech_char_coverage": [
@@ -88,8 +293,8 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         },
         {
             "path": "scrapers/qa/src/speech.rs",
-            "symbol": "check_speech_char_coverage",
-            "note": "Coverage ratio check vs baseline.",
+            "symbol": "load_extraction_span_words",
+            "note": "Union extraction span block word counts; legacy fallback when spans missing.",
         },
     ],
     "agenda.entity_count_vs_parquet": [
@@ -100,7 +305,7 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         },
         {
             "path": "scrapers/plenary-meetings/src/main.rs",
-            "symbol": "extract_questions",
+            "symbol": "parse_plenary_meeting_report",
             "note": "Plenary question extraction.",
         },
     ],

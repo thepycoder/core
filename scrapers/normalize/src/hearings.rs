@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::utils::ensure_question_id;
@@ -41,7 +39,10 @@ pub fn normalize_invited(
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
 
     for (meeting_kind, rel_path) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/hearings.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/hearings.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/hearings.parquet"),
@@ -60,11 +61,7 @@ pub fn normalize_invited(
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
-                let hearing_id = ensure_question_id(
-                    &session_ids[i],
-                    meeting_kind,
-                    &hearing_ids[i],
-                );
+                let hearing_id = ensure_question_id(&session_ids[i], meeting_kind, &hearing_ids[i]);
                 for name in split_csv(&witnesses[i]) {
                     if name.trim().is_empty() {
                         continue;
@@ -72,11 +69,7 @@ pub fn normalize_invited(
                     let detail = actor_resolver.resolve_actor_detail(&name, Bucket::Speaker);
                     match detail.resolution {
                         ActorResolution::Person(entity_id) => {
-                            let key = (
-                                "Person".to_string(),
-                                entity_id.clone(),
-                                hearing_id.clone(),
-                            );
+                            let key = ("Person".to_string(), entity_id.clone(), hearing_id.clone());
                             if seen.insert(key) {
                                 rows.push(InvitedRow {
                                     invited_id: format!("{hearing_id}_{entity_id}"),
@@ -129,6 +122,7 @@ pub fn normalize_invited(
                                 raw_field: name,
                                 source_url: source_urls[i].clone(),
                                 cache_path: cache_paths[i].clone(),
+                                ..UnresolvedRow::default()
                             });
                         }
                     }
@@ -137,7 +131,11 @@ pub fn normalize_invited(
         }
     }
 
-    rows.sort_by(|a, b| a.hearing_id.cmp(&b.hearing_id).then(a.entity_id.cmp(&b.entity_id)));
+    rows.sort_by(|a, b| {
+        a.hearing_id
+            .cmp(&b.hearing_id)
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
     dedupe_unresolved(&mut unresolved);
     Ok(InvitedOutput { rows, unresolved })
 }

@@ -161,7 +161,11 @@ def _search_unresolved(conn, tokens: list[str], fetch_limit: int) -> list[Search
                 score=score + row[1],
                 subtitle=(
                     f"{row[1]} mentions · {row[2]} · {row[3]}"
-                    + (" · also unresolved speaker" if _speaker_exists(conn, row[0], tokens) else "")
+                    + (
+                        " · also unresolved speaker"
+                        if _speaker_exists(conn, row[0], tokens)
+                        else ""
+                    )
                 ),
                 context_type=context_type,
                 context_id=row[4] or None,
@@ -322,7 +326,9 @@ def _search_content(
     return results
 
 
-def _search_utterance_text(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_utterance_text(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     where_parts = []
     params: list = []
     for token in tokens:
@@ -359,7 +365,9 @@ def _search_utterance_text(conn, tokens: list[str], fetch_limit: int) -> list[Se
     return results
 
 
-def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_question_content(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     from app.config import get_settings
 
     settings = get_settings()
@@ -416,7 +424,9 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
                     degree_out=0,
                     source="content",
                     score=score,
-                    subtitle=f"{row[2]} → {row[3]}" if row[2] else "oral question match",
+                    subtitle=f"{row[2]} → {row[3]}"
+                    if row[2]
+                    else "oral question match",
                 )
             )
             seen.add(row[0])
@@ -447,7 +457,9 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
                 if not question_id or question_id in seen:
                     continue
                 label = row[1] or question_id
-                score = _content_score(label, question_id, f"{label} {row[2]} {row[3]}", tokens)
+                score = _content_score(
+                    label, question_id, f"{label} {row[2]} {row[3]}", tokens
+                )
                 results.append(
                     SearchResult(
                         id=question_id,
@@ -503,7 +515,13 @@ def _search_written_question_content(
         snippet = row[4] or row[5] or ""
         author = " ".join((row[3] or "").split())
         score = _content_score(label, row[0], f"{label} {snippet} {author}", tokens)
-        subtitle = _clip(snippet, 100) if snippet else f"written · {author}" if author else "written question"
+        subtitle = (
+            _clip(snippet, 100)
+            if snippet
+            else f"written · {author}"
+            if author
+            else "written question"
+        )
         results.append(
             SearchResult(
                 id=row[0],
@@ -555,7 +573,9 @@ def _search_written_question_content(
                 degree_out=0,
                 source="content",
                 score=score,
-                subtitle=f"route · {row[3]} (#{row[4]})" if row[3] else "written route match",
+                subtitle=f"route · {row[3]} (#{row[4]})"
+                if row[3]
+                else "written route match",
             )
         )
         seen.add(row[0])
@@ -563,7 +583,9 @@ def _search_written_question_content(
     return results
 
 
-def _search_answer_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_answer_content(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     where_parts = []
     params: list = []
     for token in tokens:
@@ -608,13 +630,17 @@ def _search_answer_content(conn, tokens: list[str], fetch_limit: int) -> list[Se
                 degree_out=0,
                 source="content",
                 score=score,
-                subtitle=f"question {row[1]}{kind_hint}" if row[1] else "answer text match",
+                subtitle=f"question {row[1]}{kind_hint}"
+                if row[1]
+                else "answer text match",
             )
         )
     return results
 
 
-def _search_dossier_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_dossier_content(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     from app.config import get_settings
 
     path = get_settings().parquet_path("sessions/56/dossiers.parquet")
@@ -659,7 +685,9 @@ def _search_dossier_content(conn, tokens: list[str], fetch_limit: int) -> list[S
     return results
 
 
-def _search_document_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_document_content(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     from app.config import get_settings
 
     path = get_settings().parquet_path("sessions/56/subdocuments.parquet")
@@ -690,7 +718,9 @@ def _search_document_content(conn, tokens: list[str], fetch_limit: int) -> list[
             continue
         seen.add(row[0])
         label = f"{row[0]} ({row[2]})"
-        score = _content_score(label, row[0], f"{label} {row[3]} dossier {row[1]}", tokens)
+        score = _content_score(
+            label, row[0], f"{label} {row[3]} dossier {row[1]}", tokens
+        )
         results.append(
             SearchResult(
                 id=row[0],
@@ -700,7 +730,9 @@ def _search_document_content(conn, tokens: list[str], fetch_limit: int) -> list[
                 degree_out=0,
                 source="content",
                 score=score,
-                subtitle=f"dossier {row[1]} · {row[3]}" if row[3] else f"dossier {row[1]}",
+                subtitle=f"dossier {row[1]} · {row[3]}"
+                if row[3]
+                else f"dossier {row[1]}",
             )
         )
         if len(results) >= fetch_limit:
@@ -708,7 +740,9 @@ def _search_document_content(conn, tokens: list[str], fetch_limit: int) -> list[
     return results
 
 
-def _search_vote_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+def _search_vote_content(
+    conn, tokens: list[str], fetch_limit: int
+) -> list[SearchResult]:
     from app.config import get_settings
 
     path = get_settings().parquet_path("sessions/56/plenary/votes.parquet")

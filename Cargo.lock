@@ -724,6 +724,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1273,6 +1274,7 @@ dependencies = [
  "crawl",
  "dotenvy",
  "identity",
+ "normalize",
  "parquet",
  "serde_json",
 ]
@@ -2526,6 +2528,7 @@ dependencies = [
  "normalize",
  "parquet",
  "regex",
+ "scraper",
  "serde",
  "serde_json",
 ]

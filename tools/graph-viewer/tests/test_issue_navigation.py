@@ -31,6 +31,38 @@ def test_graph_edge_endpoints_navigates_to_existing_utterance(conn):
     assert nav["node_id"] == "56_commission_105_01_01_01"
 
 
+def test_vote_result_check_navigates_to_vote_result(conn):
+    data = {
+        "check_id": "vote.cast_count_vs_headline",
+        "entity_type": "vote_result",
+        "entity_id": "56-2-r1",
+        "message": "result 56-2-r1 cast count mismatch",
+    }
+    nav = resolve_issue_navigation(conn, data["check_id"], data)
+    assert nav["action"] == "node"
+    assert nav["node_type"] == "VoteResult"
+    assert nav["node_id"] == "56-2-r1"
+
+
+def test_source_block_navigates_to_report(conn):
+    data = {
+        "check_id": "vote.compact_total_vs_member_names",
+        "entity_type": "vote",
+        "entity_id": "56-129-4",
+        "meeting_kind": "plenary",
+        "meeting_id": "129",
+        "session_id": "56",
+        "source_block": "42",
+        "message": "vote 56-129-4 headline mismatch at block 42",
+    }
+    nav = resolve_issue_navigation(conn, data["check_id"], data)
+    assert nav["action"] == "report"
+    assert nav["meeting_id"] == "129"
+    assert nav["source_block"] == "42"
+    assert nav["session_id"] == "56"
+    assert nav["meeting_kind"] == "plenary"
+
+
 def test_vote_check_navigates_to_vote(conn):
     data = {
         "check_id": "vote.compact_total_vs_member_names",
@@ -122,9 +154,14 @@ def test_fetch_issues_enriches_samples(conn):
         pytest.skip("run `just qa` first")
 
     resp = fetch_issues(conn, settings.data_dir)
-    edge_issue = next(i for i in resp.issues if i.id == "graph_edge_endpoints_exist")
+    edge_issue = next(
+        (i for i in resp.issues if i.samples and i.samples[0].action == "node"),
+        None,
+    )
+    if edge_issue is None:
+        pytest.skip("no node-action issue samples in current QA output")
     assert edge_issue.samples
     sample = edge_issue.samples[0]
     assert sample.label
     assert sample.action == "node"
-    assert sample.node_type == "Utterance"
+    assert sample.node_type

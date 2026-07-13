@@ -1,4 +1,8 @@
+import duckdb
+
 from qa_triage.cluster import cluster_rows
+from qa_triage.config import Settings
+from qa_triage.evidence import _sample_vote_cluster
 from qa_triage.models import DetailRow
 
 
@@ -56,6 +60,67 @@ def test_cast_count_splits_identity_and_reconciliation():
     assert "vote_identity_unresolved_names" in ids
     assert f"vote_cast_reconciliation_{recon_vote.replace('/', '_')}" in ids
     assert f"vote_appendix_{recon_vote.replace('/', '_')}" in ids
+
+
+def test_appendix_bucket_count_merges_with_result_reconciliation():
+    result_id = "56-129-r4"
+    rows = [
+        _row("vote.compact_total_vs_member_names", entity_id=result_id),
+        _row("vote.appendix_bucket_counts", entity_id=result_id),
+    ]
+    clusters = cluster_rows(rows)
+    cluster = next(c for c in clusters if c.root_cause_id == f"vote_appendix_{result_id}")
+    assert set(cluster.check_ids) == {
+        "vote.compact_total_vs_member_names",
+        "vote.appendix_bucket_counts",
+    }
+    assert cluster.row_count == 2
+
+
+def test_vote_evidence_queries_result_aware_schemas(tmp_path):
+    data = tmp_path / "data"
+    plenary = data / "sessions" / "56" / "plenary"
+    normalized = data / "normalized"
+    plenary.mkdir(parents=True)
+    normalized.mkdir(parents=True)
+    conn = duckdb.connect()
+    conn.execute(
+        f"""COPY (SELECT 'vote-1' AS vote_id, 'result-1' AS result_id,
+            1::UINTEGER AS meeting_id, 1::UINTEGER AS seq,
+            'roll_call' AS "method", 'complete' AS status, 'adopted' AS outcome,
+            '1' AS source_roll_call_number, false AS reuses_result,
+            'title' AS title_nl, '' AS title_fr, 'cache.html' AS cache_path)
+            TO '{plenary / "votes.parquet"}' (FORMAT PARQUET)"""
+    )
+    conn.execute(
+        f"""COPY (SELECT 'result-1' AS result_id, 'yes' AS "position",
+            1::UINTEGER AS seq, 'Example' AS raw_name)
+            TO '{plenary / "vote_result_members.parquet"}' (FORMAT PARQUET)"""
+    )
+    conn.execute(
+        f"""COPY (SELECT 'result-1' AS result_id, 'position' AS tally_kind,
+            'yes' AS option_key, 'ja' AS label_nl, 'oui' AS label_fr,
+            'overall' AS dimension, 1::UINTEGER AS count, false AS selected)
+            TO '{plenary / "vote_tallies.parquet"}' (FORMAT PARQUET)"""
+    )
+    conn.execute(
+        f"""COPY (SELECT 'result-1' AS result_id, 'person-1' AS person_id,
+            'yes' AS "position")
+            TO '{normalized / "vote_casts.parquet"}' (FORMAT PARQUET)"""
+    )
+    settings = Settings(
+        scraper_data_dir=data,
+        scraper_cache_dir=tmp_path / "cache",
+    )
+    samples = _sample_vote_cluster(
+        settings,
+        conn,
+        [_row("vote.cast_count_vs_headline", entity_id="result-1")],
+    )
+    conn.close()
+    assert samples["vote_decisions"][0]["result_id"] == "result-1"
+    assert samples["tallies"][0]["count"] == 1
+    assert samples["cast_counts"][0]["result_id"] == "result-1"
 
 
 def test_speech_coverage_one_cluster_per_meeting():

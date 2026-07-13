@@ -16,17 +16,113 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="Headline yes/no/abstain totals on a vote row do not match the number of named members in the appendix buckets.",
         measures="Reads `normalized/vote_reconciliation.parquet`; flags rows where `reconciled` is false.",
     ),
-    "vote.appendix_bucket_vs_collected_names": CheckDoc(
-        what="The count of comma-separated names in `members_yes` disagrees with the headline `yes` total for that vote.",
-        measures="Splits `members_yes` CSV on staging vote rows and compares length to parsed headline `yes`.",
+    "vote.appendix_bucket_counts": CheckDoc(
+        what="An ordered appendix bucket's declared count differs from independently counted names.",
+        measures="Parses each source-number occurrence and compares its declared bucket count to voter-name paragraphs.",
     ),
     "vote.source_inventory_vs_parquet": CheckDoc(
         what="The number of votes found in source HTML does not match the number of vote rows stored for that meeting.",
         measures="Counts vote numbers in cached HTML inventory vs rows in plenary votes.parquet per meeting_id.",
     ),
+    "vote.compact_tables_vs_appendix_headers": CheckDoc(
+        what="An appendix source number has no compact formal result table.",
+        measures="Compares independent compact and appendix inventories.",
+    ),
+    "vote.duplicate_person_across_buckets": CheckDoc(
+        what="One person appears in multiple result position buckets.",
+        measures="Groups normalized casts by result_id and person_id.",
+    ),
+    "vote.number_sequence": CheckDoc(
+        what="A meeting's source vote-number sequence has a gap.",
+        measures="Checks the independent union of formal and appendix source numbers.",
+    ),
+    "vote.no_quorum_invariants": CheckDoc(
+        what="A no-quorum result violates tally, cast, or participation rules.",
+        measures="Requires participation and forbids all position rows, including explicit zero rows.",
+    ),
+    "vote.sitting_standing_invariants": CheckDoc(
+        what="A sitting/standing result lacks an outcome or retains counts/casts.",
+        measures="Requires a formal outcome and forbids position tallies and casts.",
+    ),
+    "vote.secret_ballot_invariants": CheckDoc(
+        what="A secret ballot violates aggregate-statistic or cast rules.",
+        measures="Requires voters/valid statistics, validates blank-inclusive totals, and forbids casts.",
+    ),
+    "vote.language_group_sums": CheckDoc(
+        what="Language-group tallies are missing or do not sum to overall.",
+        measures="Checks NL + FR = overall for every option, including zeros.",
+    ),
     "vote.cast_count_vs_headline": CheckDoc(
         what="Resolved CAST edges per bucket do not add up to the headline yes/no/abstain totals.",
         measures="Counts distinct person_id per position in vote_casts.parquet vs headline fields on the staging vote row.",
+    ),
+    "vote.decision_evidence": CheckDoc(
+        what="A decision lacks valid title or linked-result evidence.",
+        measures="Joins vote and result ids to valid source spans.",
+    ),
+    "vote.result_evidence_roles": CheckDoc(
+        what="A result lacks evidence required by its method and retained fields.",
+        measures="Checks method-specific result, appendix, candidate, threshold, and proclamation roles.",
+    ),
+    "vote.unresolved_events": CheckDoc(
+        what="The parser retained a formal vote event it could not safely assemble.",
+        measures="Reads vote_unresolved_events.parquet with reasons and block evidence.",
+    ),
+    "vote.cast_method_rules": CheckDoc(
+        what="A non-named vote method has CAST rows.",
+        measures="Forbids casts for secret, no-quorum, and sitting/standing results.",
+    ),
+    "vote.standard_roll_call_invariants": CheckDoc(
+        what="A standard roll call is missing explicit overall tally rows.",
+        measures="Requires yes/no/abstain rows, including explicit zero values.",
+    ),
+    "source.span.typed_schema": CheckDoc(
+        what="Source-span bounds or confidence use the wrong Arrow type.",
+        measures="Requires UInt32 bounds/ids and Float64 confidence.",
+    ),
+    "source.span.block_range": CheckDoc(
+        what="A valid source span has invalid half-open block bounds.",
+        measures="Checks start < end <= artifact block count.",
+    ),
+    "source.span.validation_status": CheckDoc(
+        what="A source span has an inconsistent validation status and reason.",
+        measures="Valid spans have no reason; unresolved spans have a reason.",
+    ),
+    "source.span.artifact_id": CheckDoc(
+        what="A source span references no report-block artifact.",
+        measures="Joins artifact_id to report_blocks.",
+    ),
+    "source.span.graph_artifact": CheckDoc(
+        what="A source span artifact is absent from graph provenance.",
+        measures="Joins artifact_id to graph/source_artifacts.",
+    ),
+    "source.span.source_content_stale": CheckDoc(
+        what="A valid span's source-content hash is stale.",
+        measures="Compares hashes across spans, report blocks, and graph artifacts.",
+    ),
+    "source.span.block_parser_stale": CheckDoc(
+        what="A valid span's block-parser version is stale.",
+        measures="Compares parser versions across provenance layers and current code.",
+    ),
+    "source.span.extractor_version": CheckDoc(
+        what="A source span has a missing or unexpected extractor version.",
+        measures="Validates vote and meeting extractor/version pairs.",
+    ),
+    "source.span.entity_reference": CheckDoc(
+        what="A source span references a missing typed entity.",
+        measures="Checks every supported entity type against its staging table.",
+    ),
+    "source.span.extraction_fields": CheckDoc(
+        what="A span has invalid extraction field names or scope fields.",
+        measures="Validates coverage kind and the canonical field-name catalog.",
+    ),
+    "source.span.allowed_role": CheckDoc(
+        what="A source span uses an unknown semantic role.",
+        measures="Validates all vote and meeting source-span roles.",
+    ),
+    "source.span.overlap": CheckDoc(
+        what="Same-entity same-role extraction spans overlap unexpectedly.",
+        measures="Allows scope/cross-entity overlaps while rejecting duplicate or conflicting extraction spans.",
     ),
     "graph.edge_endpoints_exist": CheckDoc(
         what="A graph edge points to a from or to node id that does not exist in graph/nodes.parquet.",

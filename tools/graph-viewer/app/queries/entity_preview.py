@@ -18,6 +18,10 @@ from app.queries.discussion_threads import (
     meeting_node_id,
     proceeding_node_type,
 )
+from app.queries.vote_helpers import (
+    fetch_headline_tallies,
+    format_tally_result,
+)
 
 
 def fetch_entity_preview(
@@ -36,6 +40,7 @@ def fetch_entity_preview(
         "Document": _preview_document,
         "Dossier": _preview_dossier,
         "Vote": _preview_vote,
+        "VoteResult": _preview_vote_result,
         "Person": _preview_person,
         "ExternalPerson": _preview_external_person,
         "Meeting": _preview_meeting,
@@ -65,8 +70,12 @@ def _clip(text: str | None, limit: int = 4000) -> str:
     return text[:limit] + "…"
 
 
-def _field(label: str, value: str, link: str = "") -> PreviewField:
-    return PreviewField(label=label, value=value or "—", link=link or None)
+def _field(label: str, value: Any, link: str = "") -> PreviewField:
+    return PreviewField(
+        label=label,
+        value=str(value) if value not in (None, "") else "—",
+        link=link or None,
+    )
 
 
 def _related(node_type: str, node_id: str, label: str) -> PreviewRelated:
@@ -113,7 +122,9 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
 
     proceeding_type = proceeding_node_type(row[13])
     if row[12] and proceeding_type:
-        related.append(_related(proceeding_type, row[12], f"{proceeding_type} {row[12]}"))
+        related.append(
+            _related(proceeding_type, row[12], f"{proceeding_type} {row[12]}")
+        )
 
     if row[9] and row[8]:
         related.append(_related(row[8], row[9], row[5] or row[9]))
@@ -169,7 +180,9 @@ def _preview_question(conn, node_id: str, settings: Settings) -> EntityPreview |
     )
 
 
-def _preview_written_question(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+def _preview_written_question(
+    conn, node_id: str, settings: Settings
+) -> EntityPreview | None:
     row = _fetch_written_question_row(conn, node_id)
     if not row:
         return None
@@ -416,9 +429,7 @@ def _preview_answer(conn, node_id: str, settings: Settings) -> EntityPreview | N
     if row[8]:
         fields.append(_field("Source URL", row[8], link=row[8]))
     if row[9]:
-        fields.append(
-            _field("Cache", row[9], link=f"/api/cache/{row[9]}")
-        )
+        fields.append(_field("Cache", row[9], link=f"/api/cache/{row[9]}"))
 
     content_parts: list[str] = []
     if row[4]:
@@ -467,7 +478,9 @@ def _preview_proceeding(
     title_cols: tuple[str, str],
     thread_label: str,
 ) -> EntityPreview | None:
-    row = _fetch_proceeding_row(conn, node_id, settings, parquet_rels, id_col, field_specs, title_cols)
+    row = _fetch_proceeding_row(
+        conn, node_id, settings, parquet_rels, id_col, field_specs, title_cols
+    )
     if not row:
         return None
 
@@ -517,7 +530,9 @@ def _preview_hearing(conn, node_id: str, settings: Settings) -> EntityPreview | 
     )
 
 
-def _preview_interpellation(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+def _preview_interpellation(
+    conn, node_id: str, settings: Settings
+) -> EntityPreview | None:
     return _preview_proceeding(
         conn,
         node_id,
@@ -571,8 +586,13 @@ def _fetch_proceeding_row(
     return None
 
 
-def _fetch_oral_question_row(conn, question_id: str, settings: Settings) -> dict[str, str] | None:
-    for rel in ("sessions/56/plenary/questions.parquet", "sessions/56/commission/questions.parquet"):
+def _fetch_oral_question_row(
+    conn, question_id: str, settings: Settings
+) -> dict[str, str] | None:
+    for rel in (
+        "sessions/56/plenary/questions.parquet",
+        "sessions/56/commission/questions.parquet",
+    ):
         path = _pq(settings, rel)
         if not path:
             continue
@@ -781,15 +801,11 @@ def _preview_dossier(conn, node_id: str, settings: Settings) -> EntityPreview | 
 
 
 def _preview_vote(conn, node_id: str, settings: Settings) -> EntityPreview | None:
-    path = _pq(settings, "sessions/56/plenary/votes.parquet")
-    if not path:
-        return None
-
     row = conn.execute(
-        f"""
-        SELECT title_nl, title_fr, date, yes, no, abstain,
-               dossier_id, document_id, motion_id, meeting_id
-        FROM read_parquet('{path}')
+        """
+        SELECT vote_id, result_id, title_nl, title_fr, date, outcome, method, status,
+               dossier_id, document_id, motion_id, meeting_id, reuses_result
+        FROM votes
         WHERE vote_id = ?
         LIMIT 1
         """,
@@ -798,27 +814,91 @@ def _preview_vote(conn, node_id: str, settings: Settings) -> EntityPreview | Non
     if not row:
         return None
 
+    result_id = row[1]
+    headline = fetch_headline_tallies(conn, result_id) if result_id else {}
     fields = [
-        _field("Date", row[2]),
-        _field("Result", f"Yes {row[3]} · No {row[4]} · Abstain {row[5]}"),
-        _field("Meeting", row[9]),
-        _field("Dossier ref", row[6]),
-        _field("Document ref", row[7]),
-        _field("Motion ref", row[8]),
+        _field("Date", row[4]),
+        _field("Outcome", row[5]),
+        _field("Method", row[6]),
+        _field("Status", row[7]),
+        _field("Result", format_tally_result(headline)),
+        _field("Meeting", row[11]),
+        _field("Result id", result_id or "—"),
+        _field("Dossier ref", row[8]),
+        _field("Document ref", row[9]),
+        _field("Motion ref", row[10]),
     ]
+    if row[12] and row[12].lower() in {"true", "1", "yes"}:
+        fields.append(_field("Reuses result", "yes"))
 
     related: list[PreviewRelated] = []
-    if row[6]:
-        dossier_node = f"56/{row[6]}"
-        related.append(_related("Dossier", dossier_node, f"Dossier {row[6]}"))
-    if row[7]:
-        related.append(_related("Document", row[7], f"Document {row[7]}"))
+    if result_id:
+        related.append(_related("VoteResult", result_id, f"Result {result_id}"))
+    if row[8]:
+        dossier_node = f"56/{row[8]}"
+        related.append(_related("Dossier", dossier_node, f"Dossier {row[8]}"))
+    if row[9]:
+        related.append(_related("Document", row[9], f"Document {row[9]}"))
 
     return EntityPreview(
-        title=row[0] or row[1] or node_id,
+        title=row[2] or row[3] or node_id,
         fields=fields,
-        content=row[1] if row[1] and row[1] != row[0] else None,
-        content_label="Title (FR)" if row[1] and row[1] != row[0] else None,
+        content=row[3] if row[3] and row[3] != row[2] else None,
+        content_label="Title (FR)" if row[3] and row[3] != row[2] else None,
+        related=related,
+    )
+
+
+def _preview_vote_result(
+    conn, node_id: str, settings: Settings
+) -> EntityPreview | None:
+    row = conn.execute(
+        """
+        SELECT result_id, session_id, meeting_id, seq, method, named, status, outcome,
+               source_roll_call_number, source_url, cache_path
+        FROM vote_results
+        WHERE result_id = ?
+        LIMIT 1
+        """,
+        [node_id],
+    ).fetchone()
+    if not row:
+        return None
+
+    headline = fetch_headline_tallies(conn, node_id)
+    fields = [
+        _field("Meeting", f"{row[1]} / {row[2]}"),
+        _field("Sequence", row[3]),
+        _field("Method", row[4]),
+        _field("Named", row[5]),
+        _field("Status", row[6]),
+        _field("Outcome", row[7]),
+        _field("Roll call #", row[8] or "—"),
+        _field("Result", format_tally_result(headline)),
+    ]
+    if row[9]:
+        fields.append(_field("Source URL", row[9], link=row[9]))
+    if row[10]:
+        fields.append(_field("Cache", row[10], link=f"/api/cache/{row[10]}"))
+
+    votes = conn.execute(
+        """
+        SELECT vote_id, title_nl, title_fr
+        FROM votes
+        WHERE result_id = ?
+        ORDER BY cast(seq as integer), vote_id
+        LIMIT 8
+        """,
+        [node_id],
+    ).fetchall()
+    related = [
+        _related("Vote", vote_id, title_nl or title_fr or vote_id)
+        for vote_id, title_nl, title_fr in votes
+    ]
+
+    return EntityPreview(
+        title=f"Result {node_id}",
+        fields=fields,
         related=related,
     )
 
@@ -898,7 +978,9 @@ def _preview_person(conn, node_id: str, settings: Settings) -> EntityPreview | N
     return EntityPreview(title=name, fields=fields)
 
 
-def _preview_external_person(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+def _preview_external_person(
+    conn, node_id: str, settings: Settings
+) -> EntityPreview | None:
     ext_path = _pq(settings, "identity/external_persons.parquet")
     if not ext_path:
         return None

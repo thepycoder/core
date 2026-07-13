@@ -37,7 +37,9 @@ def format_yyyymmdd(value: str) -> str:
 def normalize_person_field(value: str) -> str:
     if not value:
         return ""
-    return " ".join(part.strip() for part in value.replace("\n", " ").split() if part.strip())
+    return " ".join(
+        part.strip() for part in value.replace("\n", " ").split() if part.strip()
+    )
 
 
 def qrva_api_url(sdocname: str) -> str:

@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
@@ -55,11 +53,7 @@ pub fn normalize_holds_role(
                 let detail = resolver.resolve_detail(&name, Bucket::CommissionMember);
                 match detail.resolution {
                     Resolution::Resolved(person_id) => {
-                        let key = (
-                            person_id.clone(),
-                            "chair".to_string(),
-                            target_id.clone(),
-                        );
+                        let key = (person_id.clone(), "chair".to_string(), target_id.clone());
                         if seen.insert(key) {
                             rows.push(HoldsRoleRow {
                                 holds_role_id: format!("{person_id}_chair_{target_id}"),
@@ -89,6 +83,7 @@ pub fn normalize_holds_role(
                             raw_field: name,
                             source_url: source_urls[i].clone(),
                             cache_path: cache_paths[i].clone(),
+                            ..UnresolvedRow::default()
                         });
                     }
                 }
@@ -96,7 +91,11 @@ pub fn normalize_holds_role(
         }
     }
 
-    rows.sort_by(|a, b| a.target_id.cmp(&b.target_id).then(a.person_id.cmp(&b.person_id)));
+    rows.sort_by(|a, b| {
+        a.target_id
+            .cmp(&b.target_id)
+            .then(a.person_id.cmp(&b.person_id))
+    });
     dedupe_unresolved(&mut unresolved);
 
     Ok(HoldsRoleOutput { rows, unresolved })

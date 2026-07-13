@@ -3,8 +3,8 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::ActorResolver;
 use identity::external::department_external_id;
-use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::normalize::normalize_name;
+use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use std::collections::HashSet;
 use std::error::Error;
 use std::path::Path;
@@ -91,7 +91,11 @@ pub fn normalize_addressed_to(
         }
     }
 
-    rows.sort_by(|a, b| a.question_id.cmp(&b.question_id).then(a.entity_id.cmp(&b.entity_id)));
+    rows.sort_by(|a, b| {
+        a.question_id
+            .cmp(&b.question_id)
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
     Ok(rows)
 }
 

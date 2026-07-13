@@ -5,55 +5,92 @@ pub mod utils;
 
 pub mod agenda_timeline;
 pub mod answer_io;
-pub mod question_boundaries;
+pub mod artifact_id;
+pub mod meeting_parse;
 pub mod meeting_report;
 pub mod proceeding_entities;
 pub mod proceeding_io;
+pub mod qa_coverage;
+pub mod qa_markers;
 pub mod qrva_text;
+pub mod question_boundaries;
 pub mod report_blocks;
+pub mod report_blocks_io;
+pub mod source_spans;
 pub mod speaker_parse;
 pub mod speech_zones;
-pub mod qa_markers;
-pub mod qa_coverage;
 pub mod utterance_io;
 pub mod utterance_segment;
+pub mod vote_assembly;
+pub mod vote_events;
+pub mod vote_io;
+pub mod vote_patterns;
+pub mod vote_types;
 pub mod written_oral_qa;
 
 pub mod vote_inventory;
 
 pub use agenda_timeline::{
-    count_agenda_questions_from_cache, extract_agenda_number, looks_like_fr_heading, AgendaItem,
-    ItemKind, MeetingKind,
+    AgendaItem, ItemKind, MeetingKind, count_agenda_questions_from_cache, extract_agenda_number,
+    looks_like_fr_heading,
 };
-pub use answer_io::{write_answers_parquet, AnswerDraft};
+pub use answer_io::{AnswerDraft, write_answers_parquet};
+pub use artifact_id::{
+    BLOCK_PARSER_VERSION, REPORT_BLOCK_EXTRACTOR_VERSION, VOTE_EXTRACTOR_VERSION, artifact_id,
+    content_hash, content_hash_bytes,
+};
+pub use meeting_parse::{MeetingParseOutput, parse_plenary_meeting_report};
+pub use meeting_report::{
+    extract_utterances_from_blocks, extract_utterances_from_cache, extract_utterances_from_document,
+};
 pub use proceeding_entities::{
-    extract_proceedings_from_document, is_non_question_proceeding_heading, HearingDraft,
-    InterpellationDraft,
+    HearingDraft, InterpellationDraft, extract_proceedings_from_document,
+    is_non_question_proceeding_heading,
 };
 pub use proceeding_io::{write_hearings_parquet, write_interpellations_parquet};
+pub use qa_coverage::{count_document_words, count_document_words_from_cache, word_count};
+pub use qa_markers::{MarkerCheckResult, check_markers_vs_utterances};
 pub use qrva_text::{
-    actr_id_to_person_id, department_external_id, docname_internal_id, flatten_qrva_text,
-    inline_answer_id, parse_aut_actr_id, parse_oral_refs, qrva_answer_id, qrva_detail_url,
-    route_id, written_question_id, QRVA_API_BASE,
+    QRVA_API_BASE, actr_id_to_person_id, department_external_id, docname_internal_id,
+    flatten_qrva_text, inline_answer_id, parse_aut_actr_id, parse_oral_refs, qrva_answer_id,
+    qrva_detail_url, route_id, written_question_id,
 };
 pub use question_boundaries::{
-    classify_question_heading_bilingual, classify_question_heading_text, extends_open_question,
-    is_group_start_text, is_hearing_text, is_questions_section, is_single_text,
-    is_subquestion_text, has_pending_question_text, starts_new_question_unit, QuestionHeadingRole,
+    QuestionHeadingRole, classify_question_heading_bilingual, classify_question_heading_text,
+    extends_open_question, has_pending_question_text, is_group_start_text, is_hearing_text,
+    is_questions_section, is_single_text, is_subquestion_text, starts_new_question_unit,
 };
-pub use speaker_parse::{count_source_markers, detect_turn_start, parse_speaker_label, SpeakerRole, TurnStart};
-pub use meeting_report::{extract_utterances_from_cache, extract_utterances_from_document};
-pub use report_blocks::{parse_report_blocks, read_report_html, BlockTag, ReportBlock};
-pub use qa_markers::{check_markers_vs_utterances, MarkerCheckResult};
-pub use qa_coverage::{count_document_words, count_document_words_from_cache, word_count};
+pub use report_blocks::{
+    BlockTag, InlineSpan, ReportBlock, TableCell, TableRow, parse_report_blocks, read_report_html,
+    table_row_labels, table_row_numeric_cells, table_rows_text,
+};
+pub use report_blocks_io::{
+    ReportBlockRow, materialize_report_blocks, write_report_blocks_parquet,
+};
+pub use source_spans::{
+    SourceSpanDraft, SpanValidationOutput, make_artifact_id, span_id, validate_source_spans,
+    write_source_spans_parquet,
+};
+pub use speaker_parse::{
+    SpeakerRole, TurnStart, count_source_markers, detect_turn_start, parse_speaker_label,
+};
 pub use utterance_io::write_utterances_parquet;
-pub use utterance_segment::{segment_utterances, UtteranceDraft};
-pub use written_oral_qa::{
-    extract_written_oral_items, find_written_oral_zone_start, is_written_oral_section_heading,
-    oral_written_answer_drafts, OralWrittenItem,
+pub use utterance_segment::{UtteranceDraft, segment_utterances};
+pub use vote_assembly::assemble_votes_from_blocks;
+pub use vote_io::{
+    write_unresolved_vote_events_parquet, write_vote_bundle, write_vote_result_members_parquet,
+    write_vote_results_parquet, write_vote_tallies_parquet, write_votes_parquet,
 };
-pub use vote_inventory::{
-    appendix_marker_for_vote, inventory_vote_numbers, parse_appendix_vote_number,
-    parse_compact_vote_number, parse_paragraph_vote_number, parse_vote_inventory,
-    vote_number_gaps, VoteInventory,
+pub use vote_patterns::{
+    VoteBucket, VoteSectionKind, appendix_marker_for_vote, appendix_vote_re, compact_vote_re,
+    paragraph_vote_re, parse_appendix_vote_number, parse_compact_vote_number,
+    parse_paragraph_vote_number, vote_bucket_label,
+};
+pub use vote_types::{
+    SpanEvidence, UnresolvedVoteEventDraft, VoteAssemblyOutput, VoteDecisionDraft, VoteResultDraft,
+    VoteResultMemberDraft, VoteTallyDraft, composite_result_id, composite_vote_id,
+};
+pub use written_oral_qa::{
+    OralWrittenItem, extract_written_oral_items, find_written_oral_zone_start,
+    is_written_oral_section_heading, oral_written_answer_drafts,
 };

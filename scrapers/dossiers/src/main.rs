@@ -62,9 +62,8 @@ fn list_from_to_regex() -> &'static Regex {
 }
 
 fn flwb_dossier_id_regex() -> &'static Regex {
-    FLWB_DOSSIER_ID_REGEX.get_or_init(|| {
-        Regex::new(r#"(?i)flwbn\.cfm[^"'<>]*dossierID=(\d+)"#).unwrap()
-    })
+    FLWB_DOSSIER_ID_REGEX
+        .get_or_init(|| Regex::new(r#"(?i)flwbn\.cfm[^"'<>]*dossierID=(\d+)"#).unwrap())
 }
 
 /// The output of this scraper.
@@ -343,10 +342,9 @@ async fn discover_all_dossier_ids(
     let range_urls = extract_list_from_to_urls(&list_html, session_id);
 
     if range_urls.is_empty() {
-        return Err(format!(
-            "FLWB discovery found no ListFromTo ranges for session {session_id}"
-        )
-        .into());
+        return Err(
+            format!("FLWB discovery found no ListFromTo ranges for session {session_id}").into(),
+        );
     }
 
     let range_count = range_urls.len();
@@ -619,7 +617,8 @@ async fn check_and_download_dossier_file(
             return Ok(DownloadAction::SkippedSettled);
         }
 
-        if cache_age_days(cache_path).is_some_and(|age| age < recheck_max_age_days(latest_meeting_date))
+        if cache_age_days(cache_path)
+            .is_some_and(|age| age < recheck_max_age_days(latest_meeting_date))
         {
             return Ok(DownloadAction::SkippedFresh);
         }
@@ -1255,8 +1254,7 @@ mod tests {
             return;
         }
         let html = std::fs::read_to_string(path).expect("read cached dossier html");
-        let dossier =
-            scrape_dossier("1000", &Html::parse_document(&html)).expect("scrape dossier");
+        let dossier = scrape_dossier("1000", &Html::parse_document(&html)).expect("scrape dossier");
         assert!(is_settled_dossier(&dossier));
     }
 }

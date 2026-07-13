@@ -64,17 +64,14 @@ fn turn_start_regex() -> &'static Regex {
 }
 
 fn chair_generic_regex() -> &'static Regex {
-    CHAIR_GENERIC.get_or_init(|| {
-        Regex::new(r"(?i)^\s*(?:De\s+voorzitter|Le\s+président)\s*:\s*").unwrap()
-    })
+    CHAIR_GENERIC
+        .get_or_init(|| Regex::new(r"(?i)^\s*(?:De\s+voorzitter|Le\s+président)\s*:\s*").unwrap())
 }
 
 fn chair_named_regex() -> &'static Regex {
     CHAIR_NAMED.get_or_init(|| {
-        Regex::new(
-            r"(?i)^\s*(?P<name>[^:\n]{3,80}),\s*(?:voorzitter|président|president)\s*:\s*",
-        )
-        .unwrap()
+        Regex::new(r"(?i)^\s*(?P<name>[^:\n]{3,80}),\s*(?:voorzitter|président|president)\s*:\s*")
+            .unwrap()
     })
 }
 
@@ -89,10 +86,8 @@ fn titles_prefix_regex() -> &'static Regex {
 
 fn role_suffix_regex() -> &'static Regex {
     ROLE_SUFFIX.get_or_init(|| {
-        Regex::new(
-            r"(?i),\s*(?:ministre|minister|staatssecretaris|rapporteur)(?:\s+[^,]+)?$",
-        )
-        .unwrap()
+        Regex::new(r"(?i),\s*(?:ministre|minister|staatssecretaris|rapporteur)(?:\s+[^,]+)?$")
+            .unwrap()
     })
 }
 
@@ -325,9 +320,11 @@ mod tests {
             .filter(|u| u.raw_speaker.contains("Coenegrachts"))
             .collect();
         assert!(
-            coenegrachts
-                .iter()
-                .all(|u| !u.raw_speaker.chars().next().is_some_and(|c| c.is_ascii_digit())),
+            coenegrachts.iter().all(|u| !u
+                .raw_speaker
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())),
             "Coenegrachts speakers should not have digit prefix: {:?}",
             coenegrachts
                 .iter()

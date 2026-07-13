@@ -14,10 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     write_nodes(&out_dir.join("nodes.parquet"), &build.nodes)?;
     write_edges(&out_dir.join("edges.parquet"), &build.edges)?;
-    write_artifacts(
-        &out_dir.join("source_artifacts.parquet"),
-        &build.artifacts,
-    )?;
+    write_artifacts(&out_dir.join("source_artifacts.parquet"), &build.artifacts)?;
 
     let mut edge_counts: HashMap<String, usize> = HashMap::new();
     let mut node_counts: HashMap<String, usize> = HashMap::new();

@@ -1,11 +1,24 @@
-//! Independent vote inventory parser for QA crosschecks (S2–S4, A13).
+//! Independent, method-aware source inventory used only by QA.
+//!
+//! This deliberately does not call the production vote event scanner or assembler.
 
-use crate::report_blocks::{parse_report_blocks, read_report_html};
-use regex::Regex;
-use scraper::{Html, Selector};
+use crate::report_blocks::{BlockTag, ReportBlock, parse_report_blocks, read_report_html};
+use crate::vote_patterns::{
+    VoteBucket, VoteSectionKind, formal_outcome, formal_vote_begin_re, is_language_group_header,
+    quorum_failure_re, reuse_result_re, vote_bucket_label, votes_section_heading,
+};
+use scraper::Html;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::OnceLock;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormalVoteOccurrence {
+    pub source_number: String,
+    pub occurrence: u32,
+    pub method: String,
+    pub block_index: u32,
+    pub creates_result: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct VoteInventory {
@@ -13,149 +26,315 @@ pub struct VoteInventory {
     pub compact_vote_numbers: BTreeSet<String>,
     pub appendix_vote_numbers: BTreeSet<String>,
     pub paragraph_vote_numbers: BTreeSet<String>,
+    pub formal_events: Vec<FormalVoteOccurrence>,
     pub appendix_buckets: Vec<AppendixBucket>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendixBucket {
     pub vote_number: String,
-    pub yes_count: usize,
-    pub no_count: usize,
-    pub abstain_count: usize,
-    pub name_paragraph_count: usize,
-}
-
-static COMPACT_VOTE: OnceLock<Regex> = OnceLock::new();
-static APPENDIX_VOTE: OnceLock<Regex> = OnceLock::new();
-static APPENDIX_VOTE_REVERSE: OnceLock<Regex> = OnceLock::new();
-static PARAGRAPH_VOTE: OnceLock<Regex> = OnceLock::new();
-static SELECTOR_P: OnceLock<Selector> = OnceLock::new();
-
-/// Compact vote table header, e.g. `(Stemming/vote 1)` or Word split `(Stemming/ vote 1)`.
-pub fn compact_vote_re() -> &'static Regex {
-    COMPACT_VOTE.get_or_init(|| {
-        Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap()
-    })
-}
-
-/// Appendix marker, e.g. `Naamstemming - Vote nominatif: 1`.
-pub fn appendix_vote_re() -> &'static Regex {
-    APPENDIX_VOTE.get_or_init(|| {
-        Regex::new(r"(?i)Naamstemming\s*-\s*Vote\s*nominatif\s*:\s*(\d+)").unwrap()
-    })
-}
-
-fn appendix_vote_reverse_re() -> &'static Regex {
-    APPENDIX_VOTE_REVERSE.get_or_init(|| {
-        Regex::new(r"(?i)Vote\s*nominatif\s*-\s*Naamstemming\s*:\s*(\d+)").unwrap()
-    })
-}
-
-/// Inline vote reference in a paragraph, e.g. `(Stemming/vote 2)`.
-pub fn paragraph_vote_re() -> &'static Regex {
-    PARAGRAPH_VOTE.get_or_init(|| Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap())
+    pub occurrence: u32,
+    pub position: String,
+    pub declared_count: u32,
+    pub collected_name_count: usize,
 }
 
 pub fn parse_compact_vote_number(text: &str) -> Option<String> {
-    compact_vote_re()
-        .captures(text)
-        .map(|caps| caps[1].to_string())
+    crate::vote_patterns::parse_compact_vote_number(text)
 }
 
 pub fn parse_appendix_vote_number(text: &str) -> Option<String> {
-    appendix_vote_re()
-        .captures(text)
-        .or_else(|| appendix_vote_reverse_re().captures(text))
-        .map(|caps| caps[1].to_string())
+    crate::vote_patterns::parse_appendix_vote_number(text)
 }
 
 pub fn parse_paragraph_vote_number(text: &str) -> Option<String> {
-    paragraph_vote_re()
-        .captures(text)
-        .map(|caps| caps[1].to_string())
+    crate::vote_patterns::parse_paragraph_vote_number(text)
 }
 
 pub fn appendix_marker_for_vote(text: &str, vote_index: &str) -> bool {
     parse_appendix_vote_number(text).as_deref() == Some(vote_index)
 }
 
-pub fn parse_vote_inventory(cache_path: &Path, meeting_id: &str) -> Result<VoteInventory, Box<dyn std::error::Error>> {
+pub fn parse_vote_inventory(
+    cache_path: &Path,
+    meeting_id: &str,
+) -> Result<VoteInventory, Box<dyn std::error::Error>> {
     let html = read_report_html(cache_path)?;
     let document = Html::parse_document(&html);
-    let blocks = parse_report_blocks(&document);
+    Ok(parse_vote_inventory_blocks(
+        &parse_report_blocks(&document),
+        meeting_id,
+    ))
+}
 
+fn parse_vote_inventory_blocks(blocks: &[ReportBlock], meeting_id: &str) -> VoteInventory {
     let mut compact_vote_numbers = BTreeSet::new();
     let mut appendix_vote_numbers = BTreeSet::new();
     let mut paragraph_vote_numbers = BTreeSet::new();
+    let mut formal_events = Vec::new();
+    let mut source_occurrences: HashMap<String, u32> = HashMap::new();
+    let mut section = VoteSectionKind::None;
+    let mut formal_zone = false;
 
-    for block in &blocks {
-        if let Some(caps) = compact_vote_re().captures(&block.text) {
-            compact_vote_numbers.insert(caps[1].to_string());
+    for (idx, block) in blocks.iter().enumerate() {
+        let heading = votes_section_heading(&block.text);
+        if heading != VoteSectionKind::None {
+            section = heading;
+        } else if block.tag == BlockTag::H1 {
+            section = VoteSectionKind::None;
+            formal_zone = false;
         }
-        if let Some(caps) = appendix_vote_re().captures(&block.text) {
-            appendix_vote_numbers.insert(caps[1].to_string());
+        if formal_vote_begin_re().is_match(&block.text) {
+            formal_zone = true;
         }
-        if let Some(caps) = paragraph_vote_re().captures(&block.text) {
-            paragraph_vote_numbers.insert(caps[1].to_string());
+
+        if let Some(number) = parse_appendix_vote_number(&block.text) {
+            appendix_vote_numbers.insert(number);
+            continue;
+        }
+
+        if block.tag == BlockTag::Table {
+            if (section == VoteSectionKind::RollCall || formal_zone)
+                && let Some(number) = table_source_number(block)
+            {
+                compact_vote_numbers.insert(number.clone());
+                let method = if table_is_language_group(block) {
+                    "language_group_roll_call"
+                } else {
+                    "roll_call"
+                };
+                push_event(
+                    &mut formal_events,
+                    &mut source_occurrences,
+                    number,
+                    method,
+                    block.index,
+                    true,
+                );
+                if section != VoteSectionKind::RollCall {
+                    formal_zone = false;
+                }
+                continue;
+            }
+            if section == VoteSectionKind::SecretBallot && table_is_secret_result(block) {
+                push_event(
+                    &mut formal_events,
+                    &mut source_occurrences,
+                    String::new(),
+                    "secret_ballot",
+                    block.index,
+                    true,
+                );
+                continue;
+            }
+        }
+
+        if block.tag != BlockTag::P {
+            continue;
+        }
+        if let Some(number) = parse_paragraph_vote_number(&block.text) {
+            paragraph_vote_numbers.insert(number.clone());
+            let nearby = blocks[idx..blocks.len().min(idx + 4)]
+                .iter()
+                .map(|candidate| candidate.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let previous = blocks[idx.saturating_sub(3)..idx]
+                .iter()
+                .map(|candidate| candidate.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if reuse_result_re().is_match(&previous) || reuse_result_re().is_match(&nearby) {
+                push_event(
+                    &mut formal_events,
+                    &mut source_occurrences,
+                    number,
+                    "reuse",
+                    block.index,
+                    false,
+                );
+            } else if (section == VoteSectionKind::RollCall || formal_zone)
+                && quorum_failure_re().is_match(&nearby)
+            {
+                push_event(
+                    &mut formal_events,
+                    &mut source_occurrences,
+                    number,
+                    "no_quorum",
+                    block.index,
+                    true,
+                );
+                if section != VoteSectionKind::RollCall {
+                    formal_zone = false;
+                }
+            }
+        }
+        let lower = block.text.to_lowercase();
+        if (lower.contains("zitten en opstaan") || lower.contains("assis et levé"))
+            && formal_outcome(&block.text).is_some()
+        {
+            let bilingual_duplicate =
+                formal_events
+                    .last()
+                    .is_some_and(|event: &FormalVoteOccurrence| {
+                        event.method == "sitting_standing" && event.block_index + 1 == block.index
+                    });
+            if !bilingual_duplicate {
+                push_event(
+                    &mut formal_events,
+                    &mut source_occurrences,
+                    String::new(),
+                    "sitting_standing",
+                    block.index,
+                    true,
+                );
+            }
         }
     }
 
-    for p in document.select(SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap())) {
-        let text = p.text().collect::<String>();
-        if let Some(num) = parse_appendix_vote_number(&text) {
-            appendix_vote_numbers.insert(num);
-        }
-    }
-
-    let appendix_buckets = parse_appendix_buckets(&document);
-
-    Ok(VoteInventory {
+    VoteInventory {
         meeting_id: meeting_id.to_string(),
         compact_vote_numbers,
         appendix_vote_numbers,
         paragraph_vote_numbers,
-        appendix_buckets,
+        formal_events,
+        appendix_buckets: parse_appendix_buckets(blocks),
+    }
+}
+
+fn push_event(
+    events: &mut Vec<FormalVoteOccurrence>,
+    occurrences: &mut HashMap<String, u32>,
+    source_number: String,
+    method: &str,
+    block_index: u32,
+    creates_result: bool,
+) {
+    let key = if !creates_result {
+        format!("@reuse:{source_number}")
+    } else if source_number.is_empty() {
+        format!("@{method}")
+    } else {
+        source_number.clone()
+    };
+    let occurrence = occurrences.entry(key).or_default();
+    *occurrence += 1;
+    events.push(FormalVoteOccurrence {
+        source_number,
+        occurrence: *occurrence,
+        method: method.to_string(),
+        block_index,
+        creates_result,
+    });
+}
+
+fn table_source_number(block: &ReportBlock) -> Option<String> {
+    let first = block.table_rows.as_ref()?.first()?;
+    parse_compact_vote_number(
+        &first
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn table_is_language_group(block: &ReportBlock) -> bool {
+    block
+        .table_rows
+        .as_ref()
+        .and_then(|rows| rows.get(1))
+        .is_some_and(|row| {
+            let cells = row
+                .cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<Vec<_>>();
+            is_language_group_header(&cells)
+        })
+}
+
+fn table_is_secret_result(block: &ReportBlock) -> bool {
+    block.table_rows.as_ref().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row.cells
+                .first()
+                .and_then(|cell| vote_bucket_label(&cell.text))
+                .is_some_and(|bucket| {
+                    matches!(
+                        bucket,
+                        VoteBucket::Voters
+                            | VoteBucket::Valid
+                            | VoteBucket::BlankInvalid
+                            | VoteBucket::MajorityThreshold
+                    )
+                })
+        })
     })
 }
 
-fn parse_appendix_buckets(document: &Html) -> Vec<AppendixBucket> {
-    let selector_p = SELECTOR_P.get_or_init(|| Selector::parse("p").unwrap());
-    let paragraphs: Vec<_> = document.select(selector_p).collect();
-    let mut seen = std::collections::HashSet::new();
+fn parse_appendix_buckets(blocks: &[ReportBlock]) -> Vec<AppendixBucket> {
     let mut buckets = Vec::new();
-
-    for (idx, paragraph) in paragraphs.iter().enumerate() {
-        let text = paragraph.text().collect::<String>();
-        let Some(vote_number) = parse_appendix_vote_number(&text) else {
+    let mut occurrences: HashMap<String, u32> = HashMap::new();
+    for (marker_idx, marker) in blocks.iter().enumerate() {
+        let Some(vote_number) = parse_appendix_vote_number(&marker.text) else {
             continue;
         };
-        if !seen.insert(vote_number.clone()) {
-            continue;
+        let occurrence = occurrences.entry(vote_number.clone()).or_default();
+        *occurrence += 1;
+        let end = blocks[marker_idx + 1..]
+            .iter()
+            .position(|block| parse_appendix_vote_number(&block.text).is_some())
+            .map_or(blocks.len(), |offset| marker_idx + 1 + offset);
+        let mut current_bucket: Option<usize> = None;
+        for block in &blocks[marker_idx + 1..end] {
+            if let Some(rows) = &block.table_rows {
+                for row in rows {
+                    let Some(label) = row.cells.first() else {
+                        continue;
+                    };
+                    let Some(position) = bucket_position(&label.text) else {
+                        continue;
+                    };
+                    let declared_count = row
+                        .cells
+                        .iter()
+                        .skip(1)
+                        .find_map(|cell| cell.text.trim().parse::<u32>().ok())
+                        .unwrap_or(0);
+                    buckets.push(AppendixBucket {
+                        vote_number: vote_number.clone(),
+                        occurrence: *occurrence,
+                        position: position.to_string(),
+                        declared_count,
+                        collected_name_count: 0,
+                    });
+                    current_bucket = Some(buckets.len() - 1);
+                }
+            } else if block.tag == BlockTag::P {
+                if let Some(bucket_idx) = current_bucket {
+                    buckets[bucket_idx].collected_name_count += count_names(&block.text);
+                }
+            }
         }
-        buckets.push(AppendixBucket {
-            vote_number,
-            yes_count: 0,
-            no_count: 0,
-            abstain_count: 0,
-            name_paragraph_count: count_name_paragraphs_after(&paragraphs, idx),
-        });
     }
     buckets
 }
 
-fn count_name_paragraphs_after(paragraphs: &[scraper::ElementRef], start_idx: usize) -> usize {
-    let mut count = 0usize;
-    for paragraph in paragraphs.iter().skip(start_idx + 1) {
-        let text = paragraph.text().collect::<String>();
-        if parse_appendix_vote_number(&text).is_some() {
-            break;
-        }
-        let trimmed = text.trim();
-        if trimmed.len() > 3 && trimmed.chars().any(|c| c.is_alphabetic()) {
-            count += 1;
-        }
+fn bucket_position(label: &str) -> Option<&'static str> {
+    match vote_bucket_label(label)? {
+        VoteBucket::Yes => Some("yes"),
+        VoteBucket::No => Some("no"),
+        VoteBucket::Abstain => Some("abstain"),
+        _ => None,
     }
-    count
+}
+
+fn count_names(text: &str) -> usize {
+    text.split([',', ';'])
+        .filter(|part| part.trim().chars().any(char::is_alphabetic))
+        .count()
 }
 
 pub fn inventory_vote_numbers(inv: &VoteInventory) -> BTreeSet<String> {
@@ -166,26 +345,26 @@ pub fn inventory_vote_numbers(inv: &VoteInventory) -> BTreeSet<String> {
 }
 
 pub fn vote_number_gaps(numbers: &BTreeSet<String>) -> Vec<String> {
-    if numbers.is_empty() {
+    let parsed = numbers
+        .iter()
+        .filter_map(|number| number.parse::<u32>().ok())
+        .collect::<Vec<_>>();
+    let Some(min) = parsed.iter().min().copied() else {
         return Vec::new();
-    }
-    let min = numbers.iter().filter_map(|n| n.parse::<u32>().ok()).min().unwrap_or(1);
-    let max = numbers.iter().filter_map(|n| n.parse::<u32>().ok()).max().unwrap_or(min);
-    let mut gaps = Vec::new();
-    for n in min..=max {
-        if !numbers.contains(&n.to_string()) {
-            gaps.push(n.to_string());
-        }
-    }
-    gaps
+    };
+    let max = parsed.iter().max().copied().unwrap_or(min);
+    (min..=max)
+        .filter(|number| !numbers.contains(&number.to_string()))
+        .map(|number| number.to_string())
+        .collect()
 }
 
 pub fn votes_by_meeting_from_parquet(
     votes: &[(String, String, String, String, String, String)],
 ) -> HashMap<String, Vec<&(String, String, String, String, String, String)>> {
-    let mut map: HashMap<String, Vec<&(String, String, String, String, String, String)>> = HashMap::new();
+    let mut map = HashMap::new();
     for row in votes {
-        map.entry(row.1.clone()).or_default().push(row);
+        map.entry(row.1.clone()).or_insert_with(Vec::new).push(row);
     }
     map
 }
@@ -193,53 +372,70 @@ pub fn votes_by_meeting_from_parquet(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::paths::cache_dir;
 
-    #[test]
-    fn parse_vote_inventory_meeting_129() {
-        let path = cache_dir().join("sessions/56/meetings/plenary/56-129.html");
-        if !path.exists() {
-            return;
-        }
-        let inv = parse_vote_inventory(&path, "129").expect("inventory");
-        assert!(!inv.appendix_vote_numbers.is_empty());
+    fn fixture(name: &str) -> VoteInventory {
+        let html = include_str!(concat!(
+            "../tests/fixtures/votes/",
+            "roll_call_compact.html"
+        ));
+        let source = match name {
+            "language" => include_str!("../tests/fixtures/votes/language_group_roll_call.html"),
+            "secret" => include_str!("../tests/fixtures/votes/secret_ballot_candidates.html"),
+            "quorum" => include_str!("../tests/fixtures/votes/quorum_failure_formal_sequence.html"),
+            "reuse" => include_str!("../tests/fixtures/votes/result_reuse.html"),
+            "sitting" => include_str!("../tests/fixtures/votes/sitting_standing.html"),
+            "appendix" => include_str!("../tests/fixtures/votes/appendix_reverse_order.html"),
+            "debate" => include_str!("../tests/fixtures/votes/debate_quoted_table.html"),
+            _ => html,
+        };
+        let document = Html::parse_document(source);
+        parse_vote_inventory_blocks(&parse_report_blocks(&document), "1")
     }
 
     #[test]
-    fn parse_compact_vote_number_accepts_word_split_span_text() {
+    fn inventories_all_formal_methods_and_reuse() {
         assert_eq!(
-            parse_compact_vote_number("(Stemming/ vote  1)"),
-            Some("1".to_string())
+            fixture("language").formal_events[0].method,
+            "language_group_roll_call"
         );
-        assert_eq!(
-            parse_compact_vote_number("(Stemming/vote 2)"),
-            Some("2".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_appendix_vote_number_accepts_word_split_span_text() {
-        assert_eq!(
-            parse_appendix_vote_number("Naamstemming - Vote nominatif: 3"),
-            Some("3".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_vote_inventory_meeting_60() {
-        let path = cache_dir().join("sessions/56/meetings/plenary/56-60.html");
-        if !path.exists() {
-            return;
-        }
-        let inv = parse_vote_inventory(&path, "60").expect("inventory");
+        assert_eq!(fixture("secret").formal_events[0].method, "secret_ballot");
         assert!(
-            inv.compact_vote_numbers.len() >= 50,
-            "expected many compact votes, got {:?}",
-            inv.compact_vote_numbers.len()
+            fixture("quorum")
+                .formal_events
+                .iter()
+                .all(|event| event.method == "no_quorum")
         );
         assert!(
-            !inv.appendix_vote_numbers.is_empty(),
-            "expected appendix vote markers"
+            fixture("reuse")
+                .formal_events
+                .iter()
+                .any(|event| !event.creates_result)
         );
+        assert_eq!(
+            fixture("sitting").formal_events[0].method,
+            "sitting_standing"
+        );
+    }
+
+    #[test]
+    fn appendix_keeps_occurrence_and_real_declared_count() {
+        let inventory = fixture("appendix");
+        assert_eq!(inventory.appendix_buckets[0].vote_number, "1");
+        assert_eq!(inventory.appendix_buckets[0].occurrence, 1);
+        assert_eq!(inventory.appendix_buckets[0].declared_count, 61);
+        assert_eq!(inventory.appendix_buckets[0].collected_name_count, 2);
+    }
+
+    #[test]
+    fn ordered_repeated_occurrences_are_retained() {
+        let inventory = fixture("quorum");
+        assert_eq!(inventory.formal_events.len(), 2);
+        assert_eq!(inventory.formal_events[0].source_number, "1");
+        assert_eq!(inventory.formal_events[1].source_number, "2");
+    }
+
+    #[test]
+    fn debate_vote_shaped_table_is_not_a_formal_event() {
+        assert!(fixture("debate").formal_events.is_empty());
     }
 }

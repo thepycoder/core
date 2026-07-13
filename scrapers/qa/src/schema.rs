@@ -2,7 +2,7 @@ use crate::io::parquet_row_count;
 use crate::types::CheckDetail;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
@@ -46,7 +46,11 @@ fn staging_tables() -> Vec<TableSpec> {
             rel_path: format!("sessions/{SESSION_ID}/commission/questions.parquet"),
             table_name: "commission_questions".into(),
             id_columns: vec!["question_id".into()],
-            required_columns: vec!["session_id".into(), "meeting_id".into(), "internal_ids".into()],
+            required_columns: vec![
+                "session_id".into(),
+                "meeting_id".into(),
+                "internal_ids".into(),
+            ],
         },
         TableSpec {
             rel_path: format!("sessions/{SESSION_ID}/written/questions.parquet"),
@@ -87,7 +91,10 @@ fn staging_tables() -> Vec<TableSpec> {
     ]
 }
 
-pub fn run_schema_checks(data_dir: &Path, qa_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+pub fn run_schema_checks(
+    data_dir: &Path,
+    qa_dir: &Path,
+) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
     let mut details = Vec::new();
     let prev_counts = load_row_counts(&qa_dir.join("row_counts.json"));
 
@@ -207,7 +214,12 @@ pub fn run_schema_checks(data_dir: &Path, qa_dir: &Path) -> Result<Vec<CheckDeta
         // Commission questions: dossier_ids must not exist (legacy mislabel)
         if spec.table_name == "commission_questions" {
             for batch in read_all_rows(&path)? {
-                if batch.schema().fields().iter().any(|f| f.name() == "dossier_ids") {
+                if batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .any(|f| f.name() == "dossier_ids")
+                {
                     details.push(
                         CheckDetail::new(
                             "schema.internal_ids_present",

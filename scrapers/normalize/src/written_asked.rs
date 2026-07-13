@@ -1,4 +1,4 @@
-use crate::common::{dedupe_unresolved, reason_label, UnresolvedRow, SESSION_ID};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
@@ -95,13 +95,18 @@ pub fn normalize_written_asked(
                         raw_field: author_raw[i].clone(),
                         source_url: source_urls[i].clone(),
                         cache_path: cache_paths[i].clone(),
+                        ..UnresolvedRow::default()
                     });
                 }
             }
         }
     }
 
-    rows.sort_by(|a, b| a.question_id.cmp(&b.question_id).then(a.person_id.cmp(&b.person_id)));
+    rows.sort_by(|a, b| {
+        a.question_id
+            .cmp(&b.question_id)
+            .then(a.person_id.cmp(&b.person_id))
+    });
     dedupe_unresolved(&mut unresolved);
     Ok(WrittenAskedOutput { rows, unresolved })
 }

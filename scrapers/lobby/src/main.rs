@@ -55,7 +55,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let cache_path = relative_cache_path(&pdf_path, &cache_dir());
     let layout_text = pdftotext_layout(&pdf_path)?;
-    let lobby = dedupe_lobby(extract_lobby_from_layout(&layout_text, LOBBY_PDF_URL, &cache_path)?);
+    let lobby = dedupe_lobby(extract_lobby_from_layout(
+        &layout_text,
+        LOBBY_PDF_URL,
+        &cache_path,
+    )?);
     write_parquet(&lobby_path, &lobby)?;
 
     println!("Scraped {} lobby entries.", lobby.len());
@@ -134,7 +138,8 @@ fn extract_lobby_from_layout(
 }
 
 fn dedupe_lobby(rows: Vec<ScrapedLobby>) -> Vec<ScrapedLobby> {
-    let mut by_name: std::collections::HashMap<String, ScrapedLobby> = std::collections::HashMap::new();
+    let mut by_name: std::collections::HashMap<String, ScrapedLobby> =
+        std::collections::HashMap::new();
     for row in rows {
         by_name
             .entry(row.name.clone())

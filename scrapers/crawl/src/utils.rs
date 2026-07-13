@@ -28,11 +28,7 @@ pub fn normalize_site_ref(raw: &str) -> String {
 }
 
 /// Upgrade legacy question ids (`{session}_{meeting}_{seq}`) using meeting kind from context.
-pub fn ensure_question_id(
-    session_id: &str,
-    meeting_kind: &str,
-    question_id: &str,
-) -> String {
+pub fn ensure_question_id(session_id: &str, meeting_kind: &str, question_id: &str) -> String {
     let scoped_prefix = format!("{session_id}_{meeting_kind}_");
     if question_id.starts_with(&scoped_prefix) {
         return question_id.to_string();
@@ -142,7 +138,7 @@ mod meeting_cache_tests {
                 .unwrap()
                 .parse::<u32>()
                 .unwrap();
-            max_id = Some(max_id.map_or(id, |current| current.max(id)));
+            max_id = Some(max_id.map_or(id, |current: u32| current.max(id)));
         }
         assert_eq!(max_id, Some(12));
         let _ = std::fs::remove_dir_all(&dir);

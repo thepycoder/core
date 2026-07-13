@@ -50,7 +50,10 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
                         e.edge_type, e.from_type, e.from_id
                     ),
                 )
-                .with_entity("edge", &format!("{}:{}->{}:{}", e.from_type, e.from_id, e.to_type, e.to_id)),
+                .with_entity(
+                    "edge",
+                    &format!("{}:{}->{}:{}", e.from_type, e.from_id, e.to_type, e.to_id),
+                ),
             );
         }
 
@@ -61,10 +64,7 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
                         "graph.voted_on_orphan_targets",
                         "warn",
                         "warn",
-                        format!(
-                            "VOTED_ON target {}:{} not in nodes",
-                            e.to_type, e.to_id
-                        ),
+                        format!("VOTED_ON target {}:{} not in nodes", e.to_type, e.to_id),
                     )
                     .with_entity(&e.to_type.to_lowercase(), &e.to_id),
                 );
@@ -79,7 +79,10 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
                             e.edge_type, e.to_type, e.to_id
                         ),
                     )
-                    .with_entity("edge", &format!("{}:{}->{}:{}", e.from_type, e.from_id, e.to_type, e.to_id)),
+                    .with_entity(
+                        "edge",
+                        &format!("{}:{}->{}:{}", e.from_type, e.from_id, e.to_type, e.to_id),
+                    ),
                 );
             }
         }

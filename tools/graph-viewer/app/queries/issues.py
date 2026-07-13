@@ -24,6 +24,9 @@ def _rows_to_samples(conn, check_id: str, rows, limit: int = 5) -> list[IssueSam
                 artifact_id=nav.get("artifact_id") or "",
                 source_url=nav.get("source_url") or data.get("source_url") or "",
                 cache_path=nav.get("cache_path") or data.get("cache_path") or "",
+                session_id=nav.get("session_id") or data.get("session_id") or "",
+                meeting_id=nav.get("meeting_id") or data.get("meeting_id") or "",
+                source_block=nav.get("source_block") or data.get("source_block") or "",
             )
         )
     return samples
@@ -46,15 +49,17 @@ def fetch_issues(conn, data_dir: Path | None = None) -> IssuesResponse:
     issues: list[Issue] = []
 
     if not checks_path.exists():
-        return IssuesResponse(issues=[
-            Issue(
-                id="qa_not_run",
-                severity="warning",
-                count=1,
-                summary="QA has not been run — execute `just qa` after `just build-graph`",
-                samples=[],
-            )
-        ])
+        return IssuesResponse(
+            issues=[
+                Issue(
+                    id="qa_not_run",
+                    severity="warning",
+                    count=1,
+                    summary="QA has not been run — execute `just qa` after `just build-graph`",
+                    samples=[],
+                )
+            ]
+        )
 
     conn.execute(
         f"CREATE OR REPLACE VIEW qa_checks AS SELECT * FROM read_parquet('{checks_path.as_posix()}')"
@@ -75,7 +80,12 @@ def fetch_issues(conn, data_dir: Path | None = None) -> IssuesResponse:
         """
     ).fetchall()
 
-    severity_map = {"fail": "error", "error": "error", "warn": "warning", "info": "info"}
+    severity_map = {
+        "fail": "error",
+        "error": "error",
+        "warn": "warning",
+        "info": "info",
+    }
 
     for table, check, status, count, detail, examples in rows:
         count_int = int(count) if str(count).isdigit() else 0
@@ -87,7 +97,8 @@ def fetch_issues(conn, data_dir: Path | None = None) -> IssuesResponse:
             sample_rows = conn.execute(
                 """
                 SELECT check_id, entity_type, entity_id, expected, actual, message,
-                       source_url, cache_path, meeting_kind, meeting_id
+                       source_url, cache_path, meeting_kind, meeting_id,
+                       session_id, source_block
                 FROM qa_details
                 WHERE check_id = ?
                 LIMIT 5

@@ -50,7 +50,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let content = std::fs::read_to_string(&index_cache)?;
     let document = Html::parse_document(&content);
-    let sessions = extract_sessions(&document, url, &relative_cache_path(&index_cache, &cache_dir()));
+    let sessions = extract_sessions(
+        &document,
+        url,
+        &relative_cache_path(&index_cache, &cache_dir()),
+    );
 
     write_parquet(&parquet_path, &sessions)?;
     println!(

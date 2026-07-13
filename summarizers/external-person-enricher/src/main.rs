@@ -4,8 +4,8 @@ use arrow::record_batch::RecordBatch;
 use chrono::Utc;
 use crawl::paths::data_dir;
 use mistral_client::{
-    create_websearch_agent, hash_text, mistral_websearch_conversation, strip_json_fences,
-    RateLimiter,
+    RateLimiter, create_websearch_agent, hash_text, mistral_websearch_conversation,
+    strip_json_fences,
 };
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -108,8 +108,7 @@ struct CachedBio {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
-    let api_key = std::env::var("MISTRAL_API_TOKEN")
-        .map_err(|_| "MISTRAL_API_TOKEN not set")?;
+    let api_key = std::env::var("MISTRAL_API_TOKEN").map_err(|_| "MISTRAL_API_TOKEN not set")?;
 
     let root = data_dir();
     let identity_dir = root.join("identity");
@@ -173,14 +172,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let search_hints = build_search_hints(person, ctxs);
         let user = user_prompt(person, &bundle, &search_hints);
 
-        let Some(result) = mistral_websearch_conversation(
-            &client,
-            &api_key,
-            &agent_id,
-            &user,
-            &rate_limiter,
-        )
-        .await
+        let Some(result) =
+            mistral_websearch_conversation(&client, &api_key, &agent_id, &user, &rate_limiter)
+                .await
         else {
             eprintln!(
                 "[enricher] Mistral failed for {}",
@@ -325,7 +319,8 @@ fn build_search_hints(person: &PersonRow, ctxs: Option<&Vec<ContextRow>>) -> Vec
                 ));
             }
         }
-        queries.push("Belgische Kamer van Volksvertegenwoordigers voorzitter 2024 2025".to_string());
+        queries
+            .push("Belgische Kamer van Volksvertegenwoordigers voorzitter 2024 2025".to_string());
     } else if person.kind == "institutional" {
         queries.push(format!(
             "{} Belgian federal parliament",
@@ -514,7 +509,9 @@ fn save_bios(path: &Path, cache: &HashMap<String, CachedBio>) -> Result<(), Box<
                 .collect::<Vec<_>>(),
         )),
         Arc::new(StringArray::from(
-            rows.iter().map(|r| r.input_hash.as_str()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| r.input_hash.as_str())
+                .collect::<Vec<_>>(),
         )),
         Arc::new(StringArray::from(
             rows.iter().map(|r| r.bio_nl.as_str()).collect::<Vec<_>>(),
@@ -531,7 +528,9 @@ fn save_bios(path: &Path, cache: &HashMap<String, CachedBio>) -> Result<(), Box<
                 .collect::<Vec<_>>(),
         )),
         Arc::new(StringArray::from(
-            rows.iter().map(|r| r.created_at.as_str()).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| r.created_at.as_str())
+                .collect::<Vec<_>>(),
         )),
     ];
 

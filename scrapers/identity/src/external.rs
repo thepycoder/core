@@ -101,7 +101,9 @@ pub fn institutional_external_id(raw: &str) -> Option<(&'static str, &'static st
     if lower == "(auteur)" || lower.ends_with("(auteur)") {
         return Some(("ext:org:auteur", "(AUTEUR)"));
     }
-    if lower.contains("medewerker van de minister") || lower.contains("medewerkster van de minister") {
+    if lower.contains("medewerker van de minister")
+        || lower.contains("medewerkster van de minister")
+    {
         return Some(("ext:org:minister-staff", "Minister staff"));
     }
     None
@@ -130,10 +132,26 @@ pub fn strip_party_suffix(raw: &str) -> String {
     let last = parts[parts.len() - 1].to_lowercase();
     let last_two = format!("{} {}", parts[parts.len() - 2], parts[parts.len() - 1]).to_lowercase();
     let party_tokens = [
-        "vb", "n-va", "ps", "ecolo", "groen", "vooruit", "open", "vld", "cd&v", "mr", "pvda",
-        "ptb", "engages", "engagés", "ecolo-groen", "les", "engagés",
+        "vb",
+        "n-va",
+        "ps",
+        "ecolo",
+        "groen",
+        "vooruit",
+        "open",
+        "vld",
+        "cd&v",
+        "mr",
+        "pvda",
+        "ptb",
+        "engages",
+        "engagés",
+        "ecolo-groen",
+        "les",
+        "engagés",
     ];
-    if party_tokens.contains(&last.as_str()) || last_two == "open vld" || last_two == "les engagés" {
+    if party_tokens.contains(&last.as_str()) || last_two == "open vld" || last_two == "les engagés"
+    {
         return parts[..parts.len() - 1].join(" ");
     }
     without_broken_paren

@@ -1,6 +1,6 @@
 use crate::check_catalog::check_doc;
-use crate::stats::{corpus_overview, format_all_issue_stats, QaStatsContext};
-use crate::types::{table_for_check_id, worst_status, CheckDetail, CheckSummary};
+use crate::stats::{QaStatsContext, corpus_overview, format_all_issue_stats};
+use crate::types::{CheckDetail, CheckSummary, table_for_check_id, worst_status};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
@@ -27,14 +27,7 @@ pub fn aggregate_details(details: &[CheckDetail]) -> Result<Vec<CheckSummary>, B
             let examples: Vec<String> = rows
                 .iter()
                 .take(MAX_EXAMPLES)
-                .map(|r| {
-                    format!(
-                        "{} | {} | {}",
-                        r.entity_id,
-                        r.expected,
-                        r.actual
-                    )
-                })
+                .map(|r| format!("{} | {} | {}", r.entity_id, r.expected, r.actual))
                 .collect();
             CheckSummary {
                 table: table_for_check_id(check_id),
@@ -52,6 +45,19 @@ pub fn aggregate_details(details: &[CheckDetail]) -> Result<Vec<CheckSummary>, B
         .collect();
 
     // Checks with zero detail rows still deserve a pass row when registered.
+    for check_id in crate::registered_check_ids() {
+        if check_id == META_CHECK_ID || by_check.contains_key(check_id) {
+            continue;
+        }
+        summaries.push(CheckSummary {
+            table: table_for_check_id(check_id),
+            check: check_id.to_string(),
+            status: "pass".to_string(),
+            count: 0,
+            detail: "no issues".to_string(),
+            examples: String::new(),
+        });
+    }
     summaries.sort_by(|a, b| a.check.cmp(&b.check));
 
     // S8 meta-check: summary count must match detail count per check_id.
@@ -104,10 +110,7 @@ pub fn write_summary_md(
         .iter()
         .filter(|s| s.status != "pass" && s.check != META_CHECK_ID)
         .collect();
-    let passes: Vec<_> = summaries
-        .iter()
-        .filter(|s| s.status == "pass")
-        .collect();
+    let passes: Vec<_> = summaries.iter().filter(|s| s.status == "pass").collect();
 
     let mut out = String::new();
     out.push_str("# QA summary\n\n");
@@ -170,18 +173,12 @@ pub fn write_summary_md(
         }
     }
 
-    let passing: Vec<_> = passes
-        .iter()
-        .filter(|s| s.check != META_CHECK_ID)
-        .collect();
+    let passing: Vec<_> = passes.iter().filter(|s| s.check != META_CHECK_ID).collect();
     if !passing.is_empty() {
         out.push_str("## Passing checks\n\n");
         for s in passing {
             let doc = check_doc(&s.check);
-            out.push_str(&format!(
-                "- **{} / {}** — {}\n",
-                s.table, s.check, doc.what
-            ));
+            out.push_str(&format!("- **{} / {}** — {}\n", s.table, s.check, doc.what));
         }
         out.push('\n');
     }

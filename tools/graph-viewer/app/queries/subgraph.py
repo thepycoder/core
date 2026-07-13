@@ -101,7 +101,7 @@ def _expand_frontier(
                 source=compound_id(row[1], row[2]),
                 target=compound_id(row[3], row[4]),
                 type=row[0],
-                confidence=row[8] or "exact",
+                confidence=row[8] if row[8] is not None else 1.0,
                 source_url=row[6] or "",
                 cache_path=row[7] or "",
                 source_artifact_id=row[5] or "",

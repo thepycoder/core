@@ -79,8 +79,7 @@ pub fn is_interpellation_section(section: &str) -> bool {
 
 pub fn is_joint_interpellation_group_start(text: &str) -> bool {
     let body = heading_body(&text.to_lowercase());
-    body.contains("samengevoegde interpellaties")
-        || body.contains("interpellations jointes")
+    body.contains("samengevoegde interpellaties") || body.contains("interpellations jointes")
 }
 
 pub fn is_joint_interpellation_fr_header(text: &str) -> bool {
@@ -269,7 +268,6 @@ pub fn extract_proceedings_from_document(
 ) -> (Vec<HearingDraft>, Vec<InterpellationDraft>) {
     let blocks = parse_report_blocks(document);
     let agenda = crate::agenda_timeline::build_agenda_timeline(
-        document,
         &blocks,
         meeting_kind,
         session_id,
@@ -332,7 +330,8 @@ fn interpellation_from_agenda_item(
     let topics_fr = fr.as_ref().map(|p| p.topics.join(";")).unwrap_or_default();
     let parsed = merge_interpellation_parsed(nl.as_ref(), fr.as_ref());
 
-    if parsed.interpellators.is_empty() && parsed.topics.is_empty() && item.internal_ids.is_empty() {
+    if parsed.interpellators.is_empty() && parsed.topics.is_empty() && item.internal_ids.is_empty()
+    {
         return None;
     }
 
@@ -562,7 +561,9 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cache/sessions/56/meetings/commission/56-15.html");
         if !path.exists() {
-            let alt = std::path::Path::new("/home/victor/Projects/partijgedrag-parent/partijgedrag-3/core/cache/sessions/56/meetings/commission/56-15.html");
+            let alt = std::path::Path::new(
+                "/home/victor/Projects/partijgedrag-parent/partijgedrag-3/core/cache/sessions/56/meetings/commission/56-15.html",
+            );
             if !alt.exists() {
                 return;
             }
@@ -596,8 +597,9 @@ mod tests {
     #[test]
     fn plenary_interpellation_fixture_yields_entity() {
         for mid in [45u32, 60, 95, 97] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("../../cache/sessions/56/meetings/plenary/56-{mid}.html"));
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../cache/sessions/56/meetings/plenary/56-{mid}.html"
+            ));
             let alt = std::path::PathBuf::from(format!(
                 "/home/victor/Projects/partijgedrag-parent/partijgedrag-3/core/cache/sessions/56/meetings/plenary/56-{mid}.html"
             ));

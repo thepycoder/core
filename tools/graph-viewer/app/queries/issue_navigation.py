@@ -10,6 +10,7 @@ _MISSING_FROM_RE = re.compile(r"missing from node ([^:]+):(.+)$")
 NODE_TYPE_MAP = {
     "utterance": "Utterance",
     "vote": "Vote",
+    "vote_result": "VoteResult",
     "meeting": "Meeting",
     "person": "Person",
     "question": "Question",
@@ -69,7 +70,9 @@ def _meeting_node_id(
     return None
 
 
-def _parse_edge_endpoints(entity_id: str) -> tuple[tuple[str, str], tuple[str, str]] | None:
+def _parse_edge_endpoints(
+    entity_id: str,
+) -> tuple[tuple[str, str], tuple[str, str]] | None:
     match = _EDGE_RE.match(entity_id.strip())
     if not match:
         return None
@@ -95,7 +98,9 @@ def _context_target(label: str, data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _artifact_target(artifact_id: str, label: str, data: dict[str, Any]) -> dict[str, Any]:
+def _artifact_target(
+    artifact_id: str, label: str, data: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "action": "artifact",
         "label": label,
@@ -103,6 +108,31 @@ def _artifact_target(artifact_id: str, label: str, data: dict[str, Any]) -> dict
         "source_url": data.get("source_url") or "",
         "cache_path": data.get("cache_path") or "",
     }
+
+
+def _report_target(
+    meeting_id: str,
+    source_block: str,
+    session_id: str,
+    meeting_kind: str,
+    label: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "action": "report",
+        "label": label,
+        "meeting_id": meeting_id,
+        "source_block": source_block,
+        "session_id": session_id,
+        "meeting_kind": meeting_kind,
+        "source_url": data.get("source_url") or "",
+        "cache_path": data.get("cache_path") or "",
+    }
+
+
+def _is_report_block_ref(source_block: str) -> bool:
+    value = source_block.strip()
+    return bool(value) and value.isdigit()
 
 
 def _unresolved_bucket_target(
@@ -191,6 +221,17 @@ def resolve_issue_navigation(
     meeting_kind = (data.get("meeting_kind") or "").strip()
     meeting_id = (data.get("meeting_id") or "").strip()
     session_id = (data.get("session_id") or "56").strip() or "56"
+    source_block = (data.get("source_block") or "").strip()
+
+    if (
+        source_block
+        and _is_report_block_ref(source_block)
+        and meeting_id
+        and meeting_kind.lower() == "plenary"
+    ):
+        return _report_target(
+            meeting_id, source_block, session_id, meeting_kind, label, data
+        )
 
     if check_id == "normalize.unresolved_persons_by_bucket" and entity_id:
         bucket, _, reason = entity_id.partition(":")

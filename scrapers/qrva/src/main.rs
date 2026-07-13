@@ -8,10 +8,10 @@ use crawl::qrva_text::QRVA_API_BASE;
 use crawl::utils::relative_cache_path;
 use io::{write_written_answers, write_written_questions, write_written_routes};
 use parse::{build_staging_from_records, records_from_search_page};
-use xml::parse_qrva_xml;
 use serde_json::Value;
 use std::error::Error;
 use std::fs;
+use xml::parse_qrva_xml;
 
 const SESSION_ID: u32 = 56;
 
@@ -25,7 +25,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let detail_dir = cache_root.join(format!("sessions/{SESSION_ID}/qrva/detail"));
     fs::create_dir_all(&detail_dir)?;
 
-    let archive_path = cache_root.join(format!("sessions/{SESSION_ID}/qrva/archive/QRVA_{SESSION_ID}.zip"));
+    let archive_path = cache_root.join(format!(
+        "sessions/{SESSION_ID}/qrva/archive/QRVA_{SESSION_ID}.zip"
+    ));
     if let Some(parent) = archive_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -74,10 +76,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 continue;
             };
-            let cache_path = relative_cache_path(
-                &detail_dir.join(sanitize_filename(&name)),
-                &cache_root,
-            );
+            let cache_path =
+                relative_cache_path(&detail_dir.join(sanitize_filename(&name)), &cache_root);
             for item in items {
                 records.push((item, cache_path.clone()));
             }
@@ -132,8 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let detail_body: Value = serde_json::from_str(&detail_resp.text().await?)?;
                 let cache_file = detail_dir.join(format!("{sdocname}.json"));
                 fs::write(&cache_file, serde_json::to_string_pretty(&detail_body)?)?;
-                let cache_path =
-                    relative_cache_path(&cache_file, &cache_root);
+                let cache_path = relative_cache_path(&cache_file, &cache_root);
                 let detail_items = records_from_search_page(&detail_body);
                 if detail_items.is_empty() {
                     records.push((detail_body, cache_path));

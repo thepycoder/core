@@ -24,6 +24,7 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("node_type", "VARCHAR"),
             ("node_id", "VARCHAR"),
             ("label", "VARCHAR"),
+            ("source_artifact_id", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),
         ],
@@ -41,7 +42,7 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("source_artifact_id", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),
-            ("confidence", "VARCHAR"),
+            ("confidence", "DOUBLE"),
             ("properties_json", "VARCHAR"),
         ],
     ),
@@ -52,7 +53,9 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("source_artifact_id", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),
-            ("parser_version", "VARCHAR"),
+            ("source_content_hash", "VARCHAR"),
+            ("block_parser_version", "VARCHAR"),
+            ("extractor_version", "VARCHAR"),
             ("scraped_at", "VARCHAR"),
         ],
     ),
@@ -72,15 +75,20 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("raw_field", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),
+            ("source_artifact_id", "VARCHAR"),
+            ("source_content_hash", "VARCHAR"),
+            ("block_parser_version", "VARCHAR"),
+            ("extractor_version", "VARCHAR"),
+            ("confidence", "DOUBLE"),
         ],
     ),
     (
         "vote_reconciliation",
         "normalized/vote_reconciliation.parquet",
         [
-            ("vote_id", "VARCHAR"),
-            ("session_id", "VARCHAR"),
-            ("meeting_id", "VARCHAR"),
+            ("result_id", "VARCHAR"),
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
             ("yes", "VARCHAR"),
             ("no", "VARCHAR"),
             ("abstain", "VARCHAR"),
@@ -97,15 +105,147 @@ PARQUET_SOURCES: list[tuple[str, str, list[tuple[str, str]]]] = [
         "normalized/vote_casts.parquet",
         [
             ("vote_cast_id", "VARCHAR"),
-            ("vote_id", "VARCHAR"),
-            ("session_id", "VARCHAR"),
-            ("meeting_id", "VARCHAR"),
+            ("result_id", "VARCHAR"),
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
             ("person_id", "VARCHAR"),
             ("position", "VARCHAR"),
             ("raw_name", "VARCHAR"),
             ("source_url", "VARCHAR"),
             ("cache_path", "VARCHAR"),
-            ("confidence", "VARCHAR"),
+            ("source_artifact_id", "VARCHAR"),
+            ("source_content_hash", "VARCHAR"),
+            ("block_parser_version", "VARCHAR"),
+            ("extractor_version", "VARCHAR"),
+            ("confidence", "DOUBLE"),
+        ],
+    ),
+    (
+        "report_blocks",
+        "derived/sessions/56/plenary/report_blocks.parquet",
+        [
+            ("artifact_id", "VARCHAR"),
+            ("source_content_hash", "VARCHAR"),
+            ("block_index", "UINTEGER"),
+            ("block_type", "VARCHAR"),
+            ("text", "VARCHAR"),
+            ("structured_json", "VARCHAR"),
+            ("language", "VARCHAR"),
+            ("class_name", "VARCHAR"),
+            ("word_count", "UINTEGER"),
+            ("content_hash", "VARCHAR"),
+            ("has_oraspr", "BOOLEAN"),
+            ("block_parser_version", "VARCHAR"),
+            ("extractor_version", "VARCHAR"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+        ],
+    ),
+    (
+        "source_spans",
+        "derived/sessions/56/plenary/source_spans.parquet",
+        [
+            ("span_id", "VARCHAR"),
+            ("artifact_id", "VARCHAR"),
+            ("source_content_hash", "VARCHAR"),
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
+            ("entity_type", "VARCHAR"),
+            ("entity_id", "VARCHAR"),
+            ("span_role", "VARCHAR"),
+            ("block_start", "UINTEGER"),
+            ("block_end", "UINTEGER"),
+            ("coverage_kind", "VARCHAR"),
+            ("field_names", "VARCHAR"),
+            ("confidence", "DOUBLE"),
+            ("extractor", "VARCHAR"),
+            ("block_parser_version", "VARCHAR"),
+            ("extractor_version", "VARCHAR"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+            ("validation_status", "VARCHAR"),
+            ("unresolved_reason", "VARCHAR"),
+        ],
+    ),
+    (
+        "vote_result_members",
+        "sessions/56/plenary/vote_result_members.parquet",
+        [
+            ("result_id", "VARCHAR"),
+            ("position", "VARCHAR"),
+            ("seq", "UINTEGER"),
+            ("raw_name", "VARCHAR"),
+        ],
+    ),
+    (
+        "vote_unresolved_events",
+        "sessions/56/plenary/vote_unresolved_events.parquet",
+        [
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
+            ("event_kind", "VARCHAR"),
+            ("source_roll_call_number", "VARCHAR"),
+            ("block_start", "UINTEGER"),
+            ("block_end", "UINTEGER"),
+            ("reason", "VARCHAR"),
+            ("evidence_text", "VARCHAR"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+        ],
+    ),
+    (
+        "votes",
+        "sessions/56/plenary/votes.parquet",
+        [
+            ("vote_id", "VARCHAR"),
+            ("result_id", "VARCHAR"),
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
+            ("date", "VARCHAR"),
+            ("seq", "UINTEGER"),
+            ("title_nl", "VARCHAR"),
+            ("title_fr", "VARCHAR"),
+            ("method", "VARCHAR"),
+            ("status", "VARCHAR"),
+            ("outcome", "VARCHAR"),
+            ("dossier_id", "VARCHAR"),
+            ("document_id", "VARCHAR"),
+            ("motion_id", "VARCHAR"),
+            ("source_roll_call_number", "VARCHAR"),
+            ("reuses_result", "BOOLEAN"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+        ],
+    ),
+    (
+        "vote_results",
+        "sessions/56/plenary/vote_results.parquet",
+        [
+            ("result_id", "VARCHAR"),
+            ("session_id", "UINTEGER"),
+            ("meeting_id", "UINTEGER"),
+            ("seq", "UINTEGER"),
+            ("method", "VARCHAR"),
+            ("named", "BOOLEAN"),
+            ("status", "VARCHAR"),
+            ("outcome", "VARCHAR"),
+            ("source_roll_call_number", "VARCHAR"),
+            ("source_url", "VARCHAR"),
+            ("cache_path", "VARCHAR"),
+        ],
+    ),
+    (
+        "vote_tallies",
+        "sessions/56/plenary/vote_tallies.parquet",
+        [
+            ("result_id", "VARCHAR"),
+            ("tally_kind", "VARCHAR"),
+            ("option_key", "VARCHAR"),
+            ("label_nl", "VARCHAR"),
+            ("label_fr", "VARCHAR"),
+            ("dimension", "VARCHAR"),
+            ("count", "UINTEGER"),
+            ("selected", "BOOLEAN"),
         ],
     ),
     (
@@ -286,12 +426,36 @@ class Database:
             source = ParquetSource(view_name=view_name, path=path, columns=columns)
             db.sources.append(source)
             if path.exists():
+                escaped_path = path.as_posix().replace("'", "''")
+                physical_columns = {
+                    row[0]
+                    for row in conn.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet('{escaped_path}')"
+                    ).fetchall()
+                }
+                projections = []
+                for name, typ in columns:
+                    source_name = name
+                    if (
+                        name == "source_artifact_id"
+                        and name not in physical_columns
+                        and "artifact_id" in physical_columns
+                    ):
+                        source_name = "artifact_id"
+                    if source_name in physical_columns:
+                        projections.append(
+                            f'TRY_CAST("{source_name}" AS {typ}) AS "{name}"'
+                        )
+                    else:
+                        projections.append(f'NULL::{typ} AS "{name}"')
+                        db.warnings.append(f"Missing column {view_name}.{name}: {path}")
                 conn.execute(
                     f"CREATE OR REPLACE VIEW {view_name} AS "
-                    f"SELECT * FROM read_parquet('{path.as_posix()}')"
+                    f"SELECT {', '.join(projections)} "
+                    f"FROM read_parquet('{escaped_path}')"
                 )
             else:
-                cols = ", ".join(f"NULL::{typ} AS {name}" for name, typ in columns)
+                cols = ", ".join(f'NULL::{typ} AS "{name}"' for name, typ in columns)
                 conn.execute(
                     f"CREATE OR REPLACE VIEW {view_name} AS SELECT {cols} WHERE false"
                 )

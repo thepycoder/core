@@ -3,9 +3,9 @@ use identity::actor_resolver::{ActorResolution, ActorResolver};
 use identity::normalize::clean_raw_name;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use identity::resolver::{Bucket, Resolution, Resolver};
+use normalize::SESSION_ID;
 use normalize::common::UnresolvedRow;
 use normalize::utterances::UtteranceRow;
-use normalize::SESSION_ID;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
@@ -171,7 +171,10 @@ fn scan_utterance_id_duplicates(
             .with_session(SESSION_ID)
             .with_meeting(meeting_kind, meeting_id)
             .with_entity("utterance", &utterance_id)
-            .with_values("unique raw_speaker per utterance_id", speaker_list.join(" | "))
+            .with_values(
+                "unique raw_speaker per utterance_id",
+                speaker_list.join(" | "),
+            )
             .with_source(source_url, cache_path),
         );
     }

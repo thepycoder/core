@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::{ActorResolution, ActorResolver};
@@ -33,9 +31,7 @@ pub struct AuthoredOutput {
 
 fn is_government_author(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
-    lower == "government"
-        || lower.contains("gouvernment")
-        || lower.contains("regering")
+    lower == "government" || lower.contains("gouvernment") || lower.contains("regering")
 }
 
 pub fn normalize_authored(
@@ -128,7 +124,11 @@ fn ingest_authors(
         let detail = actor_resolver.resolve_actor_detail(&name, Bucket::Author);
         match detail.resolution {
             ActorResolution::Person(person_id) => {
-                let key = (person_id.clone(), target_type.to_string(), target_id.to_string());
+                let key = (
+                    person_id.clone(),
+                    target_type.to_string(),
+                    target_id.to_string(),
+                );
                 if seen.insert(key) {
                     rows.push(AuthoredRow {
                         authored_id: format!("{person_id}_{target_type}_{target_id}"),
@@ -146,7 +146,11 @@ fn ingest_authors(
                 }
             }
             ActorResolution::ExternalPerson(ext_id) => {
-                let key = (ext_id.clone(), target_type.to_string(), target_id.to_string());
+                let key = (
+                    ext_id.clone(),
+                    target_type.to_string(),
+                    target_id.to_string(),
+                );
                 if seen.insert(key) {
                     rows.push(AuthoredRow {
                         authored_id: format!("{ext_id}_{target_type}_{target_id}"),
@@ -177,6 +181,7 @@ fn ingest_authors(
                     raw_field: name,
                     source_url: source_url.to_string(),
                     cache_path: cache_path.to_string(),
+                    ..UnresolvedRow::default()
                 });
             }
         }

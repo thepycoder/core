@@ -2,9 +2,9 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::paths::data_dir;
 use identity::external::{
-    alias_norms_for, classify_named_external,     institutional_external_id, is_institutional_label,
-    is_procedural_role, person_external_id, procedural_external_id, department_external_id, ExternalAliasRecord,
-    ExternalContextRecord, ExternalKind, ExternalPersonRecord,
+    ExternalAliasRecord, ExternalContextRecord, ExternalKind, ExternalPersonRecord,
+    alias_norms_for, classify_named_external, department_external_id, institutional_external_id,
+    is_institutional_label, is_procedural_role, person_external_id, procedural_external_id,
 };
 use identity::normalize::clean_raw_name;
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
@@ -57,15 +57,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         let ext_id = classify_and_id(&cand.raw_name, &cand.bucket);
         let kind = classify_kind(&cand.raw_name, &cand.bucket, &ext_id);
 
-        persons.entry(ext_id.clone()).or_insert_with(|| ExternalPersonRecord {
-            external_person_id: ext_id.clone(),
-            display_name: display_name_for(&cand.raw_name, &ext_id),
-            kind: kind.as_str().to_string(),
-            source: "bootstrap".to_string(),
-            first_seen_bucket: cand.bucket.clone(),
-            source_url: cand.source_url.clone(),
-            cache_path: cand.cache_path.clone(),
-        });
+        persons
+            .entry(ext_id.clone())
+            .or_insert_with(|| ExternalPersonRecord {
+                external_person_id: ext_id.clone(),
+                display_name: display_name_for(&cand.raw_name, &ext_id),
+                kind: kind.as_str().to_string(),
+                source: "bootstrap".to_string(),
+                first_seen_bucket: cand.bucket.clone(),
+                source_url: cand.source_url.clone(),
+                cache_path: cand.cache_path.clone(),
+            });
 
         for norm in alias_norms_for(&cand.raw_name) {
             if alias_seen.insert((norm.clone(), ext_id.clone())) {
@@ -131,10 +133,22 @@ fn seed_institutional_and_roles(candidates: &mut Vec<Candidate>) {
             "speakers",
             "ext:org:minister-staff",
         ),
-        ("Greffe/Griffie (AUTEUR)", "authors", "ext:org:greffe-griffie"),
+        (
+            "Greffe/Griffie (AUTEUR)",
+            "authors",
+            "ext:org:greffe-griffie",
+        ),
         ("Chambre/Kamer (AUTEUR)", "authors", "ext:org:chambre-kamer"),
-        ("Commission/Commissie (AUTEUR)", "authors", "ext:org:commission-commissie"),
-        ("Commissions/Commissies (AUTEUR)", "authors", "ext:org:commissions-commissies"),
+        (
+            "Commission/Commissie (AUTEUR)",
+            "authors",
+            "ext:org:commission-commissie",
+        ),
+        (
+            "Commissions/Commissies (AUTEUR)",
+            "authors",
+            "ext:org:commissions-commissies",
+        ),
         ("(AUTEUR)", "authors", "ext:org:auteur"),
         ("Sénat/Senaat (AUTEUR)", "authors", "ext:org:senat-senaat"),
     ];
@@ -183,7 +197,10 @@ fn collect_from_questions(
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
-                let qid = format!("{SESSION_ID}_{meeting_kind}_{}_{}", meeting_ids[i], question_ids[i]);
+                let qid = format!(
+                    "{SESSION_ID}_{meeting_kind}_{}_{}",
+                    meeting_ids[i], question_ids[i]
+                );
                 for name in split_csv(&respondents[i]) {
                     if should_add_external(resolver, &name, Bucket::Respondent) {
                         let key = (name.clone(), "respondents".to_string());
@@ -455,9 +472,7 @@ fn ingest_author_candidates(
 
 fn is_government_author(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
-    lower == "government"
-        || lower.contains("gouvernment")
-        || lower.contains("regering")
+    lower == "government" || lower.contains("gouvernment") || lower.contains("regering")
 }
 
 fn should_add_external(resolver: &Resolver, raw: &str, bucket: Bucket) -> bool {
@@ -468,7 +483,10 @@ fn should_add_external(resolver: &Resolver, raw: &str, bucket: Bucket) -> bool {
     if is_institutional_label(&trimmed) || is_procedural_role(&trimmed) {
         return true;
     }
-    !matches!(resolver.resolve_person(&trimmed, bucket), Resolution::Resolved(_))
+    !matches!(
+        resolver.resolve_person(&trimmed, bucket),
+        Resolution::Resolved(_)
+    )
 }
 
 fn classify_and_id(raw: &str, bucket: &str) -> String {
@@ -529,7 +547,10 @@ fn clip(text: &str, limit: usize) -> String {
     }
 }
 
-fn write_external_persons(path: &Path, rows: &[ExternalPersonRecord]) -> Result<(), Box<dyn Error>> {
+fn write_external_persons(
+    path: &Path,
+    rows: &[ExternalPersonRecord],
+) -> Result<(), Box<dyn Error>> {
     let schema = Schema::new(vec![
         utf8_field("external_person_id", false),
         utf8_field("display_name", false),
@@ -585,7 +606,10 @@ fn write_external_aliases(path: &Path, rows: &[ExternalAliasRecord]) -> Result<(
     Ok(())
 }
 
-fn write_external_contexts(path: &Path, rows: &[ExternalContextRecord]) -> Result<(), Box<dyn Error>> {
+fn write_external_contexts(
+    path: &Path,
+    rows: &[ExternalContextRecord],
+) -> Result<(), Box<dyn Error>> {
     let schema = Schema::new(vec![
         utf8_field("context_id", false),
         utf8_field("external_person_id", false),

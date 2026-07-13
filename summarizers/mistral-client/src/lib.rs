@@ -1,8 +1,8 @@
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Client;
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -342,7 +342,10 @@ mod tests {
 
         let parsed = parse_conversation_outputs(&outputs);
         assert_eq!(parsed.web_search_calls, 1);
-        assert_eq!(parsed.reference_urls, vec!["https://www.vlaanderen.be/jan-jambon"]);
+        assert_eq!(
+            parsed.reference_urls,
+            vec!["https://www.vlaanderen.be/jan-jambon"]
+        );
         assert!(parsed.text.contains("Jan Jambon"));
     }
 }

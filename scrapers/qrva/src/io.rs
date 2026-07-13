@@ -1,7 +1,7 @@
 use crate::parse::{WrittenQuestionDraft, WrittenRouteDraft};
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use crawl::answer_io::{write_answers_parquet, AnswerDraft};
+use crawl::answer_io::{AnswerDraft, write_answers_parquet};
 use parquet::arrow::ArrowWriter;
 use std::error::Error;
 use std::fs::File;

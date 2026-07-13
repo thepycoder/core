@@ -1,7 +1,7 @@
-use crate::agenda_timeline::{agenda_item_for_block, AgendaItem, MeetingKind};
+use crate::agenda_timeline::{AgendaItem, MeetingKind, agenda_item_for_block};
 use crate::report_blocks::{BlockTag, ReportBlock};
 use crate::speaker_parse::{
-    detect_turn_start, language_from_class, parse_turn_start, SpeakerRole, TurnStart,
+    SpeakerRole, TurnStart, detect_turn_start, language_from_class, parse_turn_start,
 };
 use crate::speech_zones::{is_hard_boundary, is_stage_direction, is_vote_appendix_heading};
 
@@ -162,14 +162,10 @@ pub fn segment_utterances(
                 agenda_id: agenda_id.clone(),
                 item_kind: item_kind.clone(),
                 item_id: item.map(|i| i.item_id.clone()).unwrap_or_default(),
-                question_ids: item
-                    .map(|i| i.internal_ids.join(","))
-                    .unwrap_or_default(),
+                question_ids: item.map(|i| i.internal_ids.join(",")).unwrap_or_default(),
                 dossier_id: item.map(|i| i.dossier_id.clone()).unwrap_or_default(),
                 document_id: item.map(|i| i.document_id.clone()).unwrap_or_default(),
-                source_section: item
-                    .map(|i| i.source_section.clone())
-                    .unwrap_or_default(),
+                source_section: item.map(|i| i.source_section.clone()).unwrap_or_default(),
             });
         } else if let Some(turn) = open.as_mut() {
             if !block.text.trim().is_empty() {
@@ -203,11 +199,7 @@ fn turn_agenda_id(turn_number: &str, item: Option<&AgendaItem>) -> String {
     if let Some(item) = item {
         return item.agenda_id.clone();
     }
-    turn_number
-        .split('.')
-        .next()
-        .unwrap_or("00")
-        .to_string()
+    turn_number.split('.').next().unwrap_or("00").to_string()
 }
 
 fn push_turn(
@@ -291,8 +283,8 @@ fn dedupe_bilingual_turns(utterances: &mut Vec<UtteranceDraft>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::report_blocks::{parse_report_blocks, read_report_html};
     use crate::agenda_timeline::build_agenda_timeline;
+    use crate::report_blocks::{parse_report_blocks, read_report_html};
 
     #[test]
     fn segments_plenary_questions_fixture() {
@@ -304,7 +296,7 @@ mod tests {
         let html = read_report_html(&path).unwrap();
         let document = scraper::Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let agenda = build_agenda_timeline(&document, &blocks, MeetingKind::Plenary, 56, 117);
+        let agenda = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 117);
         let utterances = segment_utterances(
             &blocks,
             &agenda,

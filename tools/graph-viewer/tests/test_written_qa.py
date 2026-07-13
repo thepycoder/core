@@ -24,8 +24,13 @@ def test_written_question_preview_has_body_and_routes():
     assert preview.title
     assert preview.content
     assert "programmatorische overheidsdienst" in preview.content.lower()
-    assert any(field.label == "Kind" and field.value == "written" for field in preview.fields)
-    assert any(field.label == "Author" and "Van Tigchelt" in field.value for field in preview.fields)
+    assert any(
+        field.label == "Kind" and field.value == "written" for field in preview.fields
+    )
+    assert any(
+        field.label == "Author" and "Van Tigchelt" in field.value
+        for field in preview.fields
+    )
     assert any(related.type == "ExternalPerson" for related in preview.related)
     assert "Ministerial routes:" in preview.content
 

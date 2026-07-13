@@ -35,8 +35,9 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Motion**                   | motion id + meeting/dossier context                             | Motions database; vote titles                                                                                                                                         | Referenced by vote parsing today but not modelled as a node.                                                              |
 | **Hearing**                  | `{session_id}_{meeting_kind}_{meeting_id}_{seq}` (+ site refs in `internal_ids`) | Commission integraal (`hoorzitting met` / `audition de` h2); plenary rare | Staging `hearings.parquet`; graph Hearing nodes; `item_kind=hearing` utterances linked via `item_id`. |
 | **Interpellation**           | `{session_id}_{meeting_kind}_{meeting_id}_{seq}` (+ `56000070I` in `internal_ids`) | Plenary integraal (`Interpellatie van` / `Interpellation de` h2) | Staging `interpellations.parquet`; graph Interpellation nodes; site ref suffix `I`. Commission has no formal interpellation h2s. |
-| **Vote**                     | `{meeting_id, vote_id}`                                         | Plenary integraal (tables + appendix) only                                                                                                                            | Already scraped. **Commission integraal has no roll-call vote tables** — do not port plenary `extract_votes`.             |
-| **VoteCast**                 | `{vote_id, person_id, position}`                                | Vote appendix tables                                                                                                                                                  | Name→person matching; “Nee” block parsing is fragile.                                                                     |
+| **Vote**                     | `{session_id}-{meeting_id}-v{seq}`                              | Plenary integraal (decision/matter)                                                                                                                                     | Block-native assembly from structured report blocks.                                                                        |
+| **VoteResult**               | `{session_id}-{meeting_id}-r{seq}`                              | Roll-call tables, secret ballots, sitting/standing, quorum failures                                                                                                   | Reusable evidence; multiple Vote decisions may reference one result (`reuses_result`).                                      |
+| **VoteCast**                 | `{result_id, person_id, position}`                              | `vote_result_members.parquet` → normalized `vote_casts`                                                                                                                 | Named roll-call only; secret/sitting-standing/no-quorum produce no casts.                                                 |
 | **Topic**                    | Eurovoc id + label                                              | Dossier fiche; optional NLP on utterances                                                                                                                             | Eurovoc on dossiers scraped. Utterance tagging not done.                                                                  |
 | **LobbyOrg**                 | name                                                            | Lobby register PDF (`lobbyregister.pdf`)                                                                                                                              | Scraped flat (301 orgs); `DECLARES_INTEREST` links to persons not wired yet.                                                |
 | **Remuneration**             | `{person, year, mandate}`                                       | [regimand.be](https://public.regimand.be/)                                                                                                                            | External site; matched by name only.                                                                                      |
@@ -70,8 +71,9 @@ Decisions for anyone (human or LLM) extending this repo:
 | `INTERPELLED`       | Person → Interpellation              | `interpellators` on interpellation header           | Same resolver path as `ASKED`.                                 |
 | `RESPONDED`         | Person / ExternalPerson → Interpellation | `respondents` on interpellation header          | Distinct from `ANSWERED` (Question target).                    |
 | `INVITED`           | Person / ExternalPerson → Hearing    | `witnesses` on hearing header (when parseable)      | Best-effort; empty witnesses common.                           |
+| `HAS_RESULT`        | Vote → VoteResult                  | `votes.result_id`                                   | One decision links to reusable result evidence.                |
 | `VOTED_ON`          | Vote → Dossier / Document / Motion | Vote title                                          | Partially parsed (dossier_id, motion_id).                      |
-| `CAST`              | Person → VoteCast → Vote           | Vote appendix                                       | Needs normalization from name lists.                           |
+| `CAST`              | Person → VoteResult                | Vote appendix via `vote_result_members`             | Normalized once per result; reused results share casts.        |
 | `TAGGED_WITH`       | Dossier → Topic                    | Eurovoc on dossier fiche                            | Scraped.                                                       |
 | `TAGGED_WITH`       | Utterance → Topic                  | NLP / intervention analysis                         | Future; analysis DB may shortcut.                              |
 | `SUBMITTED`         | Document → Dossier                 | FLWB hierarchy                                      | Already scraped as subdocuments.                               |
@@ -122,7 +124,7 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 - **Stage 0 QA (superseded):** `just qa` now regenerates `data/qa/checks.parquet` and `summary.md` from detail rows. Stale Jul-1 artifacts replaced.
 - **Step 1 identity (working):** `just build-identity` runs `identity` + `external-identity`. Writes `persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `external_persons.parquet` (57), `external_person_aliases.parquet` (129), `external_person_contexts.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`. Last run: 175 persons, 13 parties, 1 302 memberships, 21 unresolved commission-member occurrences (placeholder `N .` only).
 - **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (196 059 vote casts, 6 790 authored, 11 765 asked, 7 291 answered, 29 interpellated, 24 interpellation responded, 414 holds_role, 43 431 utterances; 4 997 unresolved names). Six vote reconciliation mismatches remain.
-- **Step 3 graph (working):** `just build-graph` writes `data/graph/nodes.parquet` (55 993 nodes including 3 Hearing + 29 Interpellation), `edges.parquet` (355 913 edges: adds `INTERPELLED`, `RESPONDED`, `PART_OF` utterance→proceeding links), and `source_artifacts.parquet` (2 388 artifacts). 145 orphan `VOTED_ON` edges. 2 659 Utterance nodes without `SPOKE`. CAST is Person→Vote (no separate VoteCast node).
+- **Step 3 graph (working):** `just build-graph` writes graph Parquet with `Vote` decision nodes, `VoteResult` evidence nodes, `HAS_RESULT` (Vote→VoteResult), and `CAST` (Person→VoteResult). Provenance spans live in `data/derived/sessions/{session}/plenary/source_spans.parquet`; derived blocks in `report_blocks.parquet`.
 
 ### Branch additions since 2026-07-01
 
@@ -133,8 +135,8 @@ Verified against branch `stage-viz` on 2026-07-07. Counts below are from the las
 - **Lobby register (Step 6 partial):** `scrape-lobby` downloads `lobbyregister.pdf`, extracts 301 orgs to `lobby.parquet` with `source_url` + `cache_path`.
 - **Commission meeting gaps:** `meeting_gaps.parquet` tracks ids in `1..=last` with no scraped row (10 gaps today).
 - **Speaker QA (Step 5 interim):** Broader meeting-report crosschecks catalogued in `meeting-report-qa-plan.md`.
-- **QA runner (Step 5, working):** `just qa` (`scrapers/qa`) writes `data/qa/meeting_report_check_details.parquet`, derived `checks.parquet`, `summary.md`, `alias_candidates.parquet`, and `row_counts.json`. Summary counts are derived from detail rows (S8 meta-check). `just qa-strict` exits non-zero on regression vs committed `checks_baseline.parquet`. Last run: 10 763 detail rows, 16 issue checks (6 vote mismatches, 145 orphan `VOTED_ON`, 2 576 speakerless utterances, 2 384 empty `scraped_at`, etc.). `tools/graph-viewer` issues panel reads `data/qa/` (no recompute).
-- **Graph debug viewer (`tools/graph-viewer`, local only):** FastAPI + DuckDB UI over `data/graph/*.parquet`. Search entities; inspector with metadata, excerpts, discussion threads, and source links; paginated edge lists; vote reconciliation totals; **vote breakdown** (yes/no/abstain member lists with clickable resolved persons); unresolved-person and data-quality issue panels; open dekamer.be source pages and cached HTML/PDF. Run: `cd tools/graph-viewer && uv sync && uv run uvicorn app.main:app --reload --port 8765` (after `just build-graph`). Node routes use `{node_id:path}` so dossier ids like `56/297` resolve correctly.
+- **QA runner (Step 5, working):** `just qa` (`scrapers/qa`) writes `data/qa/meeting_report_check_details.parquet`, derived `checks.parquet`, `summary.md`, `alias_candidates.parquet`, and `row_counts.json`. Summary counts are derived from detail rows (S8 meta-check). Last run: 10 763 detail rows, 16 issue checks (6 vote mismatches, 145 orphan `VOTED_ON`, 2 576 speakerless utterances, 2 384 empty `scraped_at`, etc.). `tools/graph-viewer` issues panel reads `data/qa/` (no recompute).
+- **Graph debug viewer (`tools/graph-viewer`, local only):** FastAPI + DuckDB UI over `data/graph/*.parquet` plus derived `report_blocks` / `source_spans`. Report coverage mode (`?report={meeting}&block={index}`) shows extraction/scope overlays, structured tables, and block inspection. Vote inspector joins decisions → `result_id` → tallies/casts/reconciliation. QA issues with `source_block` deep-link into report mode.
 
 ### Not done yet
 
@@ -216,7 +218,7 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 **3. Stand up the graph builder early (not last). Done and working**
 
 - `just build-graph` emits deterministic `data/graph/nodes.parquet`, `edges.parquet`, and `source_artifacts.parquet` from identity, staging, and normalized outputs.
-- Edges carry `source_artifact_id`, `source_url`, `cache_path`, and `confidence`; artifacts carry `parser_version`.
+- Nodes and edges carry canonical `source_artifact_id`, `source_url`, and `cache_path`; edges also carry numeric `confidence`. Artifacts carry `source_content_hash`, `block_parser_version`, and `extractor_version`.
 - **Remaining in this step:** populate `scraped_at` on artifacts; decide whether to add explicit `VoteCast` nodes (today CAST is Person→Vote); fix or flag orphan `VOTED_ON` targets (145 edges to dossier refs not in the graph).
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
@@ -229,7 +231,7 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 
 **5. Now that the architecture exists, stand up QA over it.**
 
-- ~~Create a `qa` binary~~ **Done:** `scrapers/qa` + `just qa` / `just qa-strict` / `just qa-update-baseline`.
+- ~~Create a `qa` binary~~ **Done:** `scrapers/qa` + `just qa`.
 - ~~Derive `checks.parquet` from detail rows (S8).~~ **Done.**
 - ~~Promote graph-viewer issue checks into automated runner.~~ **Done** (`graph.*`, vote, speaker, schema tiers). Viewer reads `data/qa/` only.
 - Expand source-level crosschecks per `meeting-report-qa-plan.md` as scraper fixes land; tighten `warn` → `fail` per check after fixture review.
@@ -241,6 +243,19 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 - Add media recordings once meeting/date/title matching is measurable (report the match rate).
 - ~~Wire the lobby register download~~ **Done (2026-07-07):** PDF download + 301 orgs scraped. Remaining: `DECLARES_INTEREST` person links and QA match rates.
 - Remuneration matching once person identity is stable; both lobby and remuneration rely on weaker name matching, so they must surface their match/unmatch rates in QA.
+
+## Derived provenance (not graph nodes)
+
+Rebuildable tables under `data/derived/` and `graph/source_artifacts.parquet` tie extractions back to report HTML:
+
+| Artifact | Path | Role |
+| -------- | ---- | ---- |
+| **SourceArtifact** | `graph/source_artifacts.parquet` | Stable id per cached source file; `source_content_hash`, parser versions, `scraped_at` |
+| **ReportBlock** | `data/derived/sessions/{session}/plenary/report_blocks.parquet` | Structured blocks from integraal HTML (`block_type`, `structured_json`, `has_oraspr`) |
+| **SourceSpan** | `data/derived/sessions/{session}/plenary/source_spans.parquet` | Half-open block ranges per entity (`coverage_kind` extraction/scope, `validation_status`) |
+| **Unresolved vote events** | `data/sessions/{session}/plenary/vote_unresolved_events.parquet` | Assembly failures retained for QA; not promoted to tallies or casts |
+
+Graph-viewer report mode overlays spans on blocks and surfaces stale/wrong-artifact diagnostics. Vote taxonomy and fixtures: [`docs/meeting-report-vote-taxonomy.md`](docs/meeting-report-vote-taxonomy.md).
 
 ## Conventions
 

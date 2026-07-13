@@ -1,12 +1,8 @@
-use std::collections::hash_map::DefaultHasher;
+use crawl::artifact_id as crawl_artifact_id;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 pub fn artifact_id(source_url: &str, cache_path: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    source_url.hash(&mut hasher);
-    cache_path.hash(&mut hasher);
-    format!("art_{:016x}", hasher.finish())
+    crawl_artifact_id::artifact_id(source_url, cache_path)
 }
 
 pub fn register_artifact(
@@ -26,10 +22,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn artifact_id_is_stable() {
-        let a = artifact_id("https://example.com", "path/to.html");
-        let b = artifact_id("https://example.com", "path/to.html");
-        assert_eq!(a, b);
-        assert!(a.starts_with("art_"));
+    fn artifact_id_matches_crawl() {
+        let url = "https://example.com";
+        let path = "sessions/56/meetings/plenary/56-60.html";
+        assert_eq!(artifact_id(url, path), crawl::artifact_id(url, path));
     }
 }

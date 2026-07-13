@@ -4,13 +4,11 @@ use std::sync::LazyLock;
 
 static WHITESPACE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
-static LEADING_MARKERS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[\d•·\u2022]+\s*|[\-–\u2013]\s*)").unwrap()
-});
+static LEADING_MARKERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(?:[\d•·\u2022]+\s*|[\-–\u2013]\s*)").unwrap());
 
-static LEADING_TURN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\d{2}\.\d{2}\d?\s+").unwrap()
-});
+static LEADING_TURN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\d{2}\.\d{2}\d?\s+").unwrap());
 
 static COMMA_ROLE_SUFFIX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -76,16 +74,11 @@ pub fn apply_typo_fix(raw: &str, typo_map: &HashMap<String, String>) -> String {
 
 /// Strip honorifics and fix common scrape artefacts before name matching.
 pub fn clean_raw_name(raw: &str) -> String {
-    let collapsed = WHITESPACE
-        .replace_all(raw.trim(), " ")
-        .into_owned();
+    let collapsed = WHITESPACE.replace_all(raw.trim(), " ").into_owned();
     let apostrophe = normalize_apostrophes(&collapsed);
     let no_turn = strip_leading_turn(&apostrophe);
     let stripped = strip_leading_markers(&no_turn);
-    let no_comma_role = COMMA_ROLE_SUFFIX
-        .replace(&stripped, "")
-        .trim()
-        .to_string();
+    let no_comma_role = COMMA_ROLE_SUFFIX.replace(&stripped, "").trim().to_string();
     let no_broken_paren = BROKEN_PARTY_PAREN
         .replace(&no_comma_role, "")
         .trim()
@@ -152,11 +145,15 @@ pub struct PersonName {
 
 impl PersonName {
     pub fn full(&self) -> String {
-        format!("{} {}", self.first_name.trim(), self.last_name.trim()).trim().to_string()
+        format!("{} {}", self.first_name.trim(), self.last_name.trim())
+            .trim()
+            .to_string()
     }
 
     pub fn reversed(&self) -> String {
-        format!("{} {}", self.last_name.trim(), self.first_name.trim()).trim().to_string()
+        format!("{} {}", self.last_name.trim(), self.first_name.trim())
+            .trim()
+            .to_string()
     }
 
     pub fn normalized_full(&self) -> String {
@@ -202,7 +199,10 @@ mod tests {
             "Alexander De Croo"
         );
         assert_eq!(clean_raw_name("De heer Jan Jambon"), "Jan Jambon");
-        assert_eq!(clean_raw_name("Minister Georges Gilkinet"), "Georges Gilkinet");
+        assert_eq!(
+            clean_raw_name("Minister Georges Gilkinet"),
+            "Georges Gilkinet"
+        );
     }
 
     #[test]
@@ -249,10 +249,7 @@ mod tests {
             "Stefaan Van Hecke"
         );
         assert_eq!(clean_raw_name("Jan  Jambon"), "Jan Jambon");
-        assert_eq!(
-            clean_raw_name("Roberto D\u{2019}Amico"),
-            "Roberto D'Amico"
-        );
+        assert_eq!(clean_raw_name("Roberto D\u{2019}Amico"), "Roberto D'Amico");
     }
 
     #[test]

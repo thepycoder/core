@@ -1,6 +1,6 @@
 //! Whole-document word counts for meeting report coverage QA.
 
-use crate::report_blocks::{parse_report_blocks, read_report_html, ReportBlock};
+use crate::report_blocks::{ReportBlock, parse_report_blocks, read_report_html};
 use scraper::Html;
 use std::path::Path;
 
@@ -10,7 +10,9 @@ pub fn count_document_words(blocks: &[ReportBlock]) -> usize {
 }
 
 pub fn word_count(text: &str) -> usize {
-    text.split_whitespace().filter(|token| !token.is_empty()).count()
+    text.split_whitespace()
+        .filter(|token| !token.is_empty())
+        .count()
 }
 
 pub fn count_document_words_from_cache(
@@ -57,7 +59,10 @@ mod tests {
                 continue;
             };
             let words = count_document_words(&blocks);
-            assert!(words > 0, "{kind} {meeting_id}: expected document words > 0");
+            assert!(
+                words > 0,
+                "{kind} {meeting_id}: expected document words > 0"
+            );
         }
     }
 

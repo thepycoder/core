@@ -14,17 +14,29 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "Headline yes/no/abstain totals on a vote row do not match the number of named members in the appendix buckets.",
             measures: "Reads `normalized/vote_reconciliation.parquet`; flags rows where `reconciled` is false (compact totals vs `members_*_count`).",
         },
-        "vote.appendix_bucket_vs_collected_names" => CheckDoc {
-            what: "The count of comma-separated names in `members_yes` disagrees with the headline `yes` total for that vote.",
-            measures: "Splits `members_yes` CSV on staging vote rows and compares length to parsed headline `yes`.",
-        },
         "vote.compact_tables_vs_appendix_headers" => CheckDoc {
             what: "A vote number appears in the meeting-report appendix but not in the compact vote tables at the top of the page.",
             measures: "Re-parses cached vote HTML (`vote_inventory`) and compares appendix vs compact vote-number sets per meeting.",
         },
         "vote.source_inventory_vs_parquet" => CheckDoc {
-            what: "The number of votes found in source HTML does not match the number of vote rows stored for that meeting.",
-            measures: "Counts vote numbers in cached HTML inventory vs rows in `sessions/56/plenary/votes.parquet` per `meeting_id`.",
+            what: "Independent HTML inventory of formal vote-result occurrences does not match staged `vote_results` per source roll-call number.",
+            measures: "Re-parses cached HTML for compact/reuse-aware result occurrences and compares ordered counts per `source_roll_call_number` to `vote_results.parquet` (reuse decisions excluded).",
+        },
+        "vote.appendix_bucket_counts" => CheckDoc {
+            what: "An independently parsed appendix bucket count differs from the number of names retained in that ordered appendix occurrence.",
+            measures: "Parses declared yes/no/abstain counts and voter-name paragraphs after each `(source_number, occurrence)` appendix header.",
+        },
+        "vote.decision_evidence" => CheckDoc {
+            what: "A vote decision lacks valid title evidence or points to a result with no valid evidence.",
+            measures: "Joins every `votes.parquet` row to valid Vote `decision_title` and VoteResult source spans.",
+        },
+        "vote.result_evidence_roles" => CheckDoc {
+            what: "A formal result lacks evidence required by its method or retained candidate/proclamation data.",
+            measures: "Requires method-specific valid source-span roles for standard, language-group, secret, no-quorum, sitting/standing, appendix, candidate, and proclamation data.",
+        },
+        "vote.unresolved_events" => CheckDoc {
+            what: "The vote parser retained an event it could not safely assemble.",
+            measures: "Surfaces every row in `vote_unresolved_events.parquet`, including the typed block bounds, reason, and source evidence.",
         },
         "vote.duplicate_person_across_buckets" => CheckDoc {
             what: "The same MP appears in more than one position bucket (yes/no/abstain) for a single vote.",
@@ -32,7 +44,31 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "vote.cast_count_vs_headline" => CheckDoc {
             what: "Resolved CAST edges per bucket do not add up to the headline yes/no/abstain totals.",
-            measures: "Counts distinct `person_id` per position in `vote_casts.parquet` vs headline fields on the staging vote row.",
+            measures: "Counts distinct `person_id` per position in `vote_casts.parquet` vs `vote_tallies.parquet` overall rows for named `roll_call` and `language_group_roll_call` results.",
+        },
+        "vote.cast_method_rules" => CheckDoc {
+            what: "A vote method that cannot expose named choices has normalized casts.",
+            measures: "Forbids CAST rows on secret, no-quorum, and sitting/standing results.",
+        },
+        "vote.standard_roll_call_invariants" => CheckDoc {
+            what: "A standard roll call is missing an explicit overall yes, no, or abstain tally.",
+            measures: "Requires all three overall position rows, retaining zero as a present value rather than treating it as missing.",
+        },
+        "vote.no_quorum_invariants" => CheckDoc {
+            what: "A no-quorum result has forbidden yes/no/abstain tallies or casts, or lacks participation evidence.",
+            measures: "For `status=no_quorum`: requires participation tallies; forbids position tallies and normalized casts.",
+        },
+        "vote.sitting_standing_invariants" => CheckDoc {
+            what: "A sitting/standing result has counts/casts or is missing a formal outcome.",
+            measures: "For `method=sitting_standing`: requires non-empty outcome; forbids yes/no/abstain tallies and casts.",
+        },
+        "vote.secret_ballot_invariants" => CheckDoc {
+            what: "Secret ballot statistics or casts violate method semantics.",
+            measures: "For `method=secret_ballot`: forbids named casts; when voter/valid/(blank) tallies exist, checks `voters = valid + blank`.",
+        },
+        "vote.language_group_sums" => CheckDoc {
+            what: "Language-group roll call NL and FR counts do not sum to the overall total per option.",
+            measures: "For `method=language_group_roll_call`: checks `nl_group + fr_group = overall` for yes/no/abstain tallies.",
         },
         "vote.number_sequence" => CheckDoc {
             what: "Vote numbers in a meeting report skip a value in the expected 1..N sequence.",
@@ -40,7 +76,7 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "vote.total_plausibility" => CheckDoc {
             what: "Headline yes + no + abstain exceeds a plausible chamber size (>150).",
-            measures: "Sums parsed headline totals on staging vote rows; warns when total > 150.",
+            measures: "Sums `vote_tallies.parquet` overall yes/no/abstain counts per `result_id`; warns when total > 150.",
         },
         "vote.motion_id_when_referenced" => CheckDoc {
             what: "Vote title text references a motion but `motion_id` is empty on the staging row.",
@@ -76,7 +112,7 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "utterance.speech_char_coverage" => CheckDoc {
             what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
-            measures: "Per meeting: ratio of saved word count (utterances, questions incl. oral-written bodies, answers reply text only, plenary votes/propositions/notices, commission chair) vs whole-document word count from cached HTML (all h1/h2/p/table blocks). Warns on kind p5 outlier or >15% drop vs committed `speech_coverage_baseline.parquet`.",
+            measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind).",
         },
         "utterance.roundtrip_discussion" => CheckDoc {
             what: "Normalized utterances exist for a question but its staging `discussion` JSON is empty.",
@@ -161,6 +197,54 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         "fk.questions_votes_to_meetings" => CheckDoc {
             what: "A question or vote row references a `meeting_id` that does not exist in meetings parquet.",
             measures: "Builds meeting id set from plenary + commission meetings; validates FK on questions and votes.",
+        },
+        "source.span.block_range" => CheckDoc {
+            what: "A provenance span references block indices outside the derived `report_blocks` stream or uses an invalid half-open range.",
+            measures: "Validates `block_start < block_end` and `block_end` ≤ artifact block count in `derived/.../report_blocks.parquet`.",
+        },
+        "source.span.typed_schema" => CheckDoc {
+            what: "A source-span bound, identity number, or confidence column lost its canonical Arrow type.",
+            measures: "Requires UInt32 session/meeting/bounds and Float64 confidence columns.",
+        },
+        "source.span.validation_status" => CheckDoc {
+            what: "A source span has an invalid status/reason combination.",
+            measures: "Requires `valid` with no unresolved reason or `unresolved` with a non-empty reason.",
+        },
+        "source.span.artifact_id" => CheckDoc {
+            what: "A source span references an `artifact_id` with no matching report blocks.",
+            measures: "Joins `source_spans.artifact_id` to distinct `report_blocks.artifact_id`.",
+        },
+        "source.span.graph_artifact" => CheckDoc {
+            what: "A source span's artifact is absent from graph provenance.",
+            measures: "Joins span `artifact_id` to `graph/source_artifacts.parquet.source_artifact_id`.",
+        },
+        "source.span.source_content_stale" => CheckDoc {
+            what: "A valid span was extracted from different source content than its report blocks or graph artifact.",
+            measures: "Compares `source_content_hash` across spans, report blocks, and graph source artifacts.",
+        },
+        "source.span.block_parser_stale" => CheckDoc {
+            what: "A valid span uses an outdated report-block parser version.",
+            measures: "Compares span parser version to report blocks, graph artifacts, and the current parser constant.",
+        },
+        "source.span.extractor_version" => CheckDoc {
+            what: "A source span lacks or uses an unexpected extractor version.",
+            measures: "Validates extractor/version pairs for vote assembly and unified meeting parsing.",
+        },
+        "source.span.entity_reference" => CheckDoc {
+            what: "A provenance span points at a Vote, VoteResult, or Meeting entity id missing from staging.",
+            measures: "Checks `entity_type`/`entity_id` against `votes.parquet`, `vote_results.parquet`, and `plenary_{session}_{meeting}`.",
+        },
+        "source.span.extraction_fields" => CheckDoc {
+            what: "An extraction span has empty `field_names`.",
+            measures: "Requires non-empty `field_names` when `coverage_kind=extraction`.",
+        },
+        "source.span.allowed_role" => CheckDoc {
+            what: "A span uses an unknown `span_role`.",
+            measures: "Validates `span_role` against the catalogued vote/meeting provenance roles.",
+        },
+        "source.span.overlap" => CheckDoc {
+            what: "Duplicate or same-entity same-role extraction spans overlap unexpectedly.",
+            measures: "Allows scope and cross-entity overlap while rejecting duplicate span ids and overlapping extraction ranges for the same entity role.",
         },
         "source.encoding_bytes" => CheckDoc {
             what: "Cached meeting HTML contains `0xFF` bytes, suggesting a legacy encoding or corrupt download.",

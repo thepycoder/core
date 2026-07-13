@@ -1,5 +1,5 @@
 use crate::types::CheckDetail;
-use crawl::agenda_timeline::{count_agenda_questions_from_cache, MeetingKind};
+use crawl::agenda_timeline::{MeetingKind, count_agenda_questions_from_cache};
 use crawl::paths::cache_dir;
 use crawl::proceeding_entities::{is_hearing_heading, is_interpellation_heading};
 use crawl::report_blocks::read_report_html;
@@ -124,7 +124,10 @@ fn check_dossier_refs(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
                             "dossier.ref_exists",
                             "warn",
                             "warn",
-                            format!("dossier ref {did} on vote {} not in dossiers.parquet", vote_ids[i]),
+                            format!(
+                                "dossier ref {did} on vote {} not in dossiers.parquet",
+                                vote_ids[i]
+                            ),
                         )
                         .with_entity("dossier", did)
                         .with_source(&source_urls[i], &cache_paths[i]),

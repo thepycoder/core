@@ -1,14 +1,20 @@
+use crawl::paths::data_dir;
+use identity::actor_resolver::ActorResolver;
+use identity::resolver::Resolver;
+use normalize::addressed_to::{normalize_addressed_to, write_addressed_to};
 use normalize::answered::{normalize_answered, write_answered};
+use normalize::authored::{normalize_authored, write_authored};
+use normalize::common::{
+    UnresolvedRow, dedupe_unresolved, verify_staging, write_unresolved_persons,
+};
 use normalize::hearings::{normalize_invited, write_invited};
 use normalize::interpellations::{
     normalize_interpellations, write_interpellated, write_interpellation_responded,
 };
-use normalize::authored::{normalize_authored, write_authored};
-use normalize::common::{dedupe_unresolved, verify_staging, write_unresolved_persons, UnresolvedRow};
 use normalize::questions::{normalize_asked, write_asked};
 use normalize::roles::{normalize_holds_role, write_holds_role};
 use normalize::utterances::{normalize_utterances, write_utterances};
-use normalize::addressed_to::{normalize_addressed_to, write_addressed_to};
+use normalize::vote_casts::{normalize_vote_casts, write_vote_casts, write_vote_reconciliation};
 use normalize::written_answers::{
     normalize_written_answers, write_answered_by, write_normalized_answers,
 };
@@ -16,12 +22,6 @@ use normalize::written_asked::{normalize_written_asked, write_written_asked};
 use normalize::written_links::{
     canonical_id_map, collect_oral_written_links, write_oral_written_links,
 };
-use normalize::vote_casts::{
-    normalize_vote_casts, write_vote_casts, write_vote_reconciliation,
-};
-use crawl::paths::data_dir;
-use identity::actor_resolver::ActorResolver;
-use identity::resolver::Resolver;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -72,10 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     write_utterances(&out_dir.join("utterances.parquet"), &utterances_out.rows)?;
 
     let oral_links = collect_oral_written_links(&root)?;
-    write_oral_written_links(
-        &out_dir.join("oral_written_links.parquet"),
-        &oral_links,
-    )?;
+    write_oral_written_links(&out_dir.join("oral_written_links.parquet"), &oral_links)?;
     let canonical_map = canonical_id_map(&oral_links);
 
     let written_asked_out = normalize_written_asked(&root, &resolver, &canonical_map)?;
@@ -87,8 +84,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let addressed_to_rows = normalize_addressed_to(&root, &actor_resolver, &canonical_map)?;
     write_addressed_to(&out_dir.join("addressed_to.parquet"), &addressed_to_rows)?;
 
-    let written_answers_out =
-        normalize_written_answers(&root, &actor_resolver, &canonical_map)?;
+    let written_answers_out = normalize_written_answers(&root, &actor_resolver, &canonical_map)?;
     write_normalized_answers(
         &out_dir.join("answers.parquet"),
         &written_answers_out.answers,

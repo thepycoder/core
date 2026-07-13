@@ -187,35 +187,82 @@ def _sample_vote_cluster(
     conn: duckdb.DuckDBPyConnection,
     rows: list[DetailRow],
 ) -> dict[str, Any]:
-    vote_ids = [r.entity_id for r in rows if r.entity_id][:3]
-    if not vote_ids:
+    entity_ids = [r.entity_id for r in rows if r.entity_id][:3]
+    if not entity_ids:
         return {}
-    vote_id = vote_ids[0]
+    entity_id = entity_ids[0].replace("'", "''")
     votes_path = settings.parquet("sessions", "56", "plenary", "votes.parquet")
+    results_path = settings.parquet(
+        "sessions", "56", "plenary", "vote_results.parquet"
+    )
+    tallies_path = settings.parquet(
+        "sessions", "56", "plenary", "vote_tallies.parquet"
+    )
+    members_path = settings.parquet(
+        "sessions", "56", "plenary", "vote_result_members.parquet"
+    )
+    unresolved_path = settings.parquet(
+        "sessions", "56", "plenary", "vote_unresolved_events.parquet"
+    )
     casts_path = settings.parquet("normalized", "vote_casts.parquet")
     recon_path = settings.parquet("normalized", "vote_reconciliation.parquet")
-    out: dict[str, Any] = {"vote_id": vote_id}
+    out: dict[str, Any] = {"entity_id": entity_id}
 
     if votes_path.exists():
-        out["staging_vote"] = _query_json(
+        out["vote_decisions"] = _query_json(
             conn,
             f"""
-            SELECT vote_id, meeting_id, yes, no, abstain,
-                   length(members_yes) AS members_yes_len,
-                   length(members_no) AS members_no_len,
-                   title_nl, cache_path
+            SELECT vote_id, result_id, meeting_id, seq, "method", status, outcome,
+                   source_roll_call_number, reuses_result, title_nl, title_fr,
+                   cache_path
             FROM read_parquet('{votes_path}')
-            WHERE vote_id = '{vote_id}'
+            WHERE vote_id = '{entity_id}' OR result_id = '{entity_id}'
+            ORDER BY seq
             """,
+        )
+    if results_path.exists():
+        out["vote_results"] = _query_json(
+            conn,
+            f"""
+            SELECT *
+            FROM read_parquet('{results_path}')
+            WHERE result_id = '{entity_id}'
+               OR result_id IN (
+                   SELECT result_id FROM read_parquet('{votes_path}')
+                   WHERE vote_id = '{entity_id}'
+               )
+            """,
+        )
+    result_filter = f"""
+        result_id = '{entity_id}'
+        OR result_id IN (
+            SELECT result_id FROM read_parquet('{votes_path}')
+            WHERE vote_id = '{entity_id}'
+        )
+    """
+    if tallies_path.exists():
+        out["tallies"] = _query_json(
+            conn,
+            f"""SELECT * FROM read_parquet('{tallies_path}')
+                WHERE {result_filter}
+                ORDER BY tally_kind, dimension, option_key""",
+        )
+    if members_path.exists():
+        out["result_members"] = _query_json(
+            conn,
+            f"""SELECT result_id, "position", seq, raw_name
+                FROM read_parquet('{members_path}')
+                WHERE {result_filter}
+                ORDER BY "position", seq LIMIT 50""",
         )
     if casts_path.exists():
         out["cast_counts"] = _query_json(
             conn,
             f"""
-            SELECT position, count(DISTINCT person_id) AS n
+            SELECT result_id, "position", count(DISTINCT person_id) AS n
             FROM read_parquet('{casts_path}')
-            WHERE vote_id = '{vote_id}'
-            GROUP BY position
+            WHERE {result_filter}
+            GROUP BY result_id, "position"
             """,
         )
     if recon_path.exists():
@@ -224,8 +271,16 @@ def _sample_vote_cluster(
             f"""
             SELECT *
             FROM read_parquet('{recon_path}')
-            WHERE vote_id = '{vote_id}'
+            WHERE result_id = '{entity_id}'
             """,
+        )
+    if unresolved_path.exists() and rows[0].meeting_id:
+        meeting_id = rows[0].meeting_id.replace("'", "''")
+        out["unresolved_vote_events"] = _query_json(
+            conn,
+            f"""SELECT * FROM read_parquet('{unresolved_path}')
+                WHERE meeting_id = {int(meeting_id)}
+                ORDER BY block_start LIMIT 20""",
         )
     return out
 

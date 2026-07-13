@@ -70,11 +70,7 @@ impl CheckDetail {
         self
     }
 
-    pub fn with_values(
-        mut self,
-        expected: impl Into<String>,
-        actual: impl Into<String>,
-    ) -> Self {
+    pub fn with_values(mut self, expected: impl Into<String>, actual: impl Into<String>) -> Self {
         self.expected = expected.into();
         self.actual = actual.into();
         self
@@ -97,7 +93,7 @@ impl CheckDetail {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoverageBaselineRow {
+pub struct MeetingCoverageSnapshot {
     pub meeting_kind: String,
     pub meeting_id: String,
     pub source_words: usize,
@@ -105,6 +101,9 @@ pub struct CoverageBaselineRow {
     pub ratio: f64,
     pub updated_at: String,
 }
+
+/// Committed regression snapshots use the same shape as a run-time coverage snapshot.
+pub type CoverageBaselineRow = MeetingCoverageSnapshot;
 
 #[derive(Debug, Clone)]
 pub struct CheckSummary {

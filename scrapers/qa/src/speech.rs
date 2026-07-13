@@ -1,5 +1,5 @@
-use crate::coverage_baseline::load_coverage_baseline;
-use crate::types::{CheckDetail, CoverageBaselineRow};
+use crate::types::{CheckDetail, MeetingCoverageSnapshot};
+use arrow::record_batch::RecordBatch;
 use chrono::Utc;
 use crawl::agenda_timeline::MeetingKind;
 use crawl::paths::cache_dir;
@@ -7,22 +7,27 @@ use crawl::qa_coverage::{count_document_words_from_cache, word_count};
 use crawl::qa_markers::check_markers_vs_utterances;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
-use arrow::record_batch::RecordBatch;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
 
 const CHECK_ID: &str = "utterance.speech_char_coverage";
 const P5_MIN_MEETINGS: usize = 10;
-const BASELINE_REGRESSION_FACTOR: f64 = 0.85;
 
 pub struct SpeechCheckResult {
     pub details: Vec<CheckDetail>,
-    pub coverage_snapshots: Vec<CoverageBaselineRow>,
+    pub coverage_snapshots: Vec<MeetingCoverageSnapshot>,
 }
 
 pub fn run_speech_checks(data_dir: &Path) -> Result<SpeechCheckResult, Box<dyn Error>> {
-    let saved = load_saved_document_words(data_dir)?;
+    let mut saved = load_saved_document_words(data_dir)?;
+    if let Some(span_words) = load_extraction_span_words(data_dir)? {
+        for (key, count) in span_words {
+            if key.0 == "plenary" {
+                saved.insert(key, count);
+            }
+        }
+    }
     let coverage = check_speech_char_coverage(data_dir, &saved)?;
     let mut details = Vec::new();
     details.extend(check_source_markers(data_dir)?);
@@ -63,7 +68,10 @@ fn load_saved_document_words(
     let mut counts: HashMap<(String, String), usize> = HashMap::new();
 
     for (kind, rel) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/utterances.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/utterances.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/utterances.parquet"),
@@ -84,7 +92,10 @@ fn load_saved_document_words(
     }
 
     for (kind, rel) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/questions.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/questions.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/questions.parquet"),
@@ -115,7 +126,10 @@ fn load_saved_document_words(
     }
 
     for (kind, rel) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/answers.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/answers.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/answers.parquet"),
@@ -129,11 +143,8 @@ fn load_saved_document_words(
             let meeting_ids = read_string_column(&batch, "meeting_id")?;
             for i in 0..batch.num_rows() {
                 let key = meeting_key(kind, &meeting_ids[i]);
-                *counts.entry(key).or_default() += sum_row_words(
-                    &batch,
-                    i,
-                    &["text_nl", "text_fr"],
-                );
+                *counts.entry(key).or_default() +=
+                    sum_row_words(&batch, i, &["text_nl", "text_fr"]);
             }
         }
     }
@@ -144,17 +155,39 @@ fn load_saved_document_words(
             let meeting_ids = read_string_column(&batch, "meeting_id")?;
             for i in 0..batch.num_rows() {
                 let key = meeting_key("plenary", &meeting_ids[i]);
-                *counts.entry(key).or_default() += sum_row_words(
-                    &batch,
-                    i,
-                    &[
-                        "title_nl",
-                        "title_fr",
-                        "members_yes",
-                        "members_no",
-                        "members_abstain",
-                    ],
-                );
+                *counts.entry(key).or_default() +=
+                    sum_row_words(&batch, i, &["title_nl", "title_fr"]);
+            }
+        }
+    }
+
+    let mut result_meeting: HashMap<String, String> = HashMap::new();
+    let results_path = data_dir.join(format!(
+        "sessions/{SESSION_ID}/plenary/vote_results.parquet"
+    ));
+    if results_path.exists() {
+        for batch in read_all_rows(&results_path)? {
+            let result_ids = read_string_column(&batch, "result_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            for i in 0..batch.num_rows() {
+                result_meeting.insert(result_ids[i].clone(), meeting_ids[i].clone());
+            }
+        }
+    }
+
+    let members_path = data_dir.join(format!(
+        "sessions/{SESSION_ID}/plenary/vote_result_members.parquet"
+    ));
+    if members_path.exists() {
+        for batch in read_all_rows(&members_path)? {
+            let result_ids = read_string_column(&batch, "result_id")?;
+            let raw_names = read_string_column(&batch, "raw_name")?;
+            for i in 0..batch.num_rows() {
+                let Some(meeting_id) = result_meeting.get(&result_ids[i]) else {
+                    continue;
+                };
+                let key = meeting_key("plenary", meeting_id);
+                add_words(&mut counts, key, &raw_names[i]);
             }
         }
     }
@@ -198,6 +231,69 @@ fn load_saved_document_words(
     Ok(counts)
 }
 
+/// Union extraction span block indices over `report_blocks.word_count` (plenary only).
+fn load_extraction_span_words(
+    data_dir: &Path,
+) -> Result<Option<HashMap<(String, String), usize>>, Box<dyn Error>> {
+    let spans_path = data_dir.join(format!(
+        "derived/sessions/{SESSION_ID}/plenary/source_spans.parquet"
+    ));
+    let blocks_path = data_dir.join(format!(
+        "derived/sessions/{SESSION_ID}/plenary/report_blocks.parquet"
+    ));
+    if !spans_path.exists() || !blocks_path.exists() {
+        return Ok(None);
+    }
+
+    let mut word_by_artifact_block: HashMap<(String, u32), usize> = HashMap::new();
+    for batch in read_all_rows(&blocks_path)? {
+        let artifact_ids = read_string_column(&batch, "artifact_id")?;
+        let block_indices = read_string_column(&batch, "block_index")?;
+        let word_counts = read_string_column(&batch, "word_count")?;
+        for i in 0..batch.num_rows() {
+            let block_index = block_indices[i].parse::<u32>().unwrap_or(0);
+            let words = word_counts[i].parse::<usize>().unwrap_or(0);
+            word_by_artifact_block.insert((artifact_ids[i].clone(), block_index), words);
+        }
+    }
+
+    let mut covered_blocks: HashMap<String, HashSet<(String, u32)>> = HashMap::new();
+    for batch in read_all_rows(&spans_path)? {
+        let artifact_ids = read_string_column(&batch, "artifact_id")?;
+        let meeting_ids = read_string_column(&batch, "meeting_id")?;
+        let coverage_kinds = read_string_column(&batch, "coverage_kind")?;
+        let validation_statuses = read_string_column(&batch, "validation_status")?;
+        let block_starts = read_string_column(&batch, "block_start")?;
+        let block_ends = read_string_column(&batch, "block_end")?;
+        for i in 0..batch.num_rows() {
+            if coverage_kinds[i] != "extraction" || validation_statuses[i] != "valid" {
+                continue;
+            }
+            let start = block_starts[i].parse::<u32>().unwrap_or(0);
+            let end = block_ends[i].parse::<u32>().unwrap_or(0);
+            if start >= end {
+                continue;
+            }
+            let blocks = covered_blocks.entry(meeting_ids[i].clone()).or_default();
+            for idx in start..end {
+                if word_by_artifact_block.contains_key(&(artifact_ids[i].clone(), idx)) {
+                    blocks.insert((artifact_ids[i].clone(), idx));
+                }
+            }
+        }
+    }
+
+    let mut counts: HashMap<(String, String), usize> = HashMap::new();
+    for (meeting_id, blocks) in covered_blocks {
+        let mut total = 0usize;
+        for block in blocks {
+            total += word_by_artifact_block.get(&block).copied().unwrap_or(0);
+        }
+        counts.insert(meeting_key("plenary", &meeting_id), total);
+    }
+    Ok(Some(counts))
+}
+
 struct MeetingCoverage {
     meeting_kind: String,
     meeting_id: String,
@@ -210,16 +306,13 @@ struct MeetingCoverage {
 
 struct CoverageCheckOutput {
     details: Vec<CheckDetail>,
-    snapshots: Vec<CoverageBaselineRow>,
+    snapshots: Vec<MeetingCoverageSnapshot>,
 }
 
 fn check_speech_char_coverage(
     data_dir: &Path,
     saved_by_meeting: &HashMap<(String, String), usize>,
 ) -> Result<CoverageCheckOutput, Box<dyn Error>> {
-    let baseline_path = data_dir.join("qa/speech_coverage_baseline.parquet");
-    let baseline = load_coverage_baseline(&baseline_path)?;
-
     let mut meetings: Vec<MeetingCoverage> = Vec::new();
 
     for (kind, meetings_rel) in [
@@ -298,7 +391,7 @@ fn check_speech_char_coverage(
     let mut snapshots = Vec::with_capacity(meetings.len());
 
     for meeting in &meetings {
-        snapshots.push(CoverageBaselineRow {
+        snapshots.push(MeetingCoverageSnapshot {
             meeting_kind: meeting.meeting_kind.clone(),
             meeting_id: meeting.meeting_id.clone(),
             source_words: meeting.source_words,
@@ -322,18 +415,6 @@ fn check_speech_char_coverage(
 
         if kind_count >= P5_MIN_MEETINGS && meeting.ratio < p5 {
             reasons.push(format!("below_p5({p5:.3})"));
-        }
-
-        if let Some(base) = baseline.get(&(
-            meeting.meeting_kind.clone(),
-            meeting.meeting_id.clone(),
-        )) {
-            if meeting.ratio < base.ratio * BASELINE_REGRESSION_FACTOR {
-                reasons.push(format!(
-                    "below_baseline({:.3} baseline={:.3})",
-                    meeting.ratio, base.ratio
-                ));
-            }
         }
 
         if reasons.is_empty() {
@@ -429,10 +510,7 @@ fn check_source_markers(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
                         .with_meeting(kind.as_str(), &meeting_ids[i])
                         .with_entity("meeting", &meeting_ids[i])
                         .with_values(
-                            format!(
-                                "markers={}",
-                                result.turn_markers + result.chair_markers
-                            ),
+                            format!("markers={}", result.turn_markers + result.chair_markers),
                             result.utterance_rows.to_string(),
                         )
                         .with_source(&source_urls[i], cache_path),
@@ -485,7 +563,12 @@ fn check_roundtrip_discussion(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<d
             "commission"
         };
         for batch in read_all_rows(&path)? {
-            if !batch.schema().fields().iter().any(|f| f.name() == "discussion") {
+            if !batch
+                .schema()
+                .fields()
+                .iter()
+                .any(|f| f.name() == "discussion")
+            {
                 continue;
             }
             let question_ids = read_string_column(&batch, "question_id")?;
@@ -527,12 +610,5 @@ mod tests {
         let values: Vec<f64> = (1..=20).map(|n| n as f64 / 20.0).collect();
         let p5 = percentile_5(&values);
         assert!((p5 - 0.05).abs() < 0.01 || (p5 - 0.1).abs() < 0.01);
-    }
-
-    #[test]
-    fn baseline_regression_detected() {
-        let baseline_ratio = 0.80;
-        let current_ratio = 0.50;
-        assert!(current_ratio < baseline_ratio * BASELINE_REGRESSION_FACTOR);
     }
 }

@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::utils::ensure_question_id;
@@ -59,7 +57,10 @@ pub fn normalize_interpellations(
     let mut seen_responded: HashSet<(String, String, String)> = HashSet::new();
 
     for (meeting_kind, rel_path) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/interpellations.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/interpellations.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/interpellations.parquet"),
@@ -79,11 +80,8 @@ pub fn normalize_interpellations(
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
-                let interpellation_id = ensure_question_id(
-                    &session_ids[i],
-                    meeting_kind,
-                    &interpellation_ids[i],
-                );
+                let interpellation_id =
+                    ensure_question_id(&session_ids[i], meeting_kind, &interpellation_ids[i]);
 
                 for name in split_csv(&interpellators[i]) {
                     let detail = resolver.resolve_detail(&name, Bucket::Questioner);
@@ -119,6 +117,7 @@ pub fn normalize_interpellations(
                                 raw_field: name,
                                 source_url: source_urls[i].clone(),
                                 cache_path: cache_paths[i].clone(),
+                                ..UnresolvedRow::default()
                             });
                         }
                     }
@@ -185,6 +184,7 @@ pub fn normalize_interpellations(
                                 raw_field: name,
                                 source_url: source_urls[i].clone(),
                                 cache_path: cache_paths[i].clone(),
+                                ..UnresolvedRow::default()
                             });
                         }
                     }

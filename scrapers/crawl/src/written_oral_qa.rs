@@ -1,21 +1,20 @@
 //! Parse *mondelinge vragen schriftelijk behandeld* / *questions orales traitées par écrit*
 //! sections from integraal verslag HTML (commission and plenary).
 
-use crate::agenda_timeline::{build_agenda_timeline, AgendaItem, ItemKind, MeetingKind};
+use crate::agenda_timeline::{AgendaItem, ItemKind, MeetingKind, build_agenda_timeline};
 use crate::answer_io::AnswerDraft;
 use crate::qrva_text::inline_answer_id;
 use crate::report_blocks::{BlockTag, ReportBlock};
 use crate::utils::clean_text;
 use regex::Regex;
+#[cfg(test)]
 use scraper::Html;
 use std::sync::OnceLock;
 
 static ANSWER_DELIM: OnceLock<Regex> = OnceLock::new();
 
 fn answer_delim_regex() -> &'static Regex {
-    ANSWER_DELIM.get_or_init(|| {
-        Regex::new(r"(?i)^Antwoord\s*[-–]\s*Réponse\s*:?\s*$").unwrap()
-    })
+    ANSWER_DELIM.get_or_init(|| Regex::new(r"(?i)^Antwoord\s*[-–]\s*Réponse\s*:?\s*$").unwrap())
 }
 
 pub fn is_written_oral_section_heading(text: &str) -> bool {
@@ -41,6 +40,8 @@ pub struct OralWrittenItem {
     pub question_body_fr: String,
     pub text_nl: String,
     pub text_fr: String,
+    pub question_blocks: Vec<u32>,
+    pub answer_blocks: Vec<u32>,
 }
 
 fn paragraph_language(text: &str, block_lang: Option<&str>) -> &'static str {
@@ -81,32 +82,38 @@ fn append_lang_field(target_nl: &mut String, target_fr: &mut String, lang: &str,
     dest.push_str(text);
 }
 
-fn split_question_answer(paragraphs: &[(String, String)]) -> (String, String, String, String) {
+fn split_question_answer(
+    paragraphs: &[(u32, String, String)],
+) -> (String, String, String, String, Vec<u32>, Vec<u32>) {
     let mut q_nl = String::new();
     let mut q_fr = String::new();
     let mut a_nl = String::new();
     let mut a_fr = String::new();
     let mut in_answer = false;
+    let mut question_blocks = Vec::new();
+    let mut answer_blocks = Vec::new();
 
-    for (text, lang) in paragraphs {
+    for (block_index, text, lang) in paragraphs {
         if !in_answer && answer_delim_regex().is_match(text.trim()) {
             in_answer = true;
             continue;
         }
         if in_answer {
             append_lang_field(&mut a_nl, &mut a_fr, lang, text);
+            answer_blocks.push(*block_index);
         } else {
             append_lang_field(&mut q_nl, &mut q_fr, lang, text);
+            question_blocks.push(*block_index);
         }
     }
 
-    (q_nl, q_fr, a_nl, a_fr)
+    (q_nl, q_fr, a_nl, a_fr, question_blocks, answer_blocks)
 }
 
 fn collect_item_paragraphs(
     blocks: &[ReportBlock],
     item: &AgendaItem,
-) -> Vec<(String, String)> {
+) -> Vec<(u32, String, String)> {
     let mut out = Vec::new();
     for block in blocks.iter() {
         if block.index < item.start_block || block.index >= item.end_block {
@@ -120,14 +127,13 @@ fn collect_item_paragraphs(
             continue;
         }
         let lang = paragraph_language(&text, block.lang.as_deref()).to_string();
-        out.push((text, lang));
+        out.push((block.index, text, lang));
     }
     out
 }
 
 /// Extract written oral Q&A items (MP letter + minister reply) from the written-treatment section.
 pub fn extract_written_oral_items(
-    document: &Html,
     blocks: &[ReportBlock],
     meeting_kind: MeetingKind,
     session_id: u32,
@@ -137,10 +143,13 @@ pub fn extract_written_oral_items(
         return Vec::new();
     };
 
-    let timeline = build_agenda_timeline(document, blocks, meeting_kind, session_id, meeting_id);
+    let timeline = build_agenda_timeline(blocks, meeting_kind, session_id, meeting_id);
     let mut items = Vec::new();
 
-    for item in timeline.iter().filter(|i| i.item_kind == ItemKind::Question) {
+    for item in timeline
+        .iter()
+        .filter(|i| i.item_kind == ItemKind::Question)
+    {
         if item.start_block < zone_start {
             continue;
         }
@@ -148,7 +157,8 @@ pub fn extract_written_oral_items(
         if paragraphs.is_empty() {
             continue;
         }
-        let (q_nl, q_fr, a_nl, a_fr) = split_question_answer(&paragraphs);
+        let (q_nl, q_fr, a_nl, a_fr, question_blocks, answer_blocks) =
+            split_question_answer(&paragraphs);
         if a_nl.is_empty() && a_fr.is_empty() {
             continue;
         }
@@ -160,6 +170,8 @@ pub fn extract_written_oral_items(
             question_body_fr: q_fr,
             text_nl: a_nl,
             text_fr: a_fr,
+            question_blocks,
+            answer_blocks,
         });
     }
 
@@ -220,17 +232,20 @@ mod tests {
     #[test]
     fn splits_on_answer_delimiter() {
         let paras = vec![
-            ("Monsieur le Ministre,".to_string(), "fr".to_string()),
-            ("1) Pouvez-vous…".to_string(), "fr".to_string()),
-            ("Antwoord - Réponse:".to_string(), "nl".to_string()),
-            ("Question 1".to_string(), "fr".to_string()),
-            ("En tant que ministre…".to_string(), "fr".to_string()),
+            (1, "Monsieur le Ministre,".to_string(), "fr".to_string()),
+            (2, "1) Pouvez-vous…".to_string(), "fr".to_string()),
+            (3, "Antwoord - Réponse:".to_string(), "nl".to_string()),
+            (4, "Question 1".to_string(), "fr".to_string()),
+            (5, "En tant que ministre…".to_string(), "fr".to_string()),
         ];
-        let (q_nl, q_fr, a_nl, a_fr) = split_question_answer(&paras);
+        let (q_nl, q_fr, a_nl, a_fr, question_blocks, answer_blocks) =
+            split_question_answer(&paras);
         assert!(q_fr.contains("Monsieur"));
         assert!(a_fr.contains("ministre"));
         assert!(q_nl.is_empty());
         assert!(a_nl.is_empty());
+        assert_eq!(question_blocks, vec![1, 2]);
+        assert_eq!(answer_blocks, vec![4, 5]);
     }
 
     #[test]
@@ -238,8 +253,9 @@ mod tests {
         let candidates = [
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../cache/sessions/56/meetings/commission/56-407.html"),
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../partijgedrag/core/cache/sessions/56/meetings/commission/56-407.html"),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+                "../../../partijgedrag/core/cache/sessions/56/meetings/commission/56-407.html",
+            ),
         ];
         let path = candidates.iter().find(|p| p.exists());
         let Some(path) = path else {
@@ -249,18 +265,18 @@ mod tests {
         let html = read_report_html(path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let items = extract_written_oral_items(
-            &document,
-            &blocks,
-            MeetingKind::Commission,
-            56,
-            407,
-        );
+        let items = extract_written_oral_items(&blocks, MeetingKind::Commission, 56, 407);
         assert_eq!(items.len(), 5, "expected 5 written oral items in 407");
-        assert!(items
-            .iter()
-            .all(|i| !i.question_body_nl.is_empty() || !i.question_body_fr.is_empty()));
-        assert!(items.iter().all(|i| !i.text_fr.is_empty() || !i.text_nl.is_empty()));
+        assert!(
+            items
+                .iter()
+                .all(|i| !i.question_body_nl.is_empty() || !i.question_body_fr.is_empty())
+        );
+        assert!(
+            items
+                .iter()
+                .all(|i| !i.text_fr.is_empty() || !i.text_nl.is_empty())
+        );
 
         let answers = oral_written_answer_drafts(
             &items,
@@ -271,6 +287,10 @@ mod tests {
             "sessions/56/meetings/commission/56-407.html",
         );
         assert_eq!(answers.len(), 5);
-        assert!(answers.iter().all(|a| !a.text_fr.is_empty() || !a.text_nl.is_empty()));
+        assert!(
+            answers
+                .iter()
+                .all(|a| !a.text_fr.is_empty() || !a.text_nl.is_empty())
+        );
     }
 }

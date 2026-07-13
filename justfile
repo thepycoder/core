@@ -8,76 +8,76 @@ reparse-scrapers:
     #!/usr/bin/env bash
     set -euo pipefail
     export SCRAPER_CACHE_ONLY=1
-    cargo run --bin sessions
-    cargo run --bin commissions
-    cargo run --bin members
-    cargo run --bin plenary-meetings
-    cargo run --bin commission-meetings
-    cargo run --bin qrva
-    cargo run --bin dossiers
-    cargo run --bin lobby
-    cargo run --bin remunerations
+    cargo run --release --bin sessions
+    cargo run --release --bin commissions
+    cargo run --release --bin members
+    cargo run --release --bin plenary-meetings
+    cargo run --release --bin commission-meetings
+    cargo run --release --bin qrva
+    cargo run --release --bin dossiers
+    cargo run --release --bin lobby
+    cargo run --release --bin remunerations
 
 scrape-sessions:
-    cargo run --bin sessions
+    cargo run --release --bin sessions
 
 scrape-plenary-meetings:
-    cargo run --bin plenary-meetings
+    cargo run --release --bin plenary-meetings
 
 scrape-commission-meetings:
-    cargo run --bin commission-meetings
+    cargo run --release --bin commission-meetings
 
 scrape-qrva:
-    cargo run --bin qrva
+    cargo run --release --bin qrva
 
 scrape-dossiers:
-    cargo run --bin dossiers
+    cargo run --release --bin dossiers
 
 scrape-members:
-    cargo run --bin members
+    cargo run --release --bin members
 
 scrape-lobby:
-    cargo run --bin lobby
+    cargo run --release --bin lobby
 
 scrape-remunerations:
-    cargo run --bin remunerations
+    cargo run --release --bin remunerations
 
 scrape-commissions:
-    cargo run --bin commissions
+    cargo run --release --bin commissions
 
 build-identity:
-    cargo run --bin identity
-    cargo run --bin external-identity
+    cargo run --release --bin identity
+    cargo run --release --bin external-identity
 
 normalize-edges:
-    cargo run --bin normalize
+    cargo run --release --bin normalize
 
 build-graph:
-    cargo run --bin graph
+    cargo run --release --bin graph
 
 qa:
-    cargo run --bin qa
+    cargo run --release --bin qa
 
 qa-strict:
-    cargo run --bin qa -- --strict
+    cargo run --release --bin qa -- --strict
 
 qa-update-baseline:
-    cargo run --bin qa -- --update-baseline
+    cargo run --release --bin qa -- --update-baseline
 
 qa-triage *ARGS:
     cd tools/qa-triage && uv sync && uv run python -m qa_triage {{ARGS}}
 
 enrich-external-persons:
-    cargo run --bin external-person-enricher
+    cargo run --release --bin external-person-enricher
 
 summarize-text:
-    cargo run --bin text-summarizer
+    cargo run --release --bin text-summarizer
 
 summarize-dossiers:
-    cargo run --bin dossier-summarizer
+    cargo run --release --bin dossier-summarizer
 
 generate-dossier-markdown:
     python3 summarizers/dossier-pdf-to-markdown/main.py
 
 summarize-pdf-rust:
-    cargo run --bin pdf_extractor
+    cargo run --release --bin pdf_extractor

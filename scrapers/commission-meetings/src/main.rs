@@ -4,12 +4,13 @@ use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
-    classify_question_heading_bilingual, classify_question_heading_text, extract_agenda_number,
-    extract_proceedings_from_document, extract_utterances_from_document, extract_written_oral_items,
-    has_pending_question_text, looks_like_fr_heading, oral_written_answer_drafts, parse_report_blocks, read_report_html,
-    is_non_question_proceeding_heading, write_answers_parquet, write_hearings_parquet,
-    write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
-    InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
+    AnswerDraft, HearingDraft, InterpellationDraft, MeetingKind, QuestionHeadingRole,
+    UtteranceDraft, classify_question_heading_bilingual, classify_question_heading_text,
+    extract_agenda_number, extract_proceedings_from_document, extract_utterances_from_document,
+    extract_written_oral_items, has_pending_question_text, is_non_question_proceeding_heading,
+    looks_like_fr_heading, oral_written_answer_drafts, parse_report_blocks, read_report_html,
+    write_answers_parquet, write_hearings_parquet, write_interpellations_parquet,
+    write_utterances_parquet,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -123,8 +124,7 @@ struct MeetingGap {
 }
 
 fn record_gap(gaps: &mut std::collections::BTreeMap<u32, MeetingGap>, gap: MeetingGap) {
-    gaps.entry(gap.meeting_id)
-        .or_insert(gap);
+    gaps.entry(gap.meeting_id).or_insert(gap);
 }
 
 /// Scan forward from `start_id`, treating `exists(probe_id)` as whether the report is online.
@@ -365,9 +365,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut web_request_count = 0u32;
     let mut gaps = std::collections::BTreeMap::new();
 
-    eprintln!(
-        "[meetings-commission] fetching new reports after meeting {current_meeting_id}…"
-    );
+    eprintln!("[meetings-commission] fetching new reports after meeting {current_meeting_id}…");
     let last_meeting_id = if cache_only() {
         max_cached_meeting_id(session_id, "commission").unwrap_or(current_meeting_id)
     } else {
@@ -382,9 +380,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     if cache_only() {
-        println!(
-            "[meetings-commission] cache-only: parsing meetings 1..={last_meeting_id}"
-        );
+        println!("[meetings-commission] cache-only: parsing meetings 1..={last_meeting_id}");
     } else if last_meeting_id == current_meeting_id {
         println!("[meetings-commission] no new meeting available to download");
     } else {
@@ -596,21 +592,10 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
 
     let blocks = parse_report_blocks(&document);
 
-    let mut questions = extract_questions(
-        &document,
-        session_id,
-        meeting_id,
-        &url,
-        &cache_path,
-    )?;
+    let mut questions = extract_questions(&document, session_id, meeting_id, &url, &cache_path)?;
 
-    let oral_written_items = extract_written_oral_items(
-        &document,
-        &blocks,
-        MeetingKind::Commission,
-        session_id,
-        meeting_id,
-    );
+    let oral_written_items =
+        extract_written_oral_items(&blocks, MeetingKind::Commission, session_id, meeting_id);
 
     for item in &oral_written_items {
         if let Some(q) = questions
@@ -755,7 +740,8 @@ fn extract_questions(
             }
 
             if found_nl.is_none() && found_fr.is_none() {
-                let full = clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+                let full =
+                    clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
                 if !full.is_empty() {
                     found_nl = Some(full);
                 }
@@ -795,10 +781,8 @@ fn extract_questions(
                 }
             }
 
-            let heading_role = classify_question_heading_bilingual(
-                found_nl.as_deref(),
-                found_fr.as_deref(),
-            );
+            let heading_role =
+                classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref());
 
             if heading_role == QuestionHeadingRole::Hearing || is_non_question_proceeding {
                 if has_pending_question_text(&previous_nl, &previous_fr) {
@@ -915,9 +899,8 @@ fn normalize_questioner_name(raw: &str) -> Option<String> {
     }
 
     static QUESTION_PREFIX: OnceLock<Regex> = OnceLock::new();
-    let prefix = QUESTION_PREFIX.get_or_init(|| {
-        Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap()
-    });
+    let prefix =
+        QUESTION_PREFIX.get_or_init(|| Regex::new(r"(?i)^(?:vraag van|question de)\s+").unwrap());
     name = prefix.replace(&name, "").trim().to_string();
     if name.is_empty() {
         return None;

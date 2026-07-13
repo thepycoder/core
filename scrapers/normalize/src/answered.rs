@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::utils::ensure_question_id;
@@ -41,7 +39,10 @@ pub fn normalize_answered(
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
 
     for (meeting_kind, rel_path) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/questions.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/questions.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/questions.parquet"),
@@ -57,20 +58,14 @@ pub fn normalize_answered(
             let cache_paths = read_string_column(&batch, "cache_path")?;
 
             for i in 0..batch.num_rows() {
-                let question_id = ensure_question_id(
-                    &session_ids[i],
-                    meeting_kind,
-                    &question_ids[i],
-                );
+                let question_id =
+                    ensure_question_id(&session_ids[i], meeting_kind, &question_ids[i]);
                 for name in split_csv(&respondents[i]) {
                     let detail = actor_resolver.resolve_actor_detail(&name, Bucket::Respondent);
                     match detail.resolution {
                         ActorResolution::Person(entity_id) => {
-                            let key = (
-                                "Person".to_string(),
-                                entity_id.clone(),
-                                question_id.clone(),
-                            );
+                            let key =
+                                ("Person".to_string(), entity_id.clone(), question_id.clone());
                             if seen.insert(key) {
                                 rows.push(AnsweredRow {
                                     answered_id: format!("{question_id}_{entity_id}"),
@@ -123,6 +118,7 @@ pub fn normalize_answered(
                                 raw_field: name,
                                 source_url: source_urls[i].clone(),
                                 cache_path: cache_paths[i].clone(),
+                                ..UnresolvedRow::default()
                             });
                         }
                     }
@@ -131,7 +127,11 @@ pub fn normalize_answered(
         }
     }
 
-    rows.sort_by(|a, b| a.question_id.cmp(&b.question_id).then(a.entity_id.cmp(&b.entity_id)));
+    rows.sort_by(|a, b| {
+        a.question_id
+            .cmp(&b.question_id)
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
     dedupe_unresolved(&mut unresolved);
     Ok(AnsweredOutput { rows, unresolved })
 }

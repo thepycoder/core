@@ -1,6 +1,4 @@
-use crate::common::{
-    dedupe_unresolved, reason_label, UnresolvedRow, SESSION_ID,
-};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::{ActorResolution, ActorResolver};
@@ -51,8 +49,7 @@ fn skip_speaker(raw: &str, speaker_role: &str) -> bool {
     if lower.is_empty() || lower == "onbekend" || lower == "n ." {
         return true;
     }
-    speaker_role == "chair"
-        && matches!(lower.as_str(), "voorzitter" | "président" | "president")
+    speaker_role == "chair" && matches!(lower.as_str(), "voorzitter" | "président" | "president")
 }
 
 pub fn normalize_utterances(
@@ -63,7 +60,10 @@ pub fn normalize_utterances(
     let mut unresolved = Vec::new();
 
     for (meeting_kind, rel_path) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/utterances.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/utterances.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/utterances.parquet"),
@@ -104,8 +104,7 @@ pub fn normalize_utterances(
                     if skip_speaker(&speaker, &role) {
                         (String::new(), String::new(), String::new(), String::new())
                     } else {
-                        let detail =
-                            actor_resolver.resolve_actor_detail(&speaker, Bucket::Speaker);
+                        let detail = actor_resolver.resolve_actor_detail(&speaker, Bucket::Speaker);
                         match detail.resolution {
                             ActorResolution::Person(person_id) => (
                                 person_id.clone(),
@@ -133,6 +132,7 @@ pub fn normalize_utterances(
                                     raw_field: speaker.clone(),
                                     source_url: source_urls[i].clone(),
                                     cache_path: cache_paths[i].clone(),
+                                    ..UnresolvedRow::default()
                                 });
                                 (String::new(), String::new(), String::new(), String::new())
                             }

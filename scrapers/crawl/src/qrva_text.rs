@@ -13,10 +13,7 @@ fn aut_actr_regex() -> &'static Regex {
 
 fn oral_ref_regex() -> &'static Regex {
     ORAL_REF.get_or_init(|| {
-        Regex::new(
-            r"(?i)(?:\b(?:Q|MV|QO)\s*(\d{6,8}[A-Za-z])|\(Q(\d{6,8}[A-Za-z])\))",
-        )
-        .unwrap()
+        Regex::new(r"(?i)(?:\b(?:Q|MV|QO)\s*(\d{6,8}[A-Za-z])|\(Q(\d{6,8}[A-Za-z])\))").unwrap()
     })
 }
 
@@ -150,11 +147,11 @@ mod tests {
 
     #[test]
     fn written_ids_are_stable() {
-        assert_eq!(written_question_id(56, "2025202606531"), "56_written_2025202606531");
-        assert_eq!(route_id(56, 316583), "56_qrva_316583");
         assert_eq!(
-            qrva_answer_id("56_qrva_316583", 1),
-            "56_qrva_316583_a1"
+            written_question_id(56, "2025202606531"),
+            "56_written_2025202606531"
         );
+        assert_eq!(route_id(56, 316583), "56_qrva_316583");
+        assert_eq!(qrva_answer_id("56_qrva_316583", 1), "56_qrva_316583_a1");
     }
 }

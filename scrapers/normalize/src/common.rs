@@ -1,5 +1,5 @@
-use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::Schema;
+use arrow::array::{ArrayRef, Float64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use identity::parquet_io::{read_all_rows, utf8_field, write_parquet};
 use identity::resolver::{Resolution, UnresolvedReason};
 use std::collections::HashSet;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub const SESSION_ID: &str = "56";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UnresolvedRow {
     pub raw_name: String,
     pub typo_corrected: String,
@@ -23,6 +23,11 @@ pub struct UnresolvedRow {
     pub raw_field: String,
     pub source_url: String,
     pub cache_path: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 pub fn split_csv(raw: &str) -> Vec<String> {
@@ -52,10 +57,7 @@ pub fn person_id_from(resolution: &Resolution) -> Option<String> {
     }
 }
 
-pub fn write_unresolved_persons(
-    path: &Path,
-    rows: &[UnresolvedRow],
-) -> Result<(), Box<dyn Error>> {
+pub fn write_unresolved_persons(path: &Path, rows: &[UnresolvedRow]) -> Result<(), Box<dyn Error>> {
     let schema = Schema::new(vec![
         utf8_field("raw_name", false),
         utf8_field("typo_corrected", false),
@@ -69,6 +71,11 @@ pub fn write_unresolved_persons(
         utf8_field("raw_field", false),
         utf8_field("source_url", false),
         utf8_field("cache_path", false),
+        utf8_field("source_artifact_id", false),
+        utf8_field("source_content_hash", false),
+        utf8_field("block_parser_version", false),
+        utf8_field("extractor_version", false),
+        Field::new("confidence", DataType::Float64, false),
     ]);
 
     macro_rules! col {
@@ -90,6 +97,13 @@ pub fn write_unresolved_persons(
         col!(|r| r.raw_field.clone()),
         col!(|r| r.source_url.clone()),
         col!(|r| r.cache_path.clone()),
+        col!(|r| r.source_artifact_id.clone()),
+        col!(|r| r.source_content_hash.clone()),
+        col!(|r| r.block_parser_version.clone()),
+        col!(|r| r.extractor_version.clone()),
+        Arc::new(Float64Array::from(
+            rows.iter().map(|r| r.confidence).collect::<Vec<_>>(),
+        )) as ArrayRef,
     ];
 
     write_parquet(path, schema, columns)
@@ -115,7 +129,9 @@ pub fn dedupe_unresolved(rows: &mut Vec<UnresolvedRow>) {
 
 /// Verify staging schemas match STAGING.md (regeneration check for Step 0).
 pub fn verify_staging(data_dir: &Path) -> Result<(), Box<dyn Error>> {
-    let commission_questions = data_dir.join(format!("sessions/{SESSION_ID}/commission/questions.parquet"));
+    let commission_questions = data_dir.join(format!(
+        "sessions/{SESSION_ID}/commission/questions.parquet"
+    ));
     let batch = read_all_rows(&commission_questions)?
         .into_iter()
         .next()
@@ -138,7 +154,10 @@ pub fn verify_staging(data_dir: &Path) -> Result<(), Box<dyn Error>> {
     }
 
     for (_kind, rel) in [
-        ("plenary", format!("sessions/{SESSION_ID}/plenary/utterances.parquet")),
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/utterances.parquet"),
+        ),
         (
             "commission",
             format!("sessions/{SESSION_ID}/commission/utterances.parquet"),

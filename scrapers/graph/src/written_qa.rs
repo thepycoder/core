@@ -1,4 +1,4 @@
-use crate::build::{register_artifact_edge, EdgeRow};
+use crate::build::{EdgeRow, register_artifact_edge};
 use identity::parquet_io::{read_all_rows, read_string_column};
 use std::collections::HashMap;
 use std::error::Error;
@@ -92,7 +92,9 @@ pub fn load_written_qa_edges(
     Ok(())
 }
 
-fn load_merged_written_ids(data_dir: &Path) -> Result<std::collections::HashSet<String>, Box<dyn Error>> {
+fn load_merged_written_ids(
+    data_dir: &Path,
+) -> Result<std::collections::HashSet<String>, Box<dyn Error>> {
     let mut merged = std::collections::HashSet::new();
     let path = data_dir.join("normalized/oral_written_links.parquet");
     if !path.exists() {

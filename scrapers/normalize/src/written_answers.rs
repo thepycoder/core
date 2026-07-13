@@ -1,4 +1,4 @@
-use crate::common::{dedupe_unresolved, reason_label, split_csv, UnresolvedRow, SESSION_ID};
+use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::{ActorResolution, ActorResolver};
@@ -137,8 +137,7 @@ pub fn normalize_written_answers(
                     }
                 } else {
                     for name in respondents {
-                        let detail =
-                            actor_resolver.resolve_actor_detail(&name, Bucket::Respondent);
+                        let detail = actor_resolver.resolve_actor_detail(&name, Bucket::Respondent);
                         match detail.resolution {
                             ActorResolution::Person(entity_id) => {
                                 let entity_type = "Person";
@@ -188,6 +187,7 @@ pub fn normalize_written_answers(
                                     raw_field: name,
                                     source_url: source_urls[i].clone(),
                                     cache_path: cache_paths[i].clone(),
+                                    ..UnresolvedRow::default()
                                 });
                             }
                         }
@@ -198,7 +198,11 @@ pub fn normalize_written_answers(
     }
 
     answers.sort_by(|a, b| a.answer_id.cmp(&b.answer_id));
-    answered_by.sort_by(|a, b| a.answer_id.cmp(&b.answer_id).then(a.entity_id.cmp(&b.entity_id)));
+    answered_by.sort_by(|a, b| {
+        a.answer_id
+            .cmp(&b.answer_id)
+            .then(a.entity_id.cmp(&b.entity_id))
+    });
     dedupe_unresolved(&mut unresolved);
     Ok(WrittenAnswersOutput {
         answers,
