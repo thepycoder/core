@@ -358,8 +358,11 @@ fn semantic_spans(
         }
         let entity_type = match item.item_kind {
             crate::agenda_timeline::ItemKind::Question => "Question",
-            crate::agenda_timeline::ItemKind::Hearing => "Hearing",
-            crate::agenda_timeline::ItemKind::Interpellation => "Interpellation",
+            // Hearings and interpellations become their own entities only after the
+            // dedicated parser can materialize them. Until then this is merely an
+            // agenda heading and must not claim provenance for a missing entity.
+            crate::agenda_timeline::ItemKind::Hearing
+            | crate::agenda_timeline::ItemKind::Interpellation => "AgendaItem",
             crate::agenda_timeline::ItemKind::Proposition => "Proposition",
             crate::agenda_timeline::ItemKind::Notice => "Notice",
             _ => "AgendaItem",
@@ -909,6 +912,10 @@ mod tests {
                     && span.coverage_kind == "scope"
             }));
         }
+        assert!(parsed.source_spans.iter().all(|span| {
+            !(matches!(span.entity_type.as_str(), "Hearing" | "Interpellation")
+                && span.span_role == "entity_title")
+        }));
     }
 
     #[test]

@@ -56,8 +56,8 @@ const NODES: NodeDef[] = [
   { id: "Motion", label: "Motion", domain: "proceedings", status: "planned", idKey: "motion id + context", note: "Referenced in vote parsing, not modelled" },
   { id: "Hearing", label: "Hearing", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Commission hoorzitting/audition; hearings.parquet" },
   { id: "Interpellation", label: "Interpellation", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Plenary Interpellatie van; internal_ids …I" },
-  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "1,640 nodes; FLWB browse + plenary refs" },
-  { id: "Document", label: "Document", domain: "legislative", status: "scraped", idKey: "FLWB doc id", note: "Metadata scraped; body via PDF pipeline" },
+  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "1,647 nodes; FLWB browse + plenary refs" },
+  { id: "Document", label: "Document", domain: "legislative", status: "scraped", idKey: "FLWB doc id", note: "4,151 metadata rows, including primary /001; body via PDF pipeline" },
   { id: "Amendment", label: "Amendment", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "Subdocument typed AMENDEMENT" },
   { id: "Report", label: "Report", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "VERSLAG subdocuments; PDF-heavy" },
   { id: "Topic", label: "Topic", domain: "legislative", status: "partial", idKey: "Eurovoc id + label", note: "On dossiers; utterance tagging future" },
@@ -108,7 +108,7 @@ const EDGES: EdgeDef[] = [
   { type: "ANSWERED", from: "Person", to: "Question", status: "working", note: "Legacy header respondents (oral)" },
   { type: "ABOUT", from: "Question", to: "Topic", status: "planned", note: "Free text; summarizer exists" },
   { type: "LINKED_TO", from: "Question", to: "Dossier", status: "partial", note: "Commission questions carry dossier ids" },
-  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "6,798 via ActorResolver" },
+  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "14,039 via ActorResolver" },
   { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Regex from proposition/vote titles" },
   { type: "DISCUSSED_IN", from: "Dossier", to: "Meeting", status: "planned", note: "Dossier fiche calendar not ingested" },
   { type: "HAS_RESULT", from: "Vote", to: "VoteResult", status: "working", note: "votes.result_id → reusable evidence" },
@@ -118,7 +118,7 @@ const EDGES: EdgeDef[] = [
   { type: "CAST", from: "Person", to: "VoteResult", status: "working", note: "Named roll-call only; shared across reused results" },
   { type: "TAGGED_WITH", from: "Dossier", to: "Topic", status: "working", note: "Eurovoc on dossier fiche" },
   { type: "TAGGED_WITH", from: "Utterance", to: "Topic", status: "planned", note: "NLP / intervention analysis" },
-  { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "FLWB hierarchy" },
+  { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "4,151 source-linked FLWB documents" },
   { type: "DECLARES_INTEREST", from: "Person", to: "LobbyOrg", status: "planned", note: "Lobby register not linked" },
   { type: "EARNED", from: "Person", to: "Remuneration", status: "scraped", note: "Name match only" },
   { type: "RECORDED_IN", from: "Meeting", to: "MediaRecording", status: "planned", note: "Not scraped" },
@@ -509,8 +509,8 @@ export default function DataGraphOverview() {
       <Grid columns={4} gap={12}>
         <Stat label="Node types" value={String(NODES.length)} tone="info" />
         <Stat label="Edge types" value={String(EDGES.length)} tone="info" />
-        <Stat label="Graph nodes (built)" value="78,291" tone="success" />
-        <Stat label="Graph edges (built)" value="354,223" tone="success" />
+        <Stat label="Graph nodes (built)" value="81,448" tone="success" />
+        <Stat label="Graph edges (built)" value="371,715" tone="success" />
       </Grid>
 
       <Card>

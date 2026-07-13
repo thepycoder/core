@@ -7,7 +7,7 @@ use crate::vote_events::{
 };
 use crate::vote_patterns::{
     VoteSectionKind, candidate_tally_re, dossier_ref_re, formal_outcome, formal_vote_begin_re,
-    is_sitting_standing_proposal, is_numbered_agenda_heading, paragraph_vote_title,
+    is_numbered_agenda_heading, is_sitting_standing_proposal, paragraph_vote_title,
     parse_paragraph_vote_number, parse_participation, quorum_failure_re, reuse_result_re,
     scan_formal_outcome_after, scan_reuse_marker, sitting_standing_outcome_re,
     votes_section_heading,
@@ -382,8 +382,8 @@ pub fn assemble_votes_from_blocks(
 
         if block.tag == BlockTag::Table {
             // Meeting 97 ip097x: compact roll-call table after a second secret-ballot block.
-            let roll_call_in_secret_zone = section == VoteSectionKind::SecretBallot
-                && parse_roll_call_table(block).is_some();
+            let roll_call_in_secret_zone =
+                section == VoteSectionKind::SecretBallot && parse_roll_call_table(block).is_some();
             if section == VoteSectionKind::SecretBallot && !roll_call_in_secret_zone {
                 let secret = parse_secret_ballot_table(block);
                 if secret.voters.is_some() || secret.valid.is_some() {
@@ -455,9 +455,8 @@ pub fn assemble_votes_from_blocks(
                 continue;
             }
 
-            let in_roll_call_zone = section == VoteSectionKind::RollCall
-                || formal_zone
-                || roll_call_in_secret_zone;
+            let in_roll_call_zone =
+                section == VoteSectionKind::RollCall || formal_zone || roll_call_in_secret_zone;
             if !in_roll_call_zone {
                 continue;
             }
@@ -630,7 +629,32 @@ pub fn assemble_votes_from_blocks(
         }
     }
 
+    discard_untitled_decisions(&mut out, session_id, meeting_id);
     out
+}
+
+fn discard_untitled_decisions(out: &mut VoteAssemblyOutput, session_id: u32, meeting_id: u32) {
+    let mut retained_ids = HashMap::new();
+    let mut retained = Vec::new();
+    for mut decision in std::mem::take(&mut out.decisions) {
+        if decision.title_nl.trim().is_empty() && decision.title_fr.trim().is_empty() {
+            continue;
+        }
+        let previous_id = decision.vote_id.clone();
+        decision.seq = retained.len() as u32 + 1;
+        decision.vote_id = composite_vote_id(session_id, meeting_id, decision.seq);
+        retained_ids.insert(previous_id, decision.vote_id.clone());
+        retained.push(decision);
+    }
+    out.decisions = retained;
+
+    out.span_evidence
+        .retain(|span| span.entity_type != "Vote" || retained_ids.contains_key(&span.entity_id));
+    for span in &mut out.span_evidence {
+        if span.entity_type == "Vote" {
+            span.entity_id = retained_ids[&span.entity_id].clone();
+        }
+    }
 }
 
 fn push_span(
@@ -1069,6 +1093,100 @@ mod tests {
     }
 
     #[test]
+    fn untitled_decisions_are_removed_without_removing_result_evidence() {
+        let mut out = VoteAssemblyOutput {
+            decisions: vec![
+                VoteDecisionDraft {
+                    vote_id: "56-60-v1".to_string(),
+                    result_id: "56-60-r1".to_string(),
+                    session_id: 56,
+                    meeting_id: 60,
+                    date: "2020-01-01".to_string(),
+                    seq: 1,
+                    title_nl: String::new(),
+                    title_fr: String::new(),
+                    method: "roll_call".to_string(),
+                    status: "complete".to_string(),
+                    outcome: "adopted".to_string(),
+                    dossier_id: String::new(),
+                    document_id: String::new(),
+                    motion_id: String::new(),
+                    source_roll_call_number: "1".to_string(),
+                    reuses_result: false,
+                    source_url: "url".to_string(),
+                    cache_path: "cache".to_string(),
+                },
+                VoteDecisionDraft {
+                    vote_id: "56-60-v2".to_string(),
+                    result_id: "56-60-r2".to_string(),
+                    session_id: 56,
+                    meeting_id: 60,
+                    date: "2020-01-01".to_string(),
+                    seq: 2,
+                    title_nl: "A titled decision".to_string(),
+                    title_fr: String::new(),
+                    method: "roll_call".to_string(),
+                    status: "complete".to_string(),
+                    outcome: "adopted".to_string(),
+                    dossier_id: String::new(),
+                    document_id: String::new(),
+                    motion_id: String::new(),
+                    source_roll_call_number: "2".to_string(),
+                    reuses_result: false,
+                    source_url: "url".to_string(),
+                    cache_path: "cache".to_string(),
+                },
+            ],
+            span_evidence: vec![
+                SpanEvidence {
+                    entity_type: "Vote".to_string(),
+                    entity_id: "56-60-v1".to_string(),
+                    span_role: "decision_title".to_string(),
+                    block_start: 1,
+                    block_end: 2,
+                    coverage_kind: "extraction".to_string(),
+                    field_names: "title_nl".to_string(),
+                },
+                SpanEvidence {
+                    entity_type: "Vote".to_string(),
+                    entity_id: "56-60-v2".to_string(),
+                    span_role: "decision_title".to_string(),
+                    block_start: 3,
+                    block_end: 4,
+                    coverage_kind: "extraction".to_string(),
+                    field_names: "title_nl".to_string(),
+                },
+                SpanEvidence {
+                    entity_type: "VoteResult".to_string(),
+                    entity_id: "56-60-r1".to_string(),
+                    span_role: "result_table".to_string(),
+                    block_start: 1,
+                    block_end: 2,
+                    coverage_kind: "extraction".to_string(),
+                    field_names: "yes,no".to_string(),
+                },
+            ],
+            ..VoteAssemblyOutput::default()
+        };
+
+        discard_untitled_decisions(&mut out, 56, 60);
+
+        assert_eq!(out.decisions.len(), 1);
+        assert_eq!(out.decisions[0].vote_id, "56-60-v1");
+        assert_eq!(out.decisions[0].seq, 1);
+        assert!(
+            out.span_evidence
+                .iter()
+                .all(|span| { span.entity_type != "Vote" || span.entity_id == "56-60-v1" })
+        );
+        assert!(
+            out.span_evidence
+                .iter()
+                .any(|span| { span.entity_type == "VoteResult" && span.entity_id == "56-60-r1" })
+        );
+    }
+
+    #[test]
     fn fixture_result_reuse() {
         let out = assemble("result_reuse.html");
         assert_eq!(out.decisions.len(), 2);
@@ -1135,7 +1253,8 @@ mod tests {
     #[test]
     fn fixture_appendix_reverse_order() {
         let out = assemble("appendix_reverse_order.html");
-        assert_eq!(out.decisions.len(), 1);
+        assert!(out.decisions.is_empty());
+        assert_eq!(out.results.len(), 1);
         assert!(!out.members.is_empty());
     }
 

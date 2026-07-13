@@ -76,8 +76,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 continue;
             };
-            let cache_path =
-                relative_cache_path(&detail_dir.join(sanitize_filename(&name)), &cache_root);
+            let cache_file = detail_dir.join(sanitize_filename(&name));
+            fs::write(&cache_file, &buf)?;
+            let cache_path = relative_cache_path(&cache_file, &cache_root);
             for item in items {
                 records.push((item, cache_path.clone()));
             }

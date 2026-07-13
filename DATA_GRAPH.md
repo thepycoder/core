@@ -28,8 +28,8 @@ Decisions for anyone (human or LLM) extending this repo:
 | **Utterance**                | `{session}_{kind}_{meeting}_{agenda}_{turn}` + `seq`            | Integraal verslag (plenary + commission); staging `utterances.parquet` (42 887 rows)                                                                                  | Full-session extraction: `question`, `general_debate`, `proposition`, `hearing`, `vote`, `notice`. 2 576 rows without `SPOKE` (chairs skipped, unresolved speakers). |
 | **Question**                 | `{session}_{kind}_{meeting}_{seq}` (oral); `56_written_{DOCNAME}` (QRVA) (+ site ref in `internal_ids`) | Oral: meeting reports; written: QRVA API + inline oral-written sections                                                                                                                 | Oral scraped. Written QRVA + inline oral-written answers staged. Exact oral refs merge routes onto existing oral Question. |
 | **Answer**                   | `56_qrva_{route}_a{slot}` or `{question_id}_a1` (inline)                                              | QRVA API answer slots; integraal `Antwoord - Réponse:` blocks                                                                                      | Normalized Answer nodes with `HAS_ANSWER` / `ANSWERED_BY` edges. Legacy header `ANSWERED` → Question unchanged.                                                       |
-| **Dossier**                  | `{session_id}/{number}`                                         | [flwbn.cfm](https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm) and static `/flwb/html/{session}/N/{doc}.html` pages | Scraped via plenary refs plus full FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`).    |
-| **Document**                 | FLWB doc id (`56K1280004`)                                      | Dossier subdocuments (PDF/HTML)                                                                                                                                       | Already scraped (metadata). Body text via PDF→markdown pipeline.                                                          |
+| **Dossier**                  | `{session_id}/{number}`                                         | [flwbn.cfm](https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm) and static `/flwb/html/{session}/N/{doc}.html` pages | 1,647 scraped via plenary refs plus full FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`).    |
+| **Document**                 | FLWB doc id (`56K1280004`)                                      | Dossier subdocuments (PDF/HTML)                                                                                                                                       | 4,151 metadata rows, including each dossier's top-level `/001`; body text via PDF→markdown pipeline.                                                          |
 | **Amendment**                | document id + dossier                                           | Dossier subdocuments typed `AMENDEMENT`                                                                                                                               | Same as Document; authors are structured on site.                                                                         |
 | **Report**                   | document id + dossier                                           | Subdocuments typed `VERSLAG`; commission integraal                                                                                                                    | PDF-heavy; rapporteur named on dossier page, speech inside PDF.                                                           |
 | **Motion**                   | motion id + meeting/dossier context                             | Motions database; vote titles                                                                                                                                         | Referenced by vote parsing today but not modelled as a node.                                                              |
@@ -116,19 +116,19 @@ Decisions for anyone (human or LLM) extending this repo:
 
 ## Implementation state
 
-Verified against branch `stage-viz` on 2026-07-07. Counts below are from the last full pipeline run (`just update`, 2026-07-07).
+Verified against the current workspace on 2026-07-13. Counts below are from the last cache-backed full pipeline run (`build-identity` → `normalize-edges` → `build-graph`).
 
 ### Pipeline (Steps 0–3)
 
 - **Stage 0 contract (partially done):** `STAGING.md` documents every current Parquet schema and ID conventions. Major scrapers now emit `source_url` + `cache_path` on staging rows. Question ids include meeting kind (`{session}_{plenary\|commission}_{meeting}_{seq}`) via `composite_scoped_id`, with `ensure_question_id` upgrading legacy rows at normalize/graph time; site-native refs stay in `internal_ids`. Still open: commission `meeting_id` vs `commission_id` rename, vote ids still meeting-scoped composites (not site-native), idempotent per-meeting incremental scraping.
 - **Stage 0 QA (superseded):** `just qa` now regenerates `data/qa/checks.parquet` and `summary.md` from detail rows. Stale Jul-1 artifacts replaced.
 - **Step 1 identity (working):** `just build-identity` runs `identity` + `external-identity`. Writes `persons.parquet`, `parties.parquet`, `person_aliases.parquet`, `commissions.parquet`, `memberships.parquet`, `external_persons.parquet` (57), `external_person_aliases.parquet` (129), `external_person_contexts.parquet`, `unresolved_persons.parquet`, and `unresolved_report.md`. Last run: 175 persons, 13 parties, 1 302 memberships, 21 unresolved commission-member occurrences (placeholder `N .` only).
-- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (196 059 vote casts, 6 790 authored, 11 765 asked, 7 291 answered, 29 interpellated, 24 interpellation responded, 414 holds_role, 43 431 utterances; 4 997 unresolved names). Six vote reconciliation mismatches remain.
+- **Step 2 normalize (working):** `just normalize-edges` routes all person-bearing edges through `Resolver` or `ActorResolver` into `data/normalized/*.parquet` (164 035 vote casts, 14 039 authored, 8 833 asked, 7 451 answered, 182 interpellated, 157 interpellation responded, 414 holds_role, 43 431 utterances; 5 086 unresolved names). Six vote reconciliation mismatches remain.
 - **Step 3 graph (working):** `just build-graph` writes graph Parquet with `Vote` decision nodes, `VoteResult` evidence nodes, `HAS_RESULT` (Vote→VoteResult), and `CAST` (Person→VoteResult). Provenance spans live in `data/derived/sessions/{session}/plenary/source_spans.parquet`; derived blocks in `report_blocks.parquet`.
 
 ### Branch additions since 2026-07-01
 
-- **Dossier discovery (Step 4, done):** `just scrape-dossiers` unions plenary-derived ids with FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`). Graph now has 1 640 Dossier nodes.
+- **Dossier discovery (Step 4, done):** `just scrape-dossiers` unions plenary-derived ids with FLWB browse (`ListDocument.cfm` → `ListFromTo.cfm`). Graph now has 1 647 Dossier nodes and 4 151 source-linked Document nodes, including primary `/001` documents.
 - **Full-session utterances (Step 4, done):** `crawl` report-block stream + agenda timeline + speaker segmentation writes staging `utterances.parquet` for plenary and commission (43 431 rows). Normalized and graphed as Utterance nodes with `SPOKE` / `PART_OF`.
 - **Hearings & interpellations (Step 4, done):** shared `proceeding_entities` in `crawl`; staging `hearings.parquet` + `interpellations.parquet`; normalize `INTERPELLED` / `RESPONDED` / `INVITED`; graph Hearing + Interpellation nodes with utterance `PART_OF` links.
 - **External identity + ActorResolver (Step 1–2, done):** `external-identity` scans staging for non-MP actors; `ActorResolver` routes speakers, authors, and respondents to Person or ExternalPerson. `ANSWERED` edges wired (7 185). Optional `enrich-external-persons` adds LLM bios.
@@ -223,7 +223,7 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
 
-- ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done (2026-07-06):** 1 640 Dossier nodes in graph.
+- ~~Full FLWB dossier discovery from the browse/full-text databank, not only ids seen in plenary refs.~~ **Done (2026-07-06):** 1 647 Dossier nodes and 4 151 Document nodes in graph.
 - ~~Full-session utterance extraction from integraal verslagen.~~ **Done (2026-07-07):** staging + normalized `utterances.parquet` (42 887 rows); graph Utterance nodes with `SPOKE`/`PART_OF`.
 - Written Q&A from the QRVA bulletins (`/QRVA/pdf/{session}/…`) / search database.
 - `Motion`, `Interpellation`, `Hearing`, and procedural `Notice` handling (Motion node; INQO enrichment; optional commission procedural adoption tagging from prose).
@@ -262,4 +262,3 @@ Graph-viewer report mode overlays spans on blocks and surfaces stale/wrong-artif
 - Every edge carries `source_url`, `scraped_at`, and `confidence` (exact parse vs inferred vs NLP).
 - `Person` resolution goes through `person_alias` before any `SPOKE` / `CAST` / `AUTHORED` edge is committed.
 - Prefer site-native ids (FLWB doc id, question id, cvview key) over generated hashes.
-

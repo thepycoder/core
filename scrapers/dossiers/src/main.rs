@@ -885,6 +885,19 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
         }
     }
 
+    // The initial `/001` document is rendered as a top-level `Document Kamer`
+    // row, while later documents live in the nested `Subdocumenten` table.
+    // Example: dossier 62, https://www.dekamer.be/FLWB/PDF/56/0062/56K0062001.pdf.
+    // Keep the primary document first so the source order remains `/001`, `/002`, ….
+    if let Some(primary_document) = parse_primary_document(dossier_id, &document_table) {
+        if !subdocuments
+            .iter()
+            .any(|subdocument| subdocument.id == primary_document.id)
+        {
+            subdocuments.insert(0, primary_document);
+        }
+    }
+
     Ok(Dossier {
         title,
         authors: dossier_authors,
@@ -897,6 +910,102 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
         eurovoc_main_descriptor,
         eurovoc_descriptors,
     })
+}
+
+/// Parse the primary `/001` document from the top-level dossier table.
+///
+/// dekamer.be separates it from the nested `Subdocumenten` table used for
+/// subsequent documents. We only accept a PDF whose FLWB id belongs to this
+/// dossier, so linked documents from another dossier are not ingested here.
+fn parse_primary_document(dossier_id: &str, document_table: &ElementRef) -> Option<Subdocument> {
+    let tbody = document_table.select(selector_tbody()).next()?;
+    let expected_prefix = format!("{SESSION_ID:02}K{:0>4}", normalize_dossier_id(dossier_id));
+    let mut document_id = String::new();
+    let mut document_type = DocumentType::Onbekend;
+    let mut document_date = String::new();
+    let mut document_authors = Vec::new();
+    let mut file_url = None;
+    let mut parsing_primary = false;
+
+    for row in document_table.select(selector_tr()) {
+        if row.parent().is_none_or(|parent| parent != *tbody) {
+            continue;
+        }
+
+        let mut columns = row.select(selector_td());
+        let (Some(col_1), Some(col_2)) = (columns.next(), columns.next()) else {
+            continue;
+        };
+        let label = col_1
+            .text()
+            .collect::<String>()
+            .to_lowercase()
+            .trim()
+            .to_string();
+        let value = col_2.text().collect::<String>().trim().to_string();
+
+        if !parsing_primary {
+            let Some(pdf_url) = pdf_url_from_cell(&col_2) else {
+                continue;
+            };
+            let Some(captures) = flwb_document_id_regex().captures(&pdf_url) else {
+                continue;
+            };
+            let source_document_id = captures[1].to_uppercase();
+            if label.contains("document")
+                && !label.contains("gekoppeld")
+                && source_document_id.starts_with(&expected_prefix)
+            {
+                document_id = source_document_id;
+                file_url = Some(pdf_url);
+                parsing_primary = true;
+            }
+            continue;
+        }
+
+        if label.contains("indieningsdatum") && document_date.is_empty() {
+            document_date = normalize_date(&value);
+        } else if label.contains("document type") {
+            document_type = parse_document_type(&value);
+        } else if label.contains("auteur(s)") {
+            document_authors.extend(
+                col_2
+                    .select(selector_a())
+                    .filter_map(|link| link.text().next())
+                    .map(normalize_author),
+            );
+        }
+    }
+
+    // A few valid primary records expose only the PDF (for example dossier
+    // 1506 / 56K1506001) and no separate date row. Retain the document rather
+    // than silently dropping the only source-backed record.
+    if document_id.is_empty() {
+        return None;
+    }
+
+    Some(Subdocument {
+        dossier_id: dossier_id.to_string(),
+        id: document_id,
+        document_type,
+        date: document_date,
+        authors: document_authors,
+        file_url,
+    })
+}
+
+fn pdf_url_from_cell(cell: &ElementRef) -> Option<String> {
+    cell.select(selector_a())
+        .filter_map(|link| link.value().attr("href"))
+        .filter(|href| flwb_document_id_regex().is_match(href))
+        .last()
+        .map(|href| {
+            if href.starts_with("http") {
+                href.to_string()
+            } else {
+                format!("{DEKAMER_BASE}{href}")
+            }
+        })
 }
 
 fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
@@ -971,18 +1080,7 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
                 document_type = parse_document_type(raw_type.trim());
 
                 // Capture the linked document URL.
-                let pdf_url = cell_1
-                    .select(selector_a())
-                    .filter_map(|a| a.value().attr("href"))
-                    .filter(|href| href.ends_with(".pdf"))
-                    .last()
-                    .map(|href| {
-                        if href.starts_with("http") {
-                            href.to_string()
-                        } else {
-                            format!("{}{}", DEKAMER_BASE, href)
-                        }
-                    });
+                let pdf_url = pdf_url_from_cell(&cell_1);
 
                 if pdf_url.is_some() {
                     file_url = pdf_url;
@@ -1232,6 +1330,68 @@ mod tests {
             "56K1243002"
         );
         assert_eq!(canonical_document_id("1243", "2", None), "56K1243002");
+    }
+
+    #[test]
+    fn scrape_dossier_includes_top_level_primary_document() {
+        // Dossier 62 uses this top-level `Document Kamer` layout for /001;
+        // its later documents, if any, are in a separate `Subdocumenten` table.
+        let html = r#"
+            <div id="story"><h4><center>Voorbeeld-dossier</center></h4></div>
+            <table><tbody>
+                <tr>
+                    <td>Document Kamer</td>
+                    <td>
+                        <a href="/FLWB/PDF/56/0062/56K0062001.pdf">56K0062001</a>
+                        <br>WETSVOORSTEL - KAMER
+                    </td>
+                </tr>
+                <tr><td>Indieningsdatum</td><td>22/07/2024</td></tr>
+                <tr><td>Document type</td><td>05 WETSVOORSTEL</td></tr>
+                <tr>
+                    <td>Auteur(s)</td>
+                    <td><a>Nathalie, Muylle</a><a>Els, Van Hoof</a></td>
+                </tr>
+                <tr>
+                    <td>Gekoppeld(e)/verbonden document(en)</td>
+                    <td><a href="/FLWB/PDF/56/0415/56K0415001.pdf">56K0415001</a></td>
+                </tr>
+            </tbody></table>
+        "#;
+
+        let dossier = scrape_dossier("62", &Html::parse_document(html)).expect("scrape dossier");
+        assert_eq!(dossier.subdocuments.len(), 1);
+        let primary = &dossier.subdocuments[0];
+        assert_eq!(primary.id, "56K0062001");
+        assert_eq!(primary.date, "2024-07-22");
+        assert_eq!(primary.document_type.to_string(), "WetsVoorstel");
+        assert_eq!(primary.authors, vec!["Nathalie Muylle", "Els Van Hoof"]);
+        assert_eq!(
+            primary.file_url.as_deref(),
+            Some("https://www.dekamer.be/FLWB/PDF/56/0062/56K0062001.pdf")
+        );
+    }
+
+    #[test]
+    fn scrape_dossier_retains_primary_document_without_metadata_rows() {
+        // Dossier 1506 (56K1506001) has a valid top-level PDF but no
+        // Indieningsdatum row and an empty document-type value.
+        let html = r#"
+            <table><tbody>
+                <tr>
+                    <td>Document Kamer</td>
+                    <td><a href="/FLWB/PDF/56/1506/56K1506001.pdf">56K1506001</a></td>
+                </tr>
+                <tr><td>Document type</td><td>00</td></tr>
+            </tbody></table>
+        "#;
+
+        let dossier = scrape_dossier("1506", &Html::parse_document(html)).expect("scrape dossier");
+        assert_eq!(dossier.subdocuments.len(), 1);
+        let primary = &dossier.subdocuments[0];
+        assert_eq!(primary.id, "56K1506001");
+        assert!(primary.date.is_empty());
+        assert_eq!(primary.document_type.to_string(), "Onbekend");
     }
 
     #[test]

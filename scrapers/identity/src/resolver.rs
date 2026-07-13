@@ -103,11 +103,12 @@ impl Resolver {
             if reversed != name.normalized_full() {
                 register(reversed, &person.person_id);
             }
-            if let Some(digits) = person
+            let digits = person
                 .person_id
                 .strip_prefix('O')
                 .or_else(|| person.person_id.strip_prefix('o'))
-            {
+                .unwrap_or(&person.person_id);
+            if digits.chars().all(|c| c.is_ascii_digit()) {
                 actr_lookup.insert(digits.to_string(), person.person_id.clone());
                 let trimmed = digits.trim_start_matches('0');
                 if !trimmed.is_empty() {
@@ -267,6 +268,24 @@ mod tests {
         assert_eq!(
             resolver.resolve_person("Jambon Jan", Bucket::CommissionMember),
             Resolution::Resolved("O1234".to_string())
+        );
+    }
+
+    #[test]
+    fn resolves_numeric_actr_id_with_or_without_leading_zeroes() {
+        let persons = vec![PersonRecord {
+            person_id: "06327".to_string(),
+            first_name: "Anthony".to_string(),
+            last_name: "Dufrane".to_string(),
+        }];
+        let resolver = Resolver::build(&persons, &[]);
+        assert_eq!(
+            resolver.resolve_by_actr_id("6327"),
+            Resolution::Resolved("06327".to_string())
+        );
+        assert_eq!(
+            resolver.resolve_by_actr_id("06327"),
+            Resolution::Resolved("06327".to_string())
         );
     }
 
