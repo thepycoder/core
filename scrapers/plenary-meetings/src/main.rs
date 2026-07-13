@@ -6,10 +6,11 @@ use crawl::report_blocks::read_report_html;
 use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
 use crawl::{
     appendix_marker_for_vote, classify_question_heading_bilingual, classify_question_heading_text,
-    extract_proceedings_from_document, extract_utterances_from_document, has_pending_question_text,
-    parse_compact_vote_number, parse_paragraph_vote_number, write_hearings_parquet,
-    write_interpellations_parquet, write_utterances_parquet, HearingDraft, InterpellationDraft,
-    MeetingKind, QuestionHeadingRole, UtteranceDraft,
+    extract_proceedings_from_document, extract_utterances_from_document,
+    extract_written_oral_answers, has_pending_question_text, parse_compact_vote_number,
+    parse_paragraph_vote_number, parse_report_blocks, write_answers_parquet, write_hearings_parquet,
+    write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
+    InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
 };
 use identity::convert_name;
 use encoding_rs::WINDOWS_1252;
@@ -163,6 +164,9 @@ struct ScrapedQuestion {
     topics_nl: String,
     topics_fr: String,
     internal_ids: String,
+    question_body_nl: String,
+    question_body_fr: String,
+    treatment_mode: String,
     source_url: String,
     cache_path: String,
 }
@@ -198,6 +202,7 @@ struct MeetingOutput {
     hearings: Vec<HearingDraft>,
     interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
+    answers: Vec<AnswerDraft>,
 }
 
 struct QuestionData {
@@ -293,6 +298,9 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
         Field::new("internal_ids", DataType::Utf8, false),
+        Field::new("question_body_nl", DataType::Utf8, false),
+        Field::new("question_body_fr", DataType::Utf8, false),
+        Field::new("treatment_mode", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -308,6 +316,9 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
             col!(rows, |q| q.internal_ids.clone()),
+            col!(rows, |q| q.question_body_nl.clone()),
+            col!(rows, |q| q.question_body_fr.clone()),
+            col!(rows, |q| q.treatment_mode.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
         ],
@@ -455,6 +466,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_hearings = Vec::new();
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
+    let mut all_answers = Vec::new();
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -491,6 +503,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_hearings.extend(output.hearings);
                 all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
+                all_answers.extend(output.answers);
             }
             Err(err) => {
                 eprintln!("[meetings-plenary] failed meeting {}: {}", meeting_id, err);
@@ -525,6 +538,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &all_interpellations,
     )?;
     write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
+    write_answers_parquet(&session_dir.join("answers.parquet"), &all_answers)?;
 
     println!(
         "[meetings-plenary] scraped {} meetings using {} web requests",
@@ -593,7 +607,33 @@ async fn scrape_meeting(
         std::fs::write(&filepath, decoded_str.as_ref())?;
     }
 
-    let cache_path = relative_cache_path(&filepath, &cache_dir());
+    parse_meeting_from_cache(session_id, meeting_id, encountered_dossier_ids).await
+}
+
+async fn parse_meeting_from_cache(
+    session_id: u32,
+    meeting_id: u32,
+    encountered_dossier_ids: &mut HashMap<String, String>,
+) -> Result<MeetingOutput, Box<dyn Error>> {
+    let root = cache_dir();
+    let filepath = root.join(format!(
+        "sessions/{}/meetings/plenary/{}-{}.html",
+        session_id, session_id, meeting_id
+    ));
+    if !filepath.exists() {
+        return Err(format!(
+            "meeting {meeting_id} cache missing at {}",
+            filepath.display()
+        )
+        .into());
+    }
+
+    let url = format!(
+        "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
+        session_id, meeting_id
+    );
+
+    let cache_path = relative_cache_path(&filepath, &root);
     let content = read_report_html(&filepath)?;
     let document = Html::parse_document(&content);
 
@@ -619,6 +659,24 @@ async fn scrape_meeting(
         &cache_path,
     )
     .await?;
+    let mut questions = questions;
+    let blocks = parse_report_blocks(&document);
+    let answers = extract_written_oral_answers(
+        &document,
+        &blocks,
+        MeetingKind::Plenary,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+    for q in &mut questions {
+        if let Some(answer) = answers.iter().find(|a| a.question_id == q.question_id) {
+            q.question_body_nl = answer.question_body_nl.clone();
+            q.question_body_fr = answer.question_body_fr.clone();
+            q.treatment_mode = "oral_written".to_string();
+        }
+    }
     let propositions = extract_propositions(
         &document,
         session_id,
@@ -684,6 +742,7 @@ async fn scrape_meeting(
         hearings,
         interpellations,
         utterances,
+        answers,
     })
 }
 
@@ -721,6 +780,9 @@ async fn extract_questions(
             topics_nl: data_nl.topics.join(";"),
             topics_fr: data_fr.topics.join(";"),
             internal_ids: data_nl.internal_ids.join(","),
+            question_body_nl: String::new(),
+            question_body_fr: String::new(),
+            treatment_mode: String::new(),
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
         }))
@@ -1946,14 +2008,25 @@ mod question_extract_tests {
     use scraper::Html;
     use std::collections::HashMap;
     use std::fs::read_to_string;
+    use std::path::PathBuf;
+
+    fn cached_plenary_html(meeting_id: u32) -> Option<PathBuf> {
+        dotenvy::dotenv().ok();
+        let path = cache_dir().join(format!(
+            "sessions/56/meetings/plenary/56-{meeting_id}.html"
+        ));
+        if path.exists() {
+            Some(path)
+        } else {
+            None
+        }
+    }
 
     #[tokio::test]
     async fn plenary_82_extracts_questions() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cache/sessions/56/meetings/plenary/56-82.html");
-        if !path.exists() {
+        let Some(path) = cached_plenary_html(82) else {
             return;
-        }
+        };
         let content = read_to_string(&path).unwrap();
         let document = Html::parse_document(&content);
         let typo_map = HashMap::new();
@@ -1976,62 +2049,48 @@ mod question_extract_tests {
 
     #[tokio::test]
     async fn plenary_60_extracts_votes() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cache/sessions/56/meetings/plenary/56-60.html");
-        if !path.exists() {
+        let Some(path) = cached_plenary_html(60) else {
             return;
-        }
-        dotenvy::dotenv().ok();
-        let client = ScrapingClient::new();
-        let mut web_request_count = 0u32;
+        };
+        let content = read_report_html(&path).unwrap();
+        let document = Html::parse_document(&content);
+        let date = extract_date_from_document(&document).unwrap();
         let mut encountered_dossier_ids = HashMap::new();
-        let output = scrape_meeting(
-            &client,
+        let votes = extract_votes(
+            &document,
             56,
             60,
-            &mut web_request_count,
+            &date,
             &mut encountered_dossier_ids,
+            "http://example.test",
+            "sessions/56/meetings/plenary/56-60.html",
         )
         .await
-        .expect("scrape meeting 60");
+        .expect("extract votes from cached meeting 60");
         assert!(
-            output.votes.len() >= 50,
+            votes.len() >= 50,
             "expected many votes for meeting 60, got {}",
-            output.votes.len()
+            votes.len()
         );
         assert!(
-            output.votes.iter().any(|v| v.yes > 0 || v.no > 0),
+            votes.iter().any(|v| v.yes > 0 || v.no > 0),
             "expected at least one vote with yes/no totals"
         );
     }
 
     #[tokio::test]
-    async fn scrape_meeting_82_after_prior_meetings_returns_questions() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cache/sessions/56/meetings/plenary/56-82.html");
-        if !path.exists() {
+    async fn plenary_82_parse_from_cache_returns_questions() {
+        if cached_plenary_html(82).is_none() {
             return;
         }
         dotenvy::dotenv().ok();
-        let client = ScrapingClient::new();
-        let mut web_request_count = 0u32;
         let mut encountered_dossier_ids = HashMap::new();
-        for meeting_id in 1..=81u32 {
-            let _ = scrape_meeting(
-                &client,
-                56,
-                meeting_id,
-                &mut web_request_count,
-                &mut encountered_dossier_ids,
-            )
-            .await;
-        }
-        let output = scrape_meeting(&client, 56, 82, &mut web_request_count, &mut encountered_dossier_ids)
+        let output = parse_meeting_from_cache(56, 82, &mut encountered_dossier_ids)
             .await
-            .expect("scrape_meeting should succeed");
+            .expect("parse meeting 82 from repo cache");
         assert!(
             output.questions.len() >= 10,
-            "after 81 meetings, meeting 82 returned {} questions",
+            "meeting 82 returned {} questions",
             output.questions.len()
         );
     }

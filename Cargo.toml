@@ -15,6 +15,7 @@ members = [
     "scrapers/normalize",
     "scrapers/graph",
     "scrapers/qa",
+    "scrapers/qrva",
     "summarizers/dossier-summarizer",
     "summarizers/text-summarizer",
     "summarizers/mistral-client",

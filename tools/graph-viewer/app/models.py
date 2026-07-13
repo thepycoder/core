@@ -208,6 +208,7 @@ class EdgeDetailResponse(BaseModel):
     source_url: str
     cache_path: str
     confidence: str
+    properties_json: str = ""
     artifact: dict[str, Any] | None = None
 
 

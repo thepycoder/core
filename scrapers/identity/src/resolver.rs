@@ -54,6 +54,7 @@ pub struct Resolver {
     typo_map: HashMap<String, String>,
     lookup: HashMap<String, String>,
     ambiguous: HashSet<String>,
+    actr_lookup: HashMap<String, String>,
 }
 
 impl Resolver {
@@ -88,6 +89,8 @@ impl Resolver {
             }
         };
 
+        let mut actr_lookup: HashMap<String, String> = HashMap::new();
+
         for person in persons {
             let name = PersonName {
                 first_name: person.first_name.clone(),
@@ -97,6 +100,13 @@ impl Resolver {
             let reversed = name.normalized_reversed();
             if reversed != name.normalized_full() {
                 register(reversed, &person.person_id);
+            }
+            if let Some(digits) = person.person_id.strip_prefix('O').or_else(|| person.person_id.strip_prefix('o')) {
+                actr_lookup.insert(digits.to_string(), person.person_id.clone());
+                let trimmed = digits.trim_start_matches('0');
+                if !trimmed.is_empty() {
+                    actr_lookup.insert(trimmed.to_string(), person.person_id.clone());
+                }
             }
         }
 
@@ -108,7 +118,23 @@ impl Resolver {
             typo_map,
             lookup,
             ambiguous,
+            actr_lookup,
         }
+    }
+
+    pub fn resolve_by_actr_id(&self, actr_id: &str) -> Resolution {
+        let trimmed = actr_id.trim();
+        if trimmed.is_empty() {
+            return Resolution::Unresolved(UnresolvedReason::Empty);
+        }
+        if let Some(person_id) = self.actr_lookup.get(trimmed) {
+            return Resolution::Resolved(person_id.clone());
+        }
+        let no_zeros = trimmed.trim_start_matches('0');
+        if let Some(person_id) = self.actr_lookup.get(no_zeros) {
+            return Resolution::Resolved(person_id.clone());
+        }
+        Resolution::Unresolved(UnresolvedReason::NotInIndex)
     }
 
     pub fn resolve_person(&self, raw: &str, ctx: Bucket) -> Resolution {

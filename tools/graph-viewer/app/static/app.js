@@ -938,6 +938,19 @@ async function showEdgeDetail(link) {
     ${escapeHtml(detail.to_type)}:${escapeHtml(detail.to_id)}${roleLine}<br>
     confidence: ${escapeHtml(detail.confidence)} · artifact: ${escapeHtml(detail.source_artifact_id || "—")}
   `;
+  if (detail.properties_json) {
+    try {
+      const props = JSON.parse(detail.properties_json);
+      const propLines = Object.entries(props)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(" · ");
+      if (propLines) {
+        panel.innerHTML += `<br>properties: ${escapeHtml(propLines)}`;
+      }
+    } catch (_err) {
+      panel.innerHTML += `<br>properties: ${escapeHtml(detail.properties_json)}`;
+    }
+  }
   if (detail.source_url) {
     panel.innerHTML += `<br><a href="${detail.source_url}" target="_blank" rel="noopener">Edge source URL</a>`;
   }

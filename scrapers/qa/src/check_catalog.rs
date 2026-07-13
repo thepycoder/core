@@ -126,6 +126,22 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A commission or plenary question row is missing `internal_ids` (site-native sub-question keys).",
             measures: "Requires non-empty `internal_ids` on staging question parquet rows.",
         },
+        "written.duplicate_docname" => CheckDoc {
+            what: "The same QRVA DOCNAME appears more than once in written questions staging.",
+            measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",
+        },
+        "written.route_missing_question" => CheckDoc {
+            what: "A QRVA route row references a written question id that does not exist.",
+            measures: "Foreign-key check from `written/routes.parquet` to `written/questions.parquet`.",
+        },
+        "written.ambiguous_oral_reference" => CheckDoc {
+            what: "A written question cites oral refs that do not resolve to exactly one oral Question.",
+            measures: "Reads `normalized/oral_written_links.parquet` for `status=ambiguous`.",
+        },
+        "written.missing_department_role" => CheckDoc {
+            what: "A QRVA route department code has no matching `ext:role:dept:{DEPTNUM}` ExternalPerson.",
+            measures: "Compares route `deptnum` values against `identity/external_persons.parquet`.",
+        },
         "dossier.ref_exists" => CheckDoc {
             what: "A vote references a `dossier_id` that is not present in `sessions/56/dossiers.parquet`.",
             measures: "Checks vote `dossier_id` foreign keys against the dossier id set.",

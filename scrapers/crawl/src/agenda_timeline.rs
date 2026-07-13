@@ -90,7 +90,7 @@ fn dossier_ref_regex() -> &'static Regex {
     DOSSIER_REF.get_or_init(|| Regex::new(r"\((\d+)/(\d+(?:-\d+)?)\)").unwrap())
 }
 
-fn looks_like_fr_heading(text: &str) -> bool {
+pub fn looks_like_fr_heading(text: &str) -> bool {
     let lower = text.to_lowercase();
     lower.contains("question de")
         || lower.contains("questions jointes")
@@ -331,7 +331,7 @@ pub fn build_agenda_timeline(
     items
 }
 
-fn extract_agenda_number(text: &str) -> Option<String> {
+pub fn extract_agenda_number(text: &str) -> Option<String> {
     agenda_num_regex()
         .captures(text.trim())
         .map(|c| c[1].to_string())

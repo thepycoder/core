@@ -1,6 +1,6 @@
 use crate::external::{
-    alias_norms_for, institutional_external_id, is_institutional_label, is_procedural_role,
-    procedural_external_id, strip_party_suffix,
+    alias_norms_for, department_external_id, institutional_external_id, is_institutional_label,
+    is_procedural_role, procedural_external_id, strip_party_suffix,
 };
 use crate::normalize::{apply_typo_fix, clean_raw_name, normalize_name, typo_corrections};
 use crate::parquet_io::{read_all_rows, read_string_column};
@@ -217,6 +217,15 @@ impl ActorResolver {
             &norm_primary,
             &norm_reordered,
         )
+    }
+
+    pub fn resolve_department(&self, deptnum: &str, title_nl: &str, title_fr: &str) -> ActorResolveDetail {
+        let display = if !title_nl.is_empty() {
+            title_nl
+        } else {
+            title_fr
+        };
+        resolved_external_detail(display, &department_external_id(deptnum))
     }
 }
 

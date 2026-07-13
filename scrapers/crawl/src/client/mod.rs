@@ -54,6 +54,17 @@ impl ScrapingClient {
         self.client.get(url).headers(self.headers()).send().await
     }
 
+    pub async fn get_json(&self, url: &str) -> Result<Response, Error> {
+        let delay_ms = rand::rng().random_range(1000..4000);
+        sleep(Duration::from_millis(delay_ms)).await;
+        let mut headers = self.headers();
+        headers.insert(
+            header::ACCEPT,
+            header::HeaderValue::from_static("application/json"),
+        );
+        self.client.get(url).headers(headers).send().await
+    }
+
     fn headers(&self) -> header::HeaderMap {
         let mut headers = header::HeaderMap::new();
         headers.insert(header::USER_AGENT, self.user_agent.clone());

@@ -14,6 +14,7 @@ pub mod stats;
 pub mod types;
 pub mod vote_source;
 pub mod votes;
+pub mod written;
 
 use aggregate::{aggregate_details, write_summary_md};
 use crawl::paths::data_dir;
@@ -76,6 +77,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(agenda_checks::run_agenda_checks(&data_root)?);
     let speech_out = speech::run_speech_checks(&data_root)?;
     details.extend(speech_out.details);
+    details.extend(written::run_written_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
 

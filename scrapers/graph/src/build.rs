@@ -1,4 +1,5 @@
 use crate::provenance::register_artifact;
+use crate::written_qa::{load_answer_nodes, load_written_qa_edges, load_written_question_nodes};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::utils::ensure_question_id;
@@ -31,6 +32,7 @@ pub struct EdgeRow {
     pub source_url: String,
     pub cache_path: String,
     pub confidence: String,
+    pub properties_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -94,12 +96,15 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
             confidence: confidence.to_string(),
+            properties_json: "{}".to_string(),
         });
     };
 
     load_identity_nodes(data_dir, &mut add_node)?;
     load_staging_nodes(data_dir, &mut add_node)?;
+    load_written_question_nodes(data_dir, &mut add_node)?;
     load_normalized_nodes(data_dir, &mut add_node)?;
+    load_answer_nodes(data_dir, &mut add_node)?;
 
     load_membership_edges(data_dir, &mut add_edge)?;
     load_vote_cast_edges(data_dir, &mut add_edge)?;
@@ -115,6 +120,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     load_proceeding_meeting_edges(data_dir, &mut add_edge)?;
     load_holds_role_edges(data_dir, &mut add_edge)?;
     load_spoke_and_part_of_edges(data_dir, &mut add_edge)?;
+    load_written_qa_edges(data_dir, &mut edges, &mut artifact_registry)?;
 
     nodes.sort_by(|a, b| a.node_type.cmp(&b.node_type).then(a.node_id.cmp(&b.node_id)));
     edges.sort_by(|a, b| {
@@ -143,6 +149,43 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
         edges,
         artifacts,
     })
+}
+
+pub(crate) fn register_artifact_edge(
+    edges: &mut Vec<EdgeRow>,
+    artifact_registry: &mut HashMap<String, (String, String)>,
+    edge_type: &str,
+    from_type: &str,
+    from_id: &str,
+    to_type: &str,
+    to_id: &str,
+    role: &str,
+    source_url: &str,
+    cache_path: &str,
+    confidence: &str,
+    properties_json: &str,
+) {
+    if from_id.is_empty() || to_id.is_empty() {
+        return;
+    }
+    let artifact = register_artifact(artifact_registry, source_url, cache_path);
+    edges.push(EdgeRow {
+        edge_type: edge_type.to_string(),
+        from_type: from_type.to_string(),
+        from_id: from_id.to_string(),
+        to_type: to_type.to_string(),
+        to_id: to_id.to_string(),
+        role: role.to_string(),
+        source_artifact_id: artifact,
+        source_url: source_url.to_string(),
+        cache_path: cache_path.to_string(),
+        confidence: confidence.to_string(),
+        properties_json: if properties_json.is_empty() {
+            "{}".to_string()
+        } else {
+            properties_json.to_string()
+        },
+    });
 }
 
 fn load_identity_nodes(
@@ -1014,6 +1057,7 @@ pub fn write_edges(path: &Path, rows: &[EdgeRow]) -> Result<(), Box<dyn Error>> 
         utf8_field("source_url", false),
         utf8_field("cache_path", false),
         utf8_field("confidence", false),
+        utf8_field("properties_json", false),
     ]);
     macro_rules! col {
         ($f:expr) => {
@@ -1034,6 +1078,7 @@ pub fn write_edges(path: &Path, rows: &[EdgeRow]) -> Result<(), Box<dyn Error>> 
             col!(|r| r.source_url.clone()),
             col!(|r| r.cache_path.clone()),
             col!(|r| r.confidence.clone()),
+            col!(|r| r.properties_json.clone()),
         ],
     )
 }

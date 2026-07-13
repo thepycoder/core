@@ -161,6 +161,83 @@ Written by summarizer binaries; schemas unchanged by Stage 0.
 
 **dossier-summarizer outputs:** `summary_hash`, `summary` or `arguments`, `model`, `dossier_id`, `source`, `created_at`
 
+### `data/sessions/56/written/questions.parquet`
+
+One row per logical QRVA `DOCNAME` (`question_id` = `56_written_{DOCNAME}`).
+
+| Column | Notes |
+|--------|--------|
+| `question_id` | `56_written_{DOCNAME}` |
+| `session_id` | |
+| `docname` | Native QRVA document name |
+| `kind` | `written` |
+| `author_actr_id` | Parsed `(#####)` actor suffix from `AUT` |
+| `author_raw` | Full author label |
+| `depot_date` | |
+| `deadline_date` | |
+| `lang` | Original language code |
+| `title_nl` / `title_fr` | |
+| `text_nl` / `text_fr` | Flattened question body |
+| `main_thesa_nl` / `main_thesa_fr` | Thesaurus labels |
+| `oral_refs` | CSV of exact oral refs (`Q…C/P`, etc.) |
+| `qrva_route_ids` | CSV of route ids |
+| `internal_ids` | `qrva:{DOCNAME}` |
+| `source_url` / `cache_path` | API provenance |
+
+### `data/sessions/56/written/routes.parquet`
+
+One row per QRVA API route (`ID`); multiple rows may share a `DOCNAME`.
+
+| Column | Notes |
+|--------|--------|
+| `route_id` | `56_qrva_{API_ID}` |
+| `question_id` | Parent written question |
+| `qrva_id` | API numeric id |
+| `sdocname` | Detail endpoint key |
+| `docname` | Shared document name |
+| `deptnum` | Department code |
+| `dept_title_nl` / `dept_title_fr` | Portfolio titles |
+| `questnum` | Departmental question number |
+| `statusq` | Route lifecycle status |
+| `source_url` / `cache_path` | |
+
+### `data/sessions/56/written/answers.parquet`
+
+One row per populated QRVA answer slot (`NUMA1`–`NUMA4`).
+
+Uses the shared answer schema (see below).
+
+### `data/sessions/{session}/{plenary,commission}/answers.parquet`
+
+Inline *mondelinge vragen schriftelijk behandeld* answer bodies from integraal verslag HTML.
+
+### Shared answer schema (`written/answers.parquet`, `{plenary,commission}/answers.parquet`)
+
+| Column | Notes |
+|--------|--------|
+| `answer_id` | `56_qrva_{route}_a{slot}` or `{question_id}_a1` for inline |
+| `question_id` | Linked question |
+| `route_id` | QRVA route id (empty for inline) |
+| `session_id` | |
+| `meeting_id` / `meeting_kind` | Set for inline answers |
+| `agenda_id` | Timeline agenda number when known |
+| `answer_slot` | 1–4 for QRVA; 1 for inline |
+| `kind` | `written` or `oral_written` |
+| `text_nl` / `text_fr` | Answer body |
+| `question_body_nl` / `question_body_fr` | Question body (inline only) |
+| `status` | Publication / lifecycle status |
+| `answer_num` / `publication_ref` / `casa` | QRVA metadata |
+| `source_kind` | `qrva` or `integraal` |
+| `confidence` | |
+| `source_url` / `cache_path` | |
+
+Oral `questions.parquet` (plenary + commission) gains trailing columns:
+
+| Column | Notes |
+|--------|--------|
+| `question_body_nl` / `question_body_fr` | Populated for `treatment_mode=oral_written` |
+| `treatment_mode` | `oral_written` or empty for live debate |
+
 ## Identity (`data/identity/`)
 
 **persons.parquet:** `person_id`, `first_name`, `last_name`, `date_of_birth`, `place_of_birth`, `language`, `source_url`, `cache_path` — Chamber MPs only (cvview keys).

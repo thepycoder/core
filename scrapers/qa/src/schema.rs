@@ -49,6 +49,24 @@ fn staging_tables() -> Vec<TableSpec> {
             required_columns: vec!["session_id".into(), "meeting_id".into(), "internal_ids".into()],
         },
         TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/written/questions.parquet"),
+            table_name: "written_questions".into(),
+            id_columns: vec!["question_id".into()],
+            required_columns: vec!["docname".into(), "session_id".into()],
+        },
+        TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/written/routes.parquet"),
+            table_name: "written_routes".into(),
+            id_columns: vec!["route_id".into()],
+            required_columns: vec!["question_id".into(), "deptnum".into()],
+        },
+        TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/written/answers.parquet"),
+            table_name: "written_answers".into(),
+            id_columns: vec!["answer_id".into()],
+            required_columns: vec!["question_id".into()],
+        },
+        TableSpec {
             rel_path: format!("sessions/{SESSION_ID}/plenary/votes.parquet"),
             table_name: "plenary_votes".into(),
             id_columns: vec!["vote_id".into()],

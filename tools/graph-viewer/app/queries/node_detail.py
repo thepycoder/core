@@ -460,7 +460,7 @@ def fetch_edge_detail(
 
     row = conn.execute(
         f"""
-        SELECT source_artifact_id, source_url, cache_path, confidence, role
+        SELECT source_artifact_id, source_url, cache_path, confidence, role, properties_json
         FROM edges
         WHERE {" AND ".join(filters)}
         LIMIT 1
@@ -501,5 +501,6 @@ def fetch_edge_detail(
         source_url=row[1] or "",
         cache_path=row[2] or "",
         confidence=row[3] or "exact",
+        properties_json=row[5] or "",
         artifact=artifact,
     )

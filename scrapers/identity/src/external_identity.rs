@@ -2,8 +2,8 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::paths::data_dir;
 use identity::external::{
-    alias_norms_for, classify_named_external, institutional_external_id, is_institutional_label,
-    is_procedural_role, person_external_id, procedural_external_id, ExternalAliasRecord,
+    alias_norms_for, classify_named_external,     institutional_external_id, is_institutional_label,
+    is_procedural_role, person_external_id, procedural_external_id, department_external_id, ExternalAliasRecord,
     ExternalContextRecord, ExternalKind, ExternalPersonRecord,
 };
 use identity::normalize::clean_raw_name;
@@ -45,6 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     collect_from_questions(&root, &person_resolver, &mut candidates)?;
     collect_from_utterances(&root, &person_resolver, &mut candidates)?;
     collect_from_dossiers(&root, &person_resolver, &mut candidates)?;
+    collect_from_written_routes(&root, &mut candidates)?;
 
     let mut persons: HashMap<String, ExternalPersonRecord> = HashMap::new();
     let mut aliases: Vec<ExternalAliasRecord> = Vec::new();
@@ -351,6 +352,70 @@ fn collect_from_dossiers(
     Ok(())
 }
 
+fn collect_from_written_routes(
+    root: &Path,
+    candidates: &mut Vec<Candidate>,
+) -> Result<(), Box<dyn Error>> {
+    let path = root.join(format!("sessions/{SESSION_ID}/written/routes.parquet"));
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut seen: HashSet<String> = HashSet::new();
+    for batch in read_all_rows(&path)? {
+        let question_ids = read_string_column(&batch, "question_id")?;
+        let deptnums = read_string_column(&batch, "deptnum")?;
+        let dept_nl = read_string_column(&batch, "dept_title_nl")?;
+        let dept_fr = read_string_column(&batch, "dept_title_fr")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        for i in 0..batch.num_rows() {
+            if deptnums[i].is_empty() || !seen.insert(deptnums[i].clone()) {
+                continue;
+            }
+            let display = if !dept_nl[i].is_empty() {
+                dept_nl[i].clone()
+            } else {
+                dept_fr[i].clone()
+            };
+            let raw_name = format!("deptnum:{}|{}", deptnums[i], display);
+            candidates.push(Candidate {
+                raw_name: raw_name.clone(),
+                bucket: "written_dept".to_string(),
+                context_id: department_external_id(&deptnums[i]),
+                context_label: format!("written route {}", question_ids[i]),
+                meeting_id: String::new(),
+                meeting_kind: String::new(),
+                meeting_date: String::new(),
+                question_id: question_ids[i].clone(),
+                topics_nl: dept_nl[i].clone(),
+                topics_fr: dept_fr[i].clone(),
+                utterance_excerpt: String::new(),
+                source_url: source_urls[i].clone(),
+                cache_path: cache_paths[i].clone(),
+            });
+            if !dept_fr[i].is_empty() && dept_fr[i] != dept_nl[i] {
+                let fr_raw = format!("deptnum:{}|{}", deptnums[i], dept_fr[i]);
+                candidates.push(Candidate {
+                    raw_name: fr_raw,
+                    bucket: "written_dept".to_string(),
+                    context_id: department_external_id(&deptnums[i]),
+                    context_label: format!("written route alias {}", question_ids[i]),
+                    meeting_id: String::new(),
+                    meeting_kind: String::new(),
+                    meeting_date: String::new(),
+                    question_id: question_ids[i].clone(),
+                    topics_nl: dept_nl[i].clone(),
+                    topics_fr: dept_fr[i].clone(),
+                    utterance_excerpt: String::new(),
+                    source_url: source_urls[i].clone(),
+                    cache_path: cache_paths[i].clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn ingest_author_candidates(
     resolver: &Resolver,
     authors_csv: &str,
@@ -407,6 +472,12 @@ fn should_add_external(resolver: &Resolver, raw: &str, bucket: Bucket) -> bool {
 }
 
 fn classify_and_id(raw: &str, bucket: &str) -> String {
+    if bucket == "written_dept" {
+        if let Some(rest) = raw.strip_prefix("deptnum:") {
+            let deptnum = rest.split('|').next().unwrap_or(rest);
+            return department_external_id(deptnum);
+        }
+    }
     if let Some((id, _)) = institutional_external_id(raw) {
         return id.to_string();
     }
@@ -427,6 +498,11 @@ fn classify_kind(raw: &str, bucket: &str, ext_id: &str) -> ExternalKind {
 }
 
 fn display_name_for(raw: &str, ext_id: &str) -> String {
+    if let Some(rest) = raw.strip_prefix("deptnum:") {
+        if let Some((_dept, title)) = rest.split_once('|') {
+            return title.to_string();
+        }
+    }
     if let Some((_, label)) = institutional_external_id(raw) {
         return label.to_string();
     }

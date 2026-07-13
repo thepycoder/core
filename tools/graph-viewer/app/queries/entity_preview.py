@@ -6,6 +6,12 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.models import EntityPreview, PreviewField, PreviewRelated
+from app.queries.written_qa import (
+    format_yyyymmdd,
+    is_written_question_id,
+    normalize_person_field,
+    qrva_chamber_detail_url,
+)
 from app.queries.discussion_threads import (
     fetch_proceeding_thread,
     fetch_question_thread,
@@ -24,6 +30,7 @@ def fetch_entity_preview(
     handlers = {
         "Utterance": _preview_utterance,
         "Question": _preview_question,
+        "Answer": _preview_answer,
         "Hearing": _preview_hearing,
         "Interpellation": _preview_interpellation,
         "Document": _preview_document,
@@ -123,11 +130,15 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
 
 
 def _preview_question(conn, node_id: str, settings: Settings) -> EntityPreview | None:
-    row = _fetch_question_row(conn, node_id, settings)
+    if is_written_question_id(node_id):
+        return _preview_written_question(conn, node_id, settings)
+
+    row = _fetch_oral_question_row(conn, node_id, settings)
     if not row:
         return None
 
     fields = [
+        _field("Kind", "oral"),
         _field("Questioners", row["questioners"]),
         _field("Respondents", row["respondents"]),
         _field("Topic (NL)", row["topics_nl"]),
@@ -155,6 +166,291 @@ def _preview_question(conn, node_id: str, settings: Settings) -> EntityPreview |
         content="\n\n—\n\n".join(content_parts) if content_parts else None,
         content_label="Discussion excerpt",
         related=related[:6],
+    )
+
+
+def _preview_written_question(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    row = _fetch_written_question_row(conn, node_id)
+    if not row:
+        return None
+
+    author = normalize_person_field(row["author_raw"])
+    chamber_url = qrva_chamber_detail_url(row["docname"], row["session_id"])
+    fields = [
+        _field("Kind", "written"),
+        _field("Author", author),
+        _field("Depot date", format_yyyymmdd(row["depot_date"])),
+        _field("Deadline", format_yyyymmdd(row["deadline_date"])),
+        _field("Language", row["lang"] or "—"),
+        _field("Docname", row["docname"]),
+        _field("Internal ids", row["internal_ids"]),
+        _field("Oral refs", row["oral_refs"]),
+        _field("Thesaurus (NL)", row["main_thesa_nl"]),
+        _field("Thesaurus (FR)", row["main_thesa_fr"]),
+    ]
+    if row["source_url"]:
+        fields.append(_field("QRVA API", row["source_url"], link=row["source_url"]))
+    if chamber_url:
+        fields.append(_field("Chamber QRVA", chamber_url, link=chamber_url))
+    if row["cache_path"]:
+        cache_link = f"/api/cache/{row['cache_path']}"
+        fields.append(_field("Cached detail", row["cache_path"], link=cache_link))
+
+    content_parts: list[str] = []
+    if row["text_nl"]:
+        content_parts.append(f"NL:\n{_clip(row['text_nl'], 8000)}")
+    if row["text_fr"]:
+        content_parts.append(f"FR:\n{_clip(row['text_fr'], 8000)}")
+
+    routes = _fetch_written_routes(conn, node_id)
+    if routes:
+        route_lines = []
+        for route in routes[:20]:
+            line = f"• #{route['questnum']} {route['dept_title_nl'] or route['dept_title_fr']}"
+            if route["statusq"]:
+                line += f" ({route['statusq']})"
+            if route["source_url"]:
+                line += f"\n  {route['source_url']}"
+            route_lines.append(line)
+        if len(routes) > 20:
+            route_lines.append(f"… and {len(routes) - 20} more routes")
+        content_parts.append("Ministerial routes:\n" + "\n".join(route_lines))
+
+    related = _fetch_written_question_related(conn, node_id, author)
+
+    title = row["title_nl"] or row["title_fr"] or node_id
+    return EntityPreview(
+        title=title,
+        fields=fields,
+        content="\n\n—\n\n".join(content_parts) if content_parts else None,
+        content_label="Question text",
+        related=related[:24],
+    )
+
+
+def _fetch_written_question_row(conn, question_id: str) -> dict[str, str] | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT question_id, session_id, docname, author_raw, depot_date, deadline_date,
+                   lang, title_nl, title_fr, text_nl, text_fr, main_thesa_nl, main_thesa_fr,
+                   oral_refs, internal_ids, source_url, cache_path
+            FROM written_questions
+            WHERE question_id = ?
+            LIMIT 1
+            """,
+            [question_id],
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    cols = [
+        "question_id",
+        "session_id",
+        "docname",
+        "author_raw",
+        "depot_date",
+        "deadline_date",
+        "lang",
+        "title_nl",
+        "title_fr",
+        "text_nl",
+        "text_fr",
+        "main_thesa_nl",
+        "main_thesa_fr",
+        "oral_refs",
+        "internal_ids",
+        "source_url",
+        "cache_path",
+    ]
+    return {col: (row[i] or "") for i, col in enumerate(cols)}
+
+
+def _fetch_written_routes(conn, question_id: str) -> list[dict[str, str]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT route_id, questnum, dept_title_nl, dept_title_fr, statusq,
+                   source_url, cache_path, sdocname, deptnum
+            FROM written_routes
+            WHERE question_id = ?
+            ORDER BY dept_title_nl, questnum
+            """,
+            [question_id],
+        ).fetchall()
+    except Exception:
+        return []
+    cols = [
+        "route_id",
+        "questnum",
+        "dept_title_nl",
+        "dept_title_fr",
+        "statusq",
+        "source_url",
+        "cache_path",
+        "sdocname",
+        "deptnum",
+    ]
+    return [{col: (row[i] or "") for i, col in enumerate(cols)} for row in rows]
+
+
+def _fetch_written_question_related(
+    conn, question_id: str, author: str
+) -> list[PreviewRelated]:
+    related: list[PreviewRelated] = []
+
+    asked = conn.execute(
+        """
+        SELECT to_id, coalesce(n.label, e.to_id)
+        FROM edges e
+        LEFT JOIN nodes n ON n.node_type = e.to_type AND n.node_id = e.to_id
+        WHERE e.edge_type = 'ASKED'
+          AND e.from_type = 'Question'
+          AND e.from_id = ?
+        LIMIT 3
+        """,
+        [question_id],
+    ).fetchall()
+    if asked:
+        for person_id, label in asked:
+            related.append(_related("Person", person_id, label or person_id))
+    elif author:
+        related.append(_related("Unresolved", author, author))
+
+    ministers = conn.execute(
+        """
+        SELECT e.to_id, coalesce(n.label, e.to_id), e.properties_json
+        FROM edges e
+        LEFT JOIN nodes n ON n.node_type = e.to_type AND n.node_id = e.to_id
+        WHERE e.edge_type = 'ADDRESSED_TO'
+          AND e.from_type = 'Question'
+          AND e.from_id = ?
+        ORDER BY n.label, e.to_id
+        LIMIT 16
+        """,
+        [question_id],
+    ).fetchall()
+    for ext_id, label, props in ministers:
+        subtitle = label or ext_id
+        if props:
+            try:
+                parsed = json.loads(props)
+                questnum = parsed.get("questnum")
+                statusq = parsed.get("statusq")
+                if questnum or statusq:
+                    subtitle = f"{label} · #{questnum} · {statusq}".strip(" ·")
+            except json.JSONDecodeError:
+                pass
+        related.append(_related("ExternalPerson", ext_id, subtitle))
+
+    answers = conn.execute(
+        """
+        SELECT e.to_id, coalesce(n.label, e.to_id)
+        FROM edges e
+        LEFT JOIN nodes n ON n.node_type = e.to_type AND n.node_id = e.to_id
+        WHERE e.edge_type = 'HAS_ANSWER'
+          AND e.from_type = 'Question'
+          AND e.from_id = ?
+        ORDER BY e.to_id
+        LIMIT 12
+        """,
+        [question_id],
+    ).fetchall()
+    for answer_id, label in answers:
+        related.append(_related("Answer", answer_id, _clip(label or answer_id, 100)))
+
+    return related
+
+
+def _preview_answer(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    row = conn.execute(
+        """
+        SELECT answer_id, question_id, route_id, kind, text_nl, text_fr,
+               status, source_kind, source_url, cache_path
+        FROM answers
+        WHERE answer_id = ?
+        LIMIT 1
+        """,
+        [node_id],
+    ).fetchone()
+    if not row:
+        return None
+
+    route_label = ""
+    route_url = ""
+    if row[2]:
+        try:
+            route_row = conn.execute(
+                """
+                SELECT dept_title_nl, dept_title_fr, questnum, statusq, source_url, sdocname
+                FROM written_routes
+                WHERE route_id = ?
+                LIMIT 1
+                """,
+                [row[2]],
+            ).fetchone()
+            if route_row:
+                route_label = route_row[0] or route_row[1] or row[2]
+                if route_row[2]:
+                    route_label = f"#{route_row[2]} {route_label}".strip()
+                if route_row[3]:
+                    route_label += f" ({route_row[3]})"
+                route_url = route_row[4] or ""
+        except Exception:
+            route_label = row[2]
+
+    question_title = row[1]
+    if row[1] and is_written_question_id(row[1]):
+        written = _fetch_written_question_row(conn, row[1])
+        if written:
+            question_title = written["title_nl"] or written["title_fr"] or row[1]
+
+    fields = [
+        _field("Question", question_title or row[1]),
+        _field("Route", route_label or row[2] or "—", link=route_url or None),
+        _field("Kind", row[3]),
+        _field("Status", row[6]),
+        _field("Source", row[7]),
+    ]
+    if row[8]:
+        fields.append(_field("Source URL", row[8], link=row[8]))
+    if row[9]:
+        fields.append(
+            _field("Cache", row[9], link=f"/api/cache/{row[9]}")
+        )
+
+    content_parts: list[str] = []
+    if row[4]:
+        content_parts.append(f"NL:\n{_clip(row[4], 4000)}")
+    if row[5]:
+        content_parts.append(f"FR:\n{_clip(row[5], 4000)}")
+
+    related: list[PreviewRelated] = []
+    if row[1]:
+        related.append(_related("Question", row[1], question_title or row[1]))
+
+    respondents = conn.execute(
+        """
+        SELECT e.to_id, coalesce(n.label, e.to_id)
+        FROM edges e
+        LEFT JOIN nodes n ON n.node_type = e.to_type AND n.node_id = e.to_id
+        WHERE e.edge_type = 'ANSWERED_BY'
+          AND e.from_type = 'Answer'
+          AND e.from_id = ?
+        ORDER BY n.label
+        """,
+        [node_id],
+    ).fetchall()
+    for person_id, label in respondents:
+        related.append(_related("Person", person_id, label or person_id))
+
+    return EntityPreview(
+        title=_clip(row[4] or row[5] or node_id, 120),
+        fields=fields,
+        content="\n\n".join(content_parts) if content_parts else None,
+        content_label="Answer text",
+        related=related,
     )
 
 
@@ -275,7 +571,7 @@ def _fetch_proceeding_row(
     return None
 
 
-def _fetch_question_row(conn, question_id: str, settings: Settings) -> dict[str, str] | None:
+def _fetch_oral_question_row(conn, question_id: str, settings: Settings) -> dict[str, str] | None:
     for rel in ("sessions/56/plenary/questions.parquet", "sessions/56/commission/questions.parquet"):
         path = _pq(settings, rel)
         if not path:

@@ -3,11 +3,13 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, relative_cache_path};
-use crawl::{classify_question_heading_bilingual, classify_question_heading_text, has_pending_question_text, QuestionHeadingRole};
 use crawl::{
-    extract_proceedings_from_document, extract_utterances_from_document, read_report_html,
-    is_non_question_proceeding_heading, write_hearings_parquet, write_interpellations_parquet,
-    write_utterances_parquet, HearingDraft, InterpellationDraft, MeetingKind, UtteranceDraft,
+    classify_question_heading_bilingual, classify_question_heading_text, extract_agenda_number,
+    extract_proceedings_from_document, extract_utterances_from_document, extract_written_oral_answers,
+    has_pending_question_text, looks_like_fr_heading, parse_report_blocks, read_report_html,
+    is_non_question_proceeding_heading, write_answers_parquet, write_hearings_parquet,
+    write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
+    InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -97,6 +99,9 @@ struct ScrapedQuestion {
     topics_nl: String,
     topics_fr: String,
     internal_ids: String,
+    question_body_nl: String,
+    question_body_fr: String,
+    treatment_mode: String,
     source_url: String,
     cache_path: String,
 }
@@ -107,6 +112,7 @@ struct MeetingOutput {
     hearings: Vec<HearingDraft>,
     interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
+    answers: Vec<AnswerDraft>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +302,9 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
         Field::new("internal_ids", DataType::Utf8, false),
+        Field::new("question_body_nl", DataType::Utf8, false),
+        Field::new("question_body_fr", DataType::Utf8, false),
+        Field::new("treatment_mode", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -311,6 +320,9 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
             col!(rows, |q| q.internal_ids.clone()),
+            col!(rows, |q| q.question_body_nl.clone()),
+            col!(rows, |q| q.question_body_fr.clone()),
+            col!(rows, |q| q.treatment_mode.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
         ],
@@ -379,6 +391,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_hearings = Vec::new();
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
+    let mut all_answers = Vec::new();
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -407,6 +420,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_hearings.extend(output.hearings);
                 all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
+                all_answers.extend(output.answers);
             }
             Err(err) => {
                 record_gap(
@@ -435,6 +449,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &all_interpellations,
     )?;
     write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
+    write_answers_parquet(&session_dir.join("answers.parquet"), &all_answers)?;
 
     let gap_rows: Vec<MeetingGap> = gaps.into_values().collect();
     write_gaps(&session_dir.join("meeting_gaps.parquet"), &gap_rows)?;
@@ -571,13 +586,33 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
     let chair = extract_chair_from_document(&document)?;
     let commission = extract_commission_from_document(&document)?;
 
-    let questions = extract_questions(
+    let blocks = parse_report_blocks(&document);
+
+    let mut questions = extract_questions(
         &document,
         session_id,
         meeting_id,
         &url,
         &cache_path,
     )?;
+
+    let mut answers = extract_written_oral_answers(
+        &document,
+        &blocks,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
+    for q in &mut questions {
+        if let Some(answer) = answers.iter().find(|a| a.question_id == q.question_id) {
+            q.question_body_nl = answer.question_body_nl.clone();
+            q.question_body_fr = answer.question_body_fr.clone();
+            q.treatment_mode = "oral_written".to_string();
+        }
+    }
 
     let utterances = extract_utterances_from_document(
         &document,
@@ -614,6 +649,7 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         hearings,
         interpellations,
         utterances,
+        answers,
     })
 }
 
@@ -627,6 +663,7 @@ fn extract_questions(
     let mut questions = Vec::new();
     let mut previous_nl = String::new();
     let mut previous_fr = String::new();
+    let mut pending_nl_agenda: Option<String> = None;
     let mut question_seq: i32 = 0;
 
     // Commission reports always contain questions from the start; no section header needed.
@@ -648,6 +685,9 @@ fn extract_questions(
             topics_nl: data_nl.topics.join(";"),
             topics_fr: data_fr.topics.join(";"),
             internal_ids: data_nl.internal_ids.join(","),
+            question_body_nl: String::new(),
+            question_body_fr: String::new(),
+            treatment_mode: String::new(),
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
         }))
@@ -705,6 +745,22 @@ fn extract_questions(
 
             let full_heading =
                 clean_text(&element.text().collect::<Vec<_>>().join(" ")).replace("\"", "'");
+            let heading_agenda = extract_agenda_number(&full_heading);
+
+            // Pair NL h2 with the following FR h2 for the same agenda item.
+            if let (Some(found_fr), Some(pending)) = (found_fr.as_ref(), pending_nl_agenda.as_ref())
+            {
+                if heading_agenda.as_deref() == Some(pending.as_str())
+                    || looks_like_fr_heading(found_fr)
+                {
+                    if previous_fr.is_empty() {
+                        previous_fr = found_fr.clone();
+                    }
+                    pending_nl_agenda = None;
+                    continue;
+                }
+            }
+
             let is_non_question_proceeding = is_non_question_proceeding_heading(&full_heading);
             if classify_question_heading_bilingual(found_nl.as_deref(), found_fr.as_deref())
                 == QuestionHeadingRole::Unrelated
@@ -754,9 +810,13 @@ fn extract_questions(
                 }
                 if let Some(t) = found_nl {
                     previous_nl = t;
+                    pending_nl_agenda = heading_agenda.clone();
                 }
                 if let Some(t) = found_fr {
-                    previous_fr = t;
+                    if previous_fr.is_empty() {
+                        previous_fr = t;
+                    }
+                    pending_nl_agenda = None;
                 }
             } else if is_subquestion {
                 if let Some(t) = found_nl {

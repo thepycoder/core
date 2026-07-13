@@ -163,6 +163,10 @@ pub fn person_external_id(name: &str) -> String {
     format!("ext:person:{}", slugify_name(name))
 }
 
+pub fn department_external_id(deptnum: &str) -> String {
+    format!("ext:role:dept:{deptnum}")
+}
+
 pub fn classify_named_external(name: &str, bucket: &str) -> ExternalKind {
     let lower = name.trim().to_lowercase();
     if bucket == "respondents" || bucket == "speakers" {

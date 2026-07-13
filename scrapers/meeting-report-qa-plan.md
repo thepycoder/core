@@ -183,6 +183,7 @@ Strong crosschecks that catch parser drift, bilingual pairing errors, and roundt
 - **Signals today:** Cached HTML + staging `utterances.parquet`, `questions.parquet`, `votes.parquet`, `propositions.parquet`, `notices.parquet`, `meetings.parquet` (commission chair).
 - **Thresholds:** `warn` on kind p5 outlier (≥10 meetings) or ratio &lt; 85% of committed per-meeting baseline (`speech_coverage_baseline.parquet`). No absolute fail threshold in v1.
 - **Blind spots:** Bilingual duplication in source widens denominator; wrong speaker with valid label (ratio stays high); label drift merged into prior open turn (S6 better).
+- **Accepted low coverage (2026-07-12):** Do not chase coverage on constitutive / organizational plenary sessions (e.g. plenary 2–4). These reports lack standard `NN.NN Speaker:` turn markers; most missing words are procedural (oath legal text, committee/delegation name lists, bureau notices) or ceremonial (chair eulogies). That content is low value for utterance-based politics analysis (`SPOKE`, stance, Q&A, votes) and the wrong abstraction as `Utterance` rows. Notices already capture agenda-item titles; committee membership belongs in structured `MEMBER_OF` scrapers, not integraal prose. Keep `speech_char_coverage` as a regression sentinel for normal debate meetings; p5 outliers on early-session plenaries are expected, not parser bugs.
 
 #### A12. Web `allVotes` assembly
 - **Check id:** `web.allVotes_vs_staging`

@@ -101,7 +101,43 @@ fn load_saved_document_words(
                 *counts.entry(key).or_default() += sum_row_words(
                     &batch,
                     i,
-                    &["topics_nl", "topics_fr", "questioners", "respondents"],
+                    &[
+                        "topics_nl",
+                        "topics_fr",
+                        "questioners",
+                        "respondents",
+                        "question_body_nl",
+                        "question_body_fr",
+                    ],
+                );
+            }
+        }
+    }
+
+    for (kind, rel) in [
+        ("plenary", format!("sessions/{SESSION_ID}/plenary/answers.parquet")),
+        (
+            "commission",
+            format!("sessions/{SESSION_ID}/commission/answers.parquet"),
+        ),
+    ] {
+        let path = data_dir.join(&rel);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            for i in 0..batch.num_rows() {
+                let key = meeting_key(kind, &meeting_ids[i]);
+                *counts.entry(key).or_default() += sum_row_words(
+                    &batch,
+                    i,
+                    &[
+                        "text_nl",
+                        "text_fr",
+                        "question_body_nl",
+                        "question_body_fr",
+                    ],
                 );
             }
         }

@@ -1,20 +1,19 @@
 [package]
-name = "crawl"
+name = "qrva"
 version = "1.0.0"
 edition = "2024"
 
 [dependencies]
-reqwest = "0.12.14"
-regex = "1.11.1"
+crawl = { path = "../crawl" }
 tokio = { version = "1", features = ["full"] }
-rand = "0.10.1"
-dotenvy = "0.15.7"
-scraper = "0.12"
-encoding_rs = "0.8.35"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 arrow = "54.3.0"
 parquet = { version = "54.3.0", features = ["arrow"] }
+dotenvy = "0.15.7"
+zip = "2.2"
+quick-xml = "0.37"
 
-[dev-dependencies]
-parquet = { version = "54.3.0", features = ["arrow"] }
+[[bin]]
+name = "qrva"
+path = "src/main.rs"

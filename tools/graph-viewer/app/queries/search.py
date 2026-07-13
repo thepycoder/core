@@ -311,6 +311,8 @@ def _search_content(
         results.extend(_search_utterance_text(conn, tokens, fetch_limit))
     if node_type in (None, "Question"):
         results.extend(_search_question_content(conn, tokens, fetch_limit))
+    if node_type in (None, "Answer"):
+        results.extend(_search_answer_content(conn, tokens, fetch_limit))
     if node_type in (None, "Dossier"):
         results.extend(_search_dossier_content(conn, tokens, fetch_limit))
     if node_type in (None, "Document"):
@@ -369,96 +371,246 @@ def _search_question_content(conn, tokens: list[str], fetch_limit: int) -> list[
         path = settings.parquet_path(rel)
         if path.exists():
             paths.append(path.as_posix())
-    if not paths:
-        return []
-
-    union = " UNION ALL ".join(
-        f"""
-        SELECT question_id, topics_nl, topics_fr, questioners, respondents
-        FROM read_parquet('{p}')
-        """
-        for p in paths
-    )
-
-    where_parts = []
-    params: list = []
-    for token in tokens:
-        where_parts.append(
-            "(topics_nl ILIKE ? OR topics_fr ILIKE ? OR questioners ILIKE ? "
-            "OR respondents ILIKE ?)"
-        )
-        pattern = f"%{token}%"
-        params.extend([pattern] * 4)
-
-    rows = conn.execute(
-        f"""
-        SELECT question_id, topics_nl, questioners, respondents
-        FROM ({union}) q
-        WHERE {" AND ".join(where_parts)}
-        LIMIT ?
-        """,
-        [*params, fetch_limit],
-    ).fetchall()
 
     results: list[SearchResult] = []
-    for row in rows:
-        label = row[1] or row[0]
-        score = _content_score(label, row[0], f"{label} {row[2]} {row[3]}", tokens)
-        results.append(
-            SearchResult(
-                id=row[0],
-                type="Question",
-                label=label,
-                degree_in=0,
-                degree_out=0,
-                source="content",
-                score=score,
-                subtitle=f"{row[2]} → {row[3]}" if row[2] else "question content match",
-            )
+    seen: set[str] = set()
+
+    if paths:
+        union = " UNION ALL ".join(
+            f"""
+            SELECT question_id, topics_nl, topics_fr, questioners, respondents
+            FROM read_parquet('{p}')
+            """
+            for p in paths
         )
 
-    utterance_path = settings.parquet_path("normalized/utterances.parquet")
-    if utterance_path.exists():
-        utterance_where = []
-        utterance_params: list = []
+        where_parts = []
+        params: list = []
         for token in tokens:
-            utterance_where.append(
-                "(u.text ILIKE ? OR u.raw_speaker ILIKE ? OR u.item_id ILIKE ?)"
+            where_parts.append(
+                "(topics_nl ILIKE ? OR topics_fr ILIKE ? OR questioners ILIKE ? "
+                "OR respondents ILIKE ?)"
             )
             pattern = f"%{token}%"
-            utterance_params.extend([pattern, pattern, pattern])
-        utterance_rows = conn.execute(
+            params.extend([pattern] * 4)
+
+        rows = conn.execute(
             f"""
-            SELECT u.item_id, q.topics_nl, q.questioners, q.respondents
-            FROM read_parquet('{utterance_path.as_posix()}') u
-            LEFT JOIN ({union}) q ON q.question_id = u.item_id
-            WHERE u.item_kind = 'question'
-              AND {" AND ".join(utterance_where)}
+            SELECT question_id, topics_nl, questioners, respondents
+            FROM ({union}) q
+            WHERE {" AND ".join(where_parts)}
             LIMIT ?
             """,
-            [*utterance_params, fetch_limit],
+            [*params, fetch_limit],
         ).fetchall()
-        seen = {r.id for r in results}
-        for row in utterance_rows:
-            question_id = row[0]
-            if not question_id or question_id in seen:
-                continue
-            label = row[1] or question_id
-            score = _content_score(label, question_id, f"{label} {row[2]} {row[3]}", tokens)
+
+        for row in rows:
+            label = row[1] or row[0]
+            score = _content_score(label, row[0], f"{label} {row[2]} {row[3]}", tokens)
             results.append(
                 SearchResult(
-                    id=question_id,
+                    id=row[0],
                     type="Question",
                     label=label,
                     degree_in=0,
                     degree_out=0,
                     source="content",
                     score=score,
-                    subtitle="utterance text match",
+                    subtitle=f"{row[2]} → {row[3]}" if row[2] else "oral question match",
                 )
             )
-            seen.add(question_id)
+            seen.add(row[0])
 
+        utterance_path = settings.parquet_path("normalized/utterances.parquet")
+        if utterance_path.exists():
+            utterance_where = []
+            utterance_params: list = []
+            for token in tokens:
+                utterance_where.append(
+                    "(u.text ILIKE ? OR u.raw_speaker ILIKE ? OR u.item_id ILIKE ?)"
+                )
+                pattern = f"%{token}%"
+                utterance_params.extend([pattern, pattern, pattern])
+            utterance_rows = conn.execute(
+                f"""
+                SELECT u.item_id, q.topics_nl, q.questioners, q.respondents
+                FROM read_parquet('{utterance_path.as_posix()}') u
+                LEFT JOIN ({union}) q ON q.question_id = u.item_id
+                WHERE u.item_kind = 'question'
+                  AND {" AND ".join(utterance_where)}
+                LIMIT ?
+                """,
+                [*utterance_params, fetch_limit],
+            ).fetchall()
+            for row in utterance_rows:
+                question_id = row[0]
+                if not question_id or question_id in seen:
+                    continue
+                label = row[1] or question_id
+                score = _content_score(label, question_id, f"{label} {row[2]} {row[3]}", tokens)
+                results.append(
+                    SearchResult(
+                        id=question_id,
+                        type="Question",
+                        label=label,
+                        degree_in=0,
+                        degree_out=0,
+                        source="content",
+                        score=score,
+                        subtitle="utterance text match",
+                    )
+                )
+                seen.add(question_id)
+
+    results.extend(_search_written_question_content(conn, tokens, fetch_limit, seen))
+    return results
+
+
+def _search_written_question_content(
+    conn, tokens: list[str], fetch_limit: int, seen: set[str]
+) -> list[SearchResult]:
+    try:
+        where_parts = []
+        params: list = []
+        for token in tokens:
+            where_parts.append(
+                "("
+                "title_nl ILIKE ? OR title_fr ILIKE ? OR text_nl ILIKE ? OR text_fr ILIKE ? "
+                "OR author_raw ILIKE ? OR docname ILIKE ? OR internal_ids ILIKE ? OR oral_refs ILIKE ?"
+                ")"
+            )
+            pattern = f"%{token}%"
+            params.extend([pattern] * 8)
+
+        rows = conn.execute(
+            f"""
+            SELECT question_id, title_nl, title_fr, author_raw,
+                   left(text_nl, 240) AS snippet_nl, left(text_fr, 240) AS snippet_fr
+            FROM written_questions
+            WHERE {" AND ".join(where_parts)}
+            LIMIT ?
+            """,
+            [*params, fetch_limit],
+        ).fetchall()
+    except Exception:
+        return []
+
+    results: list[SearchResult] = []
+    for row in rows:
+        if row[0] in seen:
+            continue
+        label = row[1] or row[2] or row[0]
+        snippet = row[4] or row[5] or ""
+        author = " ".join((row[3] or "").split())
+        score = _content_score(label, row[0], f"{label} {snippet} {author}", tokens)
+        subtitle = _clip(snippet, 100) if snippet else f"written · {author}" if author else "written question"
+        results.append(
+            SearchResult(
+                id=row[0],
+                type="Question",
+                label=_clip(label, 120),
+                degree_in=0,
+                degree_out=0,
+                source="content",
+                score=score + 5,
+                subtitle=subtitle,
+            )
+        )
+        seen.add(row[0])
+
+    try:
+        route_where = []
+        route_params: list = []
+        for token in tokens:
+            route_where.append(
+                "(dept_title_nl ILIKE ? OR dept_title_fr ILIKE ? OR subdept_nl ILIKE ? "
+                "OR subdept_fr ILIKE ? OR questnum ILIKE ? OR sdocname ILIKE ?)"
+            )
+            pattern = f"%{token}%"
+            route_params.extend([pattern] * 6)
+        route_rows = conn.execute(
+            f"""
+            SELECT DISTINCT r.question_id, q.title_nl, q.title_fr, r.dept_title_nl, r.questnum
+            FROM written_routes r
+            JOIN written_questions q ON q.question_id = r.question_id
+            WHERE {" AND ".join(route_where)}
+            LIMIT ?
+            """,
+            [*route_params, fetch_limit],
+        ).fetchall()
+    except Exception:
+        return results
+
+    for row in route_rows:
+        if row[0] in seen:
+            continue
+        label = row[1] or row[2] or row[0]
+        score = _content_score(label, row[0], f"{label} {row[3]} {row[4]}", tokens)
+        results.append(
+            SearchResult(
+                id=row[0],
+                type="Question",
+                label=_clip(label, 120),
+                degree_in=0,
+                degree_out=0,
+                source="content",
+                score=score,
+                subtitle=f"route · {row[3]} (#{row[4]})" if row[3] else "written route match",
+            )
+        )
+        seen.add(row[0])
+
+    return results
+
+
+def _search_answer_content(conn, tokens: list[str], fetch_limit: int) -> list[SearchResult]:
+    where_parts = []
+    params: list = []
+    for token in tokens:
+        where_parts.append("(text_nl ILIKE ? OR text_fr ILIKE ? OR answer_id ILIKE ?)")
+        pattern = f"%{token}%"
+        params.extend([pattern, pattern, pattern])
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT answer_id, question_id, left(text_nl, 200) AS snippet_nl, left(text_fr, 200) AS snippet_fr
+            FROM answers
+            WHERE {" AND ".join(where_parts)}
+            LIMIT ?
+            """,
+            [*params, fetch_limit],
+        ).fetchall()
+    except Exception:
+        return []
+
+    results: list[SearchResult] = []
+    for row in rows:
+        snippet = row[2] or row[3] or ""
+        label = _clip(snippet, 120) if snippet else row[0]
+        score = _content_score(label, row[0], snippet, tokens)
+        kind_hint = ""
+        try:
+            kind_row = conn.execute(
+                "SELECT kind FROM answers WHERE answer_id = ? LIMIT 1",
+                [row[0]],
+            ).fetchone()
+            if kind_row and kind_row[0]:
+                kind_hint = f" · {kind_row[0]}"
+        except Exception:
+            pass
+        results.append(
+            SearchResult(
+                id=row[0],
+                type="Answer",
+                label=label,
+                degree_in=0,
+                degree_out=0,
+                source="content",
+                score=score,
+                subtitle=f"question {row[1]}{kind_hint}" if row[1] else "answer text match",
+            )
+        )
     return results
 
 
