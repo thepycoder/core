@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use scraper::{Html, Selector};
@@ -52,6 +52,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let index_url = "https://www.dekamer.be/kvvcr/showpage.cfm?section=/none&language=nl&cfm=/site/wwwcfm/comm/LstCom.cfm";
     if !index_cache.exists() {
+        if cache_only() {
+            return Err(format!(
+                "commissions index cache missing at {} (SCRAPER_CACHE_ONLY)",
+                index_cache.display()
+            )
+            .into());
+        }
         let html = client.get(index_url).await?.text().await?;
         fs::write(&index_cache, &html).await?;
     }
@@ -65,6 +72,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for entry in &index {
         if !entry.cache_path.exists() {
+            if cache_only() {
+                eprintln!(
+                    "[commissions] skipping {} — detail cache missing (SCRAPER_CACHE_ONLY)",
+                    entry.name
+                );
+                continue;
+            }
             let html = client.get(&entry.url).await?.text().await?;
             web_requests += 1;
             fs::write(&entry.cache_path, &html).await?;

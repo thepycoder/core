@@ -3,7 +3,7 @@ mod parse;
 mod xml;
 
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::qrva_text::QRVA_API_BASE;
 use crawl::utils::relative_cache_path;
 use io::{write_written_answers, write_written_questions, write_written_routes};
@@ -31,16 +31,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let archive_url = format!("{QRVA_API_BASE}/qrva/archive?leg={SESSION_ID}");
-    let archive_resp = client.get(&archive_url).await?;
-    if archive_resp.status().is_success() {
-        let bytes = archive_resp.bytes().await?;
-        fs::write(&archive_path, &bytes)?;
-        eprintln!("Cached QRVA archive ({} bytes)", bytes.len());
+    if cache_only() {
+        if !archive_path.exists() {
+            eprintln!(
+                "QRVA archive cache missing at {} — loading detail/*.json only",
+                archive_path.display()
+            );
+        }
     } else {
-        eprintln!(
-            "QRVA archive unavailable ({}), falling back to paginated search",
-            archive_resp.status()
-        );
+        let archive_resp = client.get(&archive_url).await?;
+        if archive_resp.status().is_success() {
+            let bytes = archive_resp.bytes().await?;
+            fs::write(&archive_path, &bytes)?;
+            eprintln!("Cached QRVA archive ({} bytes)", bytes.len());
+        } else {
+            eprintln!(
+                "QRVA archive unavailable ({}), falling back to paginated search",
+                archive_resp.status()
+            );
+        }
     }
 
     let mut records: Vec<(Value, String)> = Vec::new();
@@ -75,7 +84,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if records.is_empty() {
+    if records.is_empty() && cache_only() {
+        for entry in fs::read_dir(&detail_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let body: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+            let cache_path = relative_cache_path(&path, &cache_root);
+            let detail_items = records_from_search_page(&body);
+            if detail_items.is_empty() {
+                records.push((body, cache_path));
+            } else {
+                for item in detail_items {
+                    records.push((item, cache_path.clone()));
+                }
+            }
+        }
+    }
+
+    if records.is_empty() && !cache_only() {
         let mut start = 0;
         loop {
             let url = format!("{QRVA_API_BASE}/qrva?leg={SESSION_ID}&start={start}");

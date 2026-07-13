@@ -3,7 +3,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::NaiveDate;
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::{dutch_language_to_language_code, dutch_month_to_number, relative_cache_path};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
@@ -150,6 +150,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ));
 
         if !index_path.exists() {
+            if cache_only() {
+                return Err(format!(
+                    "members list cache missing at {} (SCRAPER_CACHE_ONLY)",
+                    index_path.display()
+                )
+                .into());
+            }
             let content = client.get(url).await?.text().await?;
             web_request_count += 1;
             fs::create_dir_all(index_path.parent().unwrap()).await?;
@@ -310,6 +317,13 @@ async fn extract_members(
             session_id, name
         ));
         if !detail_path.exists() {
+            if cache_only() {
+                eprintln!(
+                    "[members] skipping {} — detail cache missing (SCRAPER_CACHE_ONLY)",
+                    name
+                );
+                continue;
+            }
             let url = format!("https://www.dekamer.be/kvvcr/{}", member_detail_page_link);
             let content = client.get(&url).await?.text().await?;
             *web_request_count += 1;

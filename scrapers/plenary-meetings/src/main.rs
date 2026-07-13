@@ -1,9 +1,9 @@
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::report_blocks::read_report_html;
-use crawl::utils::{clean_text, composite_id, composite_scoped_id, relative_cache_path};
+use crawl::utils::{clean_text, composite_id, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
     appendix_marker_for_vote, classify_question_heading_bilingual, classify_question_heading_text,
     extract_proceedings_from_document, extract_utterances_from_document,
@@ -441,15 +441,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let current_meeting_id: u32 = std::fs::read_to_string(&meeting_id_path)?.trim().parse()?;
 
     let mut web_request_count = 0u32;
-    let last_meeting_id = discover_last_meeting_id(
-        &client,
-        session_id,
-        current_meeting_id,
-        &mut web_request_count,
-    )
-    .await?;
+    let last_meeting_id = if cache_only() {
+        max_cached_meeting_id(session_id, "plenary").unwrap_or(current_meeting_id)
+    } else {
+        discover_last_meeting_id(
+            &client,
+            session_id,
+            current_meeting_id,
+            &mut web_request_count,
+        )
+        .await?
+    };
 
-    if last_meeting_id == current_meeting_id {
+    if cache_only() {
+        println!(
+            "[meetings-plenary] cache-only: parsing meetings 1..={last_meeting_id}"
+        );
+    } else if last_meeting_id == current_meeting_id {
         println!("[meetings-plenary] no new meeting available to download");
     } else {
         println!(
@@ -485,15 +493,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for meeting_id in 1..=last_meeting_id {
         meetings_pb.set_message(format!("reqs={} meeting={}", web_request_count, meeting_id));
 
-        match scrape_meeting(
-            &client,
-            session_id,
-            meeting_id,
-            &mut web_request_count,
-            &mut encountered_dossier_ids,
-        )
-        .await
-        {
+        let result = if cache_only() {
+            parse_meeting_from_cache(session_id, meeting_id, &mut encountered_dossier_ids).await
+        } else {
+            scrape_meeting(
+                &client,
+                session_id,
+                meeting_id,
+                &mut web_request_count,
+                &mut encountered_dossier_ids,
+            )
+            .await
+        };
+
+        match result {
             Ok(output) => {
                 all_meetings.push(output.meeting);
                 all_questions.extend(output.questions);

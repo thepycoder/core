@@ -2,13 +2,14 @@ use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{Local, NaiveDate};
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
 use encoding_rs::WINDOWS_1252;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -16,10 +17,15 @@ use std::fs::{File, read_to_string};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::SystemTime;
 use tokio::fs::read_dir;
 use tokio::fs::{self, remove_file};
 
 const DEKAMER_BASE: &str = "https://www.dekamer.be";
+/// Re-check open dossiers at most once per week unless linked to a recent plenary meeting.
+const DEFAULT_RECHECK_DAYS: i64 = 7;
+/// Dossiers tied to a plenary meeting in the last week are re-checked daily.
+const ACTIVE_RECHECK_DAYS: i64 = 1;
 
 static SELECTOR_TR: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_TD: OnceLock<Selector> = OnceLock::new();
@@ -218,7 +224,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mp = MultiProgress::new();
     let mut web_request_count = 0u32;
 
-    download_dossiers(session_id, &client, &mut web_request_count, &mp).await?;
+    if cache_only() {
+        println!("[dossiers] cache-only: skipping downloads, parsing cached HTML only");
+    } else {
+        download_dossiers(session_id, &client, &mut web_request_count, &mp).await?;
+    }
 
     let DossierScrapeOutput {
         dossiers,
@@ -264,9 +274,15 @@ async fn download_dossiers(
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );
 
+    let mut stats = DownloadStats::default();
     for (id, latest_meeting_date) in &id_dates {
-        pb.set_message(format!("reqs={} id={}", web_request_count, id));
-        check_and_download_dossier_file(
+        pb.set_message(format!(
+            "reqs={} id={} skip={}",
+            web_request_count,
+            id,
+            stats.skipped_total()
+        ));
+        let action = check_and_download_dossier_file(
             id,
             latest_meeting_date,
             session_id,
@@ -274,10 +290,19 @@ async fn download_dossiers(
             web_request_count,
         )
         .await?;
+        stats.record(action);
         pb.inc(1);
     }
 
     pb.finish_with_message("done");
+    println!(
+        "[dossiers] download cache: {} settled, {} fresh, {} unchanged, {} updated ({} web requests)",
+        stats.skipped_settled,
+        stats.skipped_fresh,
+        stats.skipped_unchanged,
+        stats.downloaded,
+        web_request_count
+    );
     Ok(())
 }
 
@@ -415,72 +440,210 @@ fn extract_flwb_dossier_ids(html: &str) -> Vec<String> {
     ids
 }
 
-/// Checks if the dossier file is already downloaded and, if not, downloads it.
-/// If fetched already today, skip.
-/// If the cached file is newer than the meeting date and the meeting is > 7 days ago, skip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadAction {
+    SkippedSettled,
+    SkippedFresh,
+    SkippedUnchanged,
+    Downloaded,
+}
+
+#[derive(Debug, Default)]
+struct DownloadStats {
+    skipped_settled: u32,
+    skipped_fresh: u32,
+    skipped_unchanged: u32,
+    downloaded: u32,
+}
+
+impl DownloadStats {
+    fn record(&mut self, action: DownloadAction) {
+        match action {
+            DownloadAction::SkippedSettled => self.skipped_settled += 1,
+            DownloadAction::SkippedFresh => self.skipped_fresh += 1,
+            DownloadAction::SkippedUnchanged => self.skipped_unchanged += 1,
+            DownloadAction::Downloaded => self.downloaded += 1,
+        }
+    }
+
+    fn skipped_total(&self) -> u32 {
+        self.skipped_settled + self.skipped_fresh + self.skipped_unchanged
+    }
+}
+
+#[derive(Serialize)]
+struct SubdocumentFingerprint {
+    id: String,
+    date: String,
+    document_type: String,
+}
+
+#[derive(Serialize)]
+struct DossierContentFingerprint {
+    status: String,
+    submission_date: String,
+    end_date: String,
+    vote_date: String,
+    subdocuments: Vec<SubdocumentFingerprint>,
+}
+
+/// Fingerprint of the dossier metadata table (status, dates, subdocuments).
+/// Changes when dekamer.be adds or updates parliamentary documents on the dossier page.
+fn dossier_content_fingerprint(html: &str, dossier_id: &str) -> Result<String, Box<dyn Error>> {
+    let document = Html::parse_document(html);
+    let dossier = scrape_dossier(dossier_id, &document)?;
+    let mut subdocuments = dossier
+        .subdocuments
+        .iter()
+        .map(|subdocument| SubdocumentFingerprint {
+            id: subdocument.id.clone(),
+            date: subdocument.date.clone(),
+            document_type: subdocument.document_type.to_string(),
+        })
+        .collect::<Vec<_>>();
+    subdocuments.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let fingerprint = DossierContentFingerprint {
+        status: dossier.status.to_string(),
+        submission_date: dossier.submission_date,
+        end_date: dossier.end_date,
+        vote_date: dossier.vote_date,
+        subdocuments,
+    };
+    Ok(serde_json::to_string(&fingerprint)?)
+}
+
+fn dossier_reference_date(dossier: &Dossier) -> Option<NaiveDate> {
+    for value in [&dossier.end_date, &dossier.vote_date] {
+        if value.is_empty() {
+            continue;
+        }
+        if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            return Some(date);
+        }
+    }
+    None
+}
+
+/// Terminal dossiers with an end/vote date more than a week ago are unlikely to change.
+fn is_settled_dossier(dossier: &Dossier) -> bool {
+    let terminal = matches!(
+        dossier.status,
+        DocumentStatus::Aangenomen | DocumentStatus::Verworpen | DocumentStatus::ZonderVoorwerp
+    );
+    if !terminal {
+        return false;
+    }
+    let Some(reference_date) = dossier_reference_date(dossier) else {
+        return false;
+    };
+    let today = Local::now().naive_local().date();
+    (today - reference_date).num_days() >= DEFAULT_RECHECK_DAYS
+}
+
+fn recheck_max_age_days(latest_meeting_date: &str) -> i64 {
+    if latest_meeting_date.is_empty() {
+        return DEFAULT_RECHECK_DAYS;
+    }
+    let Ok(meeting_date) = NaiveDate::parse_from_str(latest_meeting_date, "%Y-%m-%d") else {
+        return DEFAULT_RECHECK_DAYS;
+    };
+    let today = Local::now().naive_local().date();
+    if (today - meeting_date).num_days().abs() < DEFAULT_RECHECK_DAYS {
+        ACTIVE_RECHECK_DAYS
+    } else {
+        DEFAULT_RECHECK_DAYS
+    }
+}
+
+fn cache_age_days(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let modified = modified.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    let modified = chrono::DateTime::<chrono::Utc>::from_timestamp(modified.as_secs() as i64, 0)?;
+    let today = Local::now().date_naive();
+    Some((today - modified.date_naive()).num_days())
+}
+
+fn touch_cache_file(path: &Path) -> Result<(), Box<dyn Error>> {
+    let file = std::fs::OpenOptions::new().write(true).open(path)?;
+    file.set_modified(SystemTime::now())?;
+    Ok(())
+}
+
+async fn find_cached_dossier_path(
+    dossier_dir: &Path,
+    session_id: u32,
+    dossier_id: &str,
+) -> Option<PathBuf> {
+    let filename_prefix = format!("{}_{}_", session_id, dossier_id);
+    let mut entries = read_dir(dossier_dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if file_name.starts_with(&filename_prefix) && file_name.ends_with(".html") {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+fn dossier_url(session_id: u32, dossier_id: &str) -> String {
+    format!(
+        "https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat={}&dossierID={}",
+        session_id, dossier_id
+    )
+}
+
+/// Checks whether a cached dossier HTML is still current.
+///
+/// Uses the metadata table fingerprint (status, dates, subdocuments). Settled dossiers
+/// skip network entirely; open dossiers are re-checked weekly (daily when linked to a
+/// recent plenary meeting).
 async fn check_and_download_dossier_file(
     dossier_id: &str,
     latest_meeting_date: &str,
     session_id: u32,
     client: &ScrapingClient,
     web_request_count: &mut u32,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<DownloadAction, Box<dyn Error>> {
     let dossier_dir = cache_dir().join(format!("sessions/{}/dossiers", session_id));
     fs::create_dir_all(&dossier_dir).await?;
 
-    let filename_prefix = format!("{}_{}_", session_id, dossier_id);
-    let mut existing_file: Option<PathBuf> = None;
+    let url = dossier_url(session_id, dossier_id);
+    let existing_file = find_cached_dossier_path(&dossier_dir, session_id, dossier_id).await;
 
-    if let Ok(mut entries) = read_dir(&dossier_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            if !file_name.starts_with(&filename_prefix) {
-                continue;
-            }
-            existing_file = Some(entry.path());
-            if let Some(caps) = Regex::new(r"_(\d{4}-\d{2}-\d{2})")?.captures(&file_name) {
-                let fetched_str = &caps[1];
-                let today = Local::now().naive_local().date();
+    if let Some(cache_path) = &existing_file {
+        let cached_html = read_to_string(cache_path)?;
+        let cached_dossier = scrape_dossier(dossier_id, &Html::parse_document(&cached_html))?;
 
-                // Already fetched today — never re-fetch within the same run
-                if fetched_str == today.format("%Y-%m-%d").to_string() {
-                    return Ok(());
-                }
-
-                let fetched = NaiveDate::parse_from_str(fetched_str, "%Y-%m-%d").ok();
-                let meeting = NaiveDate::parse_from_str(latest_meeting_date, "%Y-%m-%d").ok();
-
-                // Skip if cached file post-dates the meeting AND the meeting
-                // was more than a week ago (dossier unlikely to still change).
-                // FLWB-only discoveries have no plenary meeting date — never skip on that basis.
-                if let (Some(fetched_date), Some(meeting_date)) = (fetched, meeting) {
-                    let within_a_week = (fetched_date - meeting_date).num_days().abs() < 7;
-                    if fetched_date >= meeting_date && !within_a_week {
-                        return Ok(());
-                    }
-                }
-            }
-            break;
+        if is_settled_dossier(&cached_dossier) {
+            return Ok(DownloadAction::SkippedSettled);
         }
+
+        if cache_age_days(cache_path).is_some_and(|age| age < recheck_max_age_days(latest_meeting_date))
+        {
+            return Ok(DownloadAction::SkippedFresh);
+        }
+
+        let cached_fingerprint = dossier_content_fingerprint(&cached_html, dossier_id)?;
+        let live_html = fetch_html(client, &url, web_request_count).await?;
+        let live_fingerprint = dossier_content_fingerprint(&live_html, dossier_id)?;
+        if cached_fingerprint == live_fingerprint {
+            touch_cache_file(cache_path)?;
+            return Ok(DownloadAction::SkippedUnchanged);
+        }
+
+        let _ = remove_file(cache_path).await;
+        let today = Local::now().naive_local().date();
+        let new_path = dossier_dir.join(format!("{}_{}_{}.html", session_id, dossier_id, today));
+        fs::write(&new_path, live_html).await?;
+        return Ok(DownloadAction::Downloaded);
     }
 
-    if let Some(old_path) = &existing_file {
-        let _ = remove_file(old_path).await;
-    }
-
+    let live_html = fetch_html(client, &url, web_request_count).await?;
     let today = Local::now().naive_local().date();
     let new_path = dossier_dir.join(format!("{}_{}_{}.html", session_id, dossier_id, today));
-    let url = format!(
-        "https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat={}&dossierID={}",
-        session_id, dossier_id
-    );
-
-    let response = client.get(&url).await?;
-    *web_request_count += 1;
-    let raw_bytes = response.bytes().await?;
-    let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
-    fs::write(&new_path, decoded_str.as_ref()).await?;
-    Ok(())
+    fs::write(&new_path, live_html).await?;
+    Ok(DownloadAction::Downloaded)
 }
 
 /// Scrape all cached HTML dossier files.
@@ -1056,5 +1219,44 @@ mod tests {
         "#;
         let ids = extract_flwb_dossier_ids(html);
         assert_eq!(ids, vec!["99".to_string(), "98".to_string()]);
+    }
+
+    #[test]
+    fn recheck_max_age_uses_shorter_window_for_recent_plenary_meeting() {
+        let today = Local::now().naive_local().date();
+        let recent = (today - chrono::Duration::days(2))
+            .format("%Y-%m-%d")
+            .to_string();
+        let old = (today - chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(recheck_max_age_days(&recent), ACTIVE_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days(&old), DEFAULT_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days(""), DEFAULT_RECHECK_DAYS);
+    }
+
+    #[test]
+    fn dossier_fingerprint_is_stable_for_cached_html() {
+        let path = Path::new("cache/sessions/56/dossiers/56_1000_2026-07-01.html");
+        if !path.exists() {
+            return;
+        }
+        let html = std::fs::read_to_string(path).expect("read cached dossier html");
+        let first = dossier_content_fingerprint(&html, "1000").expect("fingerprint");
+        let second = dossier_content_fingerprint(&html, "1000").expect("fingerprint");
+        assert_eq!(first, second);
+        assert!(first.contains("Aangenomen"));
+    }
+
+    #[test]
+    fn adopted_dossier_with_old_end_date_is_settled() {
+        let path = Path::new("cache/sessions/56/dossiers/56_1000_2026-07-01.html");
+        if !path.exists() {
+            return;
+        }
+        let html = std::fs::read_to_string(path).expect("read cached dossier html");
+        let dossier =
+            scrape_dossier("1000", &Html::parse_document(&html)).expect("scrape dossier");
+        assert!(is_settled_dossier(&dossier));
     }
 }

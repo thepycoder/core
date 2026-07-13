@@ -1,6 +1,6 @@
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
 use headless_chrome::Browser;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -169,6 +169,9 @@ async fn extract_remunerations(
     let cache_path_rel = relative_cache_path(&cache_path, &cache_dir());
 
     if !cache_path.exists() {
+        if cache_only() {
+            return Ok(vec![]);
+        }
         tab.navigate_to(&source_url)?;
         *web_requests += 1;
         tab.wait_for_element("kendo-autocomplete")?;

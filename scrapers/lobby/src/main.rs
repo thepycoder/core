@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
@@ -41,6 +41,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(pdf_path.parent().unwrap()).await?;
 
     if !pdf_path.exists() {
+        if cache_only() {
+            return Err(format!(
+                "lobby PDF cache missing at {} (SCRAPER_CACHE_ONLY)",
+                pdf_path.display()
+            )
+            .into());
+        }
         let response = client.get(LOBBY_PDF_URL).await?;
         let bytes = response.bytes().await?;
         fs::write(&pdf_path, &bytes).await?;

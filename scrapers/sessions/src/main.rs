@@ -1,7 +1,7 @@
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
 use parquet::arrow::ArrowWriter;
 use scraper::{Html, Selector};
@@ -36,6 +36,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let url = "https://www.dekamer.be/kvvcr/showpage.cfm?section=/depute&language=nl&cfm=/site/wwwcfm/depute/cvlist54.cfm";
 
     if !index_cache.exists() {
+        if cache_only() {
+            return Err(format!(
+                "sessions index cache missing at {} (SCRAPER_CACHE_ONLY)",
+                index_cache.display()
+            )
+            .into());
+        }
         let client = crawl::client::ScrapingClient::new();
         let html = client.get(url).await?.text().await?;
         fs::write(&index_cache, &html).await?;

@@ -1,4 +1,5 @@
 use crate::characters::CHARACTERS;
+use crate::paths::cache_dir;
 use regex::Regex;
 use std::path::Path;
 
@@ -87,6 +88,64 @@ mod tests {
     fn normalize_site_ref_strips_q_prefix() {
         assert_eq!(normalize_site_ref("Q56001216P"), "56001216P");
         assert_eq!(normalize_site_ref("56000109I"), "56000109I");
+    }
+}
+
+/// Highest `{session_id}-{n}.html` meeting id present under `sessions/{session_id}/meetings/{kind}/`.
+pub fn max_cached_meeting_id(session_id: u32, meeting_kind: &str) -> Option<u32> {
+    let dir = cache_dir().join(format!("sessions/{session_id}/meetings/{meeting_kind}"));
+    let prefix = format!("{session_id}-");
+    let mut max_id = None;
+    let entries = std::fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(&prefix) || !name.ends_with(".html") {
+            continue;
+        }
+        let Some(id_str) = name
+            .strip_prefix(&prefix)
+            .and_then(|stem| stem.strip_suffix(".html"))
+        else {
+            continue;
+        };
+        if let Ok(id) = id_str.parse::<u32>() {
+            max_id = Some(max_id.map_or(id, |current: u32| current.max(id)));
+        }
+    }
+    max_id
+}
+
+#[cfg(test)]
+mod meeting_cache_tests {
+    use super::*;
+
+    #[test]
+    fn max_cached_meeting_id_parses_filenames() {
+        let dir = std::env::temp_dir().join(format!("pg-meeting-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("56-3.html"), "x").unwrap();
+        std::fs::write(dir.join("56-12.html"), "x").unwrap();
+        std::fs::write(dir.join("55-99.html"), "x").unwrap();
+
+        let prefix = "56-";
+        let mut max_id = None;
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(prefix) || !name.ends_with(".html") {
+                continue;
+            }
+            let id = name
+                .strip_prefix(prefix)
+                .unwrap()
+                .strip_suffix(".html")
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
+            max_id = Some(max_id.map_or(id, |current| current.max(id)));
+        }
+        assert_eq!(max_id, Some(12));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

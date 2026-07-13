@@ -1,6 +1,23 @@
 # Scrape all sources, rebuild identity, normalize edges, and write graph Parquet.
 update: scrape-sessions scrape-commissions scrape-members scrape-plenary-meetings scrape-commission-meetings scrape-qrva scrape-dossiers scrape-lobby scrape-remunerations build-identity normalize-edges enrich-external-persons build-graph qa
 
+# Rebuild staging + graph from existing scraper cache only (no network fetches).
+reparse: reparse-scrapers build-identity normalize-edges build-graph qa
+
+reparse-scrapers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export SCRAPER_CACHE_ONLY=1
+    cargo run --bin sessions
+    cargo run --bin commissions
+    cargo run --bin members
+    cargo run --bin plenary-meetings
+    cargo run --bin commission-meetings
+    cargo run --bin qrva
+    cargo run --bin dossiers
+    cargo run --bin lobby
+    cargo run --bin remunerations
+
 scrape-sessions:
     cargo run --bin sessions
 

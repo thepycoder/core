@@ -1,8 +1,8 @@
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
-use crawl::paths::{cache_dir, data_dir};
-use crawl::utils::{clean_text, composite_scoped_id, relative_cache_path};
+use crawl::paths::{cache_dir, cache_only, data_dir};
+use crawl::utils::{clean_text, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
     classify_question_heading_bilingual, classify_question_heading_text, extract_agenda_number,
     extract_proceedings_from_document, extract_utterances_from_document, extract_written_oral_answers,
@@ -368,16 +368,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     eprintln!(
         "[meetings-commission] fetching new reports after meeting {current_meeting_id}…"
     );
-    let last_meeting_id = fetch_new_meetings(
-        &client,
-        session_id,
-        current_meeting_id,
-        &mut web_request_count,
-        &mut gaps,
-    )
-    .await?;
+    let last_meeting_id = if cache_only() {
+        max_cached_meeting_id(session_id, "commission").unwrap_or(current_meeting_id)
+    } else {
+        fetch_new_meetings(
+            &client,
+            session_id,
+            current_meeting_id,
+            &mut web_request_count,
+            &mut gaps,
+        )
+        .await?
+    };
 
-    if last_meeting_id == current_meeting_id {
+    if cache_only() {
+        println!(
+            "[meetings-commission] cache-only: parsing meetings 1..={last_meeting_id}"
+        );
+    } else if last_meeting_id == current_meeting_id {
         println!("[meetings-commission] no new meeting available to download");
     } else {
         println!(

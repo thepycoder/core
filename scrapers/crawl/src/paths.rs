@@ -15,3 +15,11 @@ pub fn cache_dir() -> PathBuf {
         .unwrap_or_else(|_| "scrapers/cache".to_string())
         .into()
 }
+
+/// When true, scrapers parse existing cache files only and must not fetch new content.
+/// Set via `SCRAPER_CACHE_ONLY=1` (e.g. `just reparse`).
+pub fn cache_only() -> bool {
+    std::env::var("SCRAPER_CACHE_ONLY")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
