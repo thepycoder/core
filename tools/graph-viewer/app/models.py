@@ -355,3 +355,31 @@ class ReportMeeting(BaseModel):
 
 class ReportMeetingsResponse(BaseModel):
     meetings: list[ReportMeeting]
+
+
+class BrowseCategory(BaseModel):
+    id: str
+    label: str
+    description: str
+    node_type: str
+    count: int
+
+
+class BrowseCategoriesResponse(BaseModel):
+    categories: list[BrowseCategory]
+
+
+class BrowseItem(BaseModel):
+    id: str
+    type: str
+    label: str
+    subtitle: str = ""
+    sort_key: str = ""
+
+
+class BrowseResponse(BaseModel):
+    category: str
+    total: int
+    limit: int
+    offset: int
+    items: list[BrowseItem]

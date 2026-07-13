@@ -2,6 +2,10 @@ let inspectorNode = null;
 const navStack = [];
 const linkSearchTimers = new Map();
 const PAGE_SIZE = 40;
+const EXPLORE_PAGE_SIZE = 40;
+let exploreCategory = null;
+let exploreFilter = "";
+let exploreOffset = 0;
 
 function navStackSnapshot() {
   return navStack.map((item) => ({ type: item.type, id: item.id, label: item.label }));
@@ -50,11 +54,226 @@ function seedHomeHistoryEntry() {
 
 function resetInspector() {
   inspectorNode = null;
+  exploreCategory = null;
+  exploreFilter = "";
+  exploreOffset = 0;
   renderProvenanceBar("", "");
+  renderExploreHome();
+}
+
+async function renderExploreHome() {
   const el = document.getElementById("inspector-content");
-  el.innerHTML =
-    "Search for an entity or click an issue sample to inspect links and open source documents.";
+  el.innerHTML = `<div class="explore-loading muted">Loading explore lists…</div>`;
   el.classList.add("muted");
+
+  try {
+    const [categoriesRes, stats] = await Promise.all([
+      api("/api/browse/categories"),
+      api("/api/stats").catch(() => null),
+    ]);
+    const categories = categoriesRes.categories || [];
+    el.classList.remove("muted");
+    el.innerHTML = "";
+
+    const intro = document.createElement("div");
+    intro.className = "explore-home";
+    intro.innerHTML = `
+      <div class="explore-intro">
+        <h2>Explore the database</h2>
+        <p class="muted">
+          Pick a list below to browse entities, or use search in the sidebar to jump directly to a name or topic.
+        </p>
+      </div>
+    `;
+    el.appendChild(intro);
+
+    if (stats) {
+      const statsEl = document.createElement("div");
+      statsEl.className = "explore-stats stats-grid";
+      statsEl.innerHTML = `
+        <div><span>Nodes</span>${stats.node_count.toLocaleString()}</div>
+        <div><span>Edges</span>${stats.edge_count.toLocaleString()}</div>
+        <div><span>Artifacts</span>${stats.artifact_count.toLocaleString()}</div>
+      `;
+      intro.appendChild(statsEl);
+    }
+
+    if (!categories.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No browse lists available — check that parquet data is present.";
+      intro.appendChild(empty);
+      return;
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "explore-categories";
+    for (const cat of categories) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "explore-category-card";
+      btn.innerHTML = `
+        <span class="explore-category-label">${escapeHtml(cat.label)}</span>
+        <span class="explore-category-count">${cat.count.toLocaleString()}</span>
+        <span class="explore-category-desc muted">${escapeHtml(cat.description)}</span>
+      `;
+      btn.addEventListener("click", () => showExploreCategory(cat));
+      grid.appendChild(btn);
+    }
+    intro.appendChild(grid);
+  } catch (err) {
+    el.innerHTML = `<div class="muted">Could not load explore lists: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function showExploreCategory(category, options = {}) {
+  const { resetOffset = true } = options;
+  exploreCategory = category;
+  if (resetOffset) {
+    exploreOffset = 0;
+    exploreFilter = "";
+  }
+
+  const el = document.getElementById("inspector-content");
+  el.classList.remove("muted");
+  el.innerHTML = "";
+
+  const shell = document.createElement("div");
+  shell.className = "explore-list-shell";
+
+  const header = document.createElement("div");
+  header.className = "explore-list-header";
+  const backBtn = document.createElement("button");
+  backBtn.type = "button";
+  backBtn.className = "explore-back-btn";
+  backBtn.textContent = "← All lists";
+  backBtn.addEventListener("click", () => {
+    exploreCategory = null;
+    renderExploreHome();
+  });
+  header.appendChild(backBtn);
+
+  const title = document.createElement("h2");
+  title.textContent = category.label;
+  header.appendChild(title);
+
+  const meta = document.createElement("p");
+  meta.className = "muted explore-list-meta";
+  meta.textContent = category.description;
+  header.appendChild(meta);
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "explore-filter";
+  search.placeholder = `Filter ${category.label.toLowerCase()}…`;
+  search.value = exploreFilter;
+  let filterTimer;
+  search.addEventListener("input", () => {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(() => {
+      exploreFilter = search.value.trim();
+      exploreOffset = 0;
+      loadExploreList(shell, list, footer, category).catch(console.error);
+    }, 250);
+  });
+  header.appendChild(search);
+  shell.appendChild(header);
+
+  const list = document.createElement("ul");
+  list.className = "explore-list";
+  shell.appendChild(list);
+
+  const footer = document.createElement("div");
+  footer.className = "explore-list-footer";
+  shell.appendChild(footer);
+
+  el.appendChild(shell);
+  await loadExploreList(shell, list, footer, category);
+}
+
+async function loadExploreList(shell, list, footer, category) {
+  list.innerHTML = `<li class="muted">Loading…</li>`;
+  footer.innerHTML = "";
+
+  const params = new URLSearchParams({
+    category: category.id,
+    limit: String(EXPLORE_PAGE_SIZE),
+    offset: String(exploreOffset),
+  });
+  if (exploreFilter) params.set("q", exploreFilter);
+
+  const data = await api(`/api/browse?${params}`);
+  list.innerHTML = "";
+
+  if (!data.items.length) {
+    list.innerHTML = `<li class="muted">No items${exploreFilter ? ` matching “${escapeHtml(exploreFilter)}”` : ""}.</li>`;
+    return;
+  }
+
+  for (const item of data.items) {
+    const li = document.createElement("li");
+    li.className = "explore-item";
+    li.innerHTML = `
+      <span class="type-badge">${escapeHtml(item.type)}</span>
+      <span class="explore-item-label">${escapeHtml(truncate(item.label, 90))}</span>
+      ${item.subtitle ? `<span class="explore-item-sub muted">${escapeHtml(truncate(item.subtitle, 80))}</span>` : ""}
+    `;
+    li.addEventListener("click", () => openNode(item.type, item.id, { resetNav: true }));
+    list.appendChild(li);
+  }
+
+  const shown = exploreOffset + data.items.length;
+  const summary = document.createElement("div");
+  summary.className = "muted";
+  summary.textContent = `Showing ${shown.toLocaleString()} of ${data.total.toLocaleString()}`;
+  footer.appendChild(summary);
+
+  if (shown < data.total) {
+    const moreBtn = document.createElement("button");
+    moreBtn.type = "button";
+    moreBtn.className = "explore-more-btn";
+    moreBtn.textContent = "Load more";
+    moreBtn.addEventListener("click", async () => {
+      moreBtn.disabled = true;
+      moreBtn.textContent = "Loading…";
+      exploreOffset += EXPLORE_PAGE_SIZE;
+      try {
+        const params = new URLSearchParams({
+          category: category.id,
+          limit: String(EXPLORE_PAGE_SIZE),
+          offset: String(exploreOffset),
+        });
+        if (exploreFilter) params.set("q", exploreFilter);
+        const next = await api(`/api/browse?${params}`);
+        list.querySelector(".muted")?.remove();
+        for (const item of next.items) {
+          const li = document.createElement("li");
+          li.className = "explore-item";
+          li.innerHTML = `
+            <span class="type-badge">${escapeHtml(item.type)}</span>
+            <span class="explore-item-label">${escapeHtml(truncate(item.label, 90))}</span>
+            ${item.subtitle ? `<span class="explore-item-sub muted">${escapeHtml(truncate(item.subtitle, 80))}</span>` : ""}
+          `;
+          li.addEventListener("click", () => openNode(item.type, item.id, { resetNav: true }));
+          list.appendChild(li);
+        }
+        const newShown = exploreOffset + next.items.length;
+        summary.textContent = `Showing ${newShown.toLocaleString()} of ${next.total.toLocaleString()}`;
+        if (newShown >= next.total) {
+          moreBtn.remove();
+        } else {
+          moreBtn.disabled = false;
+          moreBtn.textContent = "Load more";
+        }
+      } catch (err) {
+        moreBtn.disabled = false;
+        moreBtn.textContent = "Load more";
+        footer.appendChild(document.createElement("div")).className = "muted";
+        footer.lastChild.textContent = err.message;
+      }
+    });
+    footer.appendChild(moreBtn);
+  }
 }
 
 async function api(path, options = {}) {
@@ -1270,7 +1489,13 @@ async function init() {
   try {
     await loadHealth();
     await loadIssues();
+    const params = new URLSearchParams(window.location.search);
+    const hasDeepLink =
+      (params.get("type") && params.get("id")) || params.has("unresolved") || params.has("report");
     await initFromUrl();
+    if (!hasDeepLink && navStack.length === 0) {
+      await renderExploreHome();
+    }
   } catch (err) {
     document.getElementById("health-status").textContent = `Error: ${err.message}`;
   }

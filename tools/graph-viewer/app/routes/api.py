@@ -8,6 +8,8 @@ from app.static_assets import asset_version
 from app.db import get_db
 from app.models import (
     ArtifactResponse,
+    BrowseCategoriesResponse,
+    BrowseResponse,
     EdgeDetailResponse,
     ExpandRequest,
     HealthFileStatus,
@@ -22,6 +24,7 @@ from app.models import (
     SubgraphResponse,
     UnresolvedResponse,
 )
+from app.queries.browse import fetch_browse, fetch_browse_categories
 from app.queries.issues import fetch_issues
 from app.queries.node_detail import (
     fetch_edge_detail,
@@ -57,6 +60,25 @@ def health() -> HealthResponse:
 @router.get("/stats", response_model=StatsResponse)
 def stats() -> StatsResponse:
     return fetch_stats(get_db().conn)
+
+
+@router.get("/browse/categories", response_model=BrowseCategoriesResponse)
+def browse_categories() -> BrowseCategoriesResponse:
+    db = get_db()
+    return BrowseCategoriesResponse(
+        categories=fetch_browse_categories(db.conn, db.settings)
+    )
+
+
+@router.get("/browse", response_model=BrowseResponse)
+def browse(
+    category: str = Query(..., min_length=1),
+    limit: int = Query(default=40, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    q: str | None = Query(default=None),
+) -> BrowseResponse:
+    db = get_db()
+    return fetch_browse(db.conn, category, limit, offset, q, db.settings)
 
 
 @router.get("/issues", response_model=IssuesResponse)

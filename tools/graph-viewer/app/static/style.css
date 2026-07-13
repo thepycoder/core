@@ -546,6 +546,145 @@ ul {
   margin-top: 0.5rem;
 }
 
+.explore-home h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.25rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+.explore-intro {
+  margin-bottom: 1rem;
+}
+
+.explore-intro p {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.explore-stats {
+  margin-bottom: 1.25rem;
+}
+
+.explore-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.65rem;
+}
+
+.explore-category-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  padding: 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 100%;
+  margin: 0;
+}
+
+.explore-category-card:hover {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.explore-category-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.explore-category-count {
+  font-size: 1.1rem;
+  color: var(--info);
+}
+
+.explore-category-desc {
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.explore-list-header {
+  margin-bottom: 0.75rem;
+}
+
+.explore-list-header h2 {
+  margin: 0.35rem 0;
+  font-size: 1.15rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+.explore-list-meta {
+  margin: 0 0 0.65rem;
+}
+
+.explore-back-btn {
+  width: auto;
+  margin: 0;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.explore-filter {
+  width: 100%;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.explore-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.explore-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.explore-item:hover {
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.explore-item-label {
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.explore-item-sub {
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.explore-list-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.explore-more-btn {
+  width: auto;
+  margin: 0;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+}
+
+.explore-loading {
+  padding: 0.5rem 0;
+}
+
 .span-detail {
   margin-top: 0.5rem;
   padding: 0.45rem;
