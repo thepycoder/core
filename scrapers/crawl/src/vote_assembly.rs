@@ -8,8 +8,8 @@ use crate::vote_events::{
 use crate::vote_patterns::{
     VoteSectionKind, candidate_tally_re, dossier_ref_re, formal_outcome, formal_vote_begin_re,
     is_sitting_standing_proposal, paragraph_vote_title, parse_paragraph_vote_number,
-    parse_participation, quorum_failure_re, reuse_result_re, sitting_standing_outcome_re,
-    votes_section_heading,
+    parse_participation, quorum_failure_re, reuse_result_re, scan_formal_outcome_after,
+    scan_reuse_marker, sitting_standing_outcome_re, votes_section_heading,
 };
 use crate::vote_types::{
     SpanEvidence, UnresolvedVoteEventDraft, VoteAssemblyOutput, VoteDecisionDraft, VoteResultDraft,
@@ -130,10 +130,7 @@ pub fn assemble_votes_from_blocks(
             }
 
             if reuse_result_re().is_match(&block.text) {
-                let source_num = blocks
-                    .get(idx + 1)
-                    .and_then(|b| parse_paragraph_vote_number(&b.text))
-                    .unwrap_or_default();
+                let (source_num, marker_idx) = scan_reuse_marker(blocks, idx, 6);
                 let title = merge_titles(&pending, recover_title_between(blocks, 0, idx));
                 let result_id = results_by_source
                     .get(&source_num)
@@ -141,12 +138,9 @@ pub fn assemble_votes_from_blocks(
                 if let Some(result_id) = result_id {
                     vote_seq += 1;
                     let vote_id = composite_vote_id(session_id, meeting_id, vote_seq);
-                    let outcome = blocks
-                        .get(idx + 2)
-                        .or_else(|| blocks.get(idx + 1))
-                        .and_then(|b| formal_outcome(&b.text))
-                        .unwrap_or("")
-                        .to_string();
+                    let outcome = marker_idx
+                        .map(|marker_idx| scan_formal_outcome_after(blocks, marker_idx, 4))
+                        .unwrap_or_default();
                     out.decisions.push(build_decision(
                         session_id,
                         meeting_id,
@@ -1029,12 +1023,26 @@ mod tests {
         let out = assemble("result_reuse.html");
         assert_eq!(out.decisions.len(), 2);
         assert_eq!(out.results.len(), 1);
+        assert!(out.unresolved_events.is_empty());
         assert!(out.decisions[1].reuses_result);
         assert_eq!(out.decisions[0].result_id, out.decisions[1].result_id);
+        assert_eq!(out.decisions[1].source_roll_call_number, "1");
+        assert_eq!(out.decisions[1].outcome, "rejected");
         assert!(
             !out.decisions[1].title_nl.is_empty(),
             "reuse decision should retain title evidence"
         );
+    }
+
+    #[test]
+    fn fixture_result_reuse_vote_stemming_marker() {
+        let out = assemble("result_reuse_vote_stemming.html");
+        assert_eq!(out.decisions.len(), 2);
+        assert_eq!(out.results.len(), 1);
+        assert!(out.unresolved_events.is_empty());
+        assert!(out.decisions[1].reuses_result);
+        assert_eq!(out.decisions[1].source_roll_call_number, "61");
+        assert_eq!(out.decisions[1].outcome, "rejected");
     }
 
     #[test]

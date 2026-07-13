@@ -2,6 +2,7 @@
 //!
 //! Reference meetings in session 56 plenary cache — see `tests/fixtures/votes/`.
 
+use crate::report_blocks::ReportBlock;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -9,6 +10,8 @@ static COMPACT_VOTE: OnceLock<Regex> = OnceLock::new();
 static APPENDIX_VOTE: OnceLock<Regex> = OnceLock::new();
 static APPENDIX_VOTE_REVERSE: OnceLock<Regex> = OnceLock::new();
 static PARAGRAPH_VOTE: OnceLock<Regex> = OnceLock::new();
+static PARAGRAPH_VOTE_TIGHT: OnceLock<Regex> = OnceLock::new();
+static PARAGRAPH_VOTE_REVERSE: OnceLock<Regex> = OnceLock::new();
 static REUSE_RESULT: OnceLock<Regex> = OnceLock::new();
 static SITTING_STANDING_OUTCOME: OnceLock<Regex> = OnceLock::new();
 static QUORUM_FAILURE: OnceLock<Regex> = OnceLock::new();
@@ -33,6 +36,18 @@ pub fn appendix_vote_reverse_re() -> &'static Regex {
 
 pub fn paragraph_vote_re() -> &'static Regex {
     PARAGRAPH_VOTE.get_or_init(|| Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap())
+}
+
+/// `(Stemming/vote1)` without space before digit — meeting 127 cache.
+pub fn paragraph_vote_tight_re() -> &'static Regex {
+    PARAGRAPH_VOTE_TIGHT
+        .get_or_init(|| Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s*(\d+)\s*\)").unwrap())
+}
+
+/// `(Vote/stemming 61)` reverse-order marker — meeting 117 cache.
+pub fn paragraph_vote_reverse_re() -> &'static Regex {
+    PARAGRAPH_VOTE_REVERSE
+        .get_or_init(|| Regex::new(r"(?i)\(\s*Vote\s*/\s*stemming\s+(\d+)\s*\)").unwrap())
 }
 
 /// Result reuse — meeting 102/127 cache.
@@ -120,6 +135,56 @@ pub fn parse_paragraph_vote_number(text: &str) -> Option<String> {
     paragraph_vote_re()
         .captures(text)
         .map(|caps| caps[1].to_string())
+}
+
+/// Paragraph markers after a result-reuse question — meetings 102/117/127.
+pub fn parse_reuse_marker_number(text: &str) -> Option<String> {
+    parse_paragraph_vote_number(text)
+        .or_else(|| parse_compact_vote_number(text))
+        .or_else(|| {
+            paragraph_vote_reverse_re()
+                .captures(text)
+                .map(|caps| caps[1].to_string())
+        })
+        .or_else(|| {
+            paragraph_vote_tight_re()
+                .captures(text)
+                .map(|caps| caps[1].to_string())
+        })
+}
+
+/// Scan forward from a reuse-question block for `(Stemming/vote N)` (or variants).
+pub fn scan_reuse_marker(
+    blocks: &[ReportBlock],
+    reuse_idx: usize,
+    max_lookahead: usize,
+) -> (String, Option<usize>) {
+    for offset in 1..=max_lookahead {
+        let Some(block) = blocks.get(reuse_idx + offset) else {
+            break;
+        };
+        if let Some(number) = parse_reuse_marker_number(&block.text) {
+            return (number, Some(reuse_idx + offset));
+        }
+    }
+    (String::new(), None)
+}
+
+/// First formal outcome paragraph after a reuse marker block.
+pub fn scan_formal_outcome_after(
+    blocks: &[ReportBlock],
+    after_idx: usize,
+    max_lookahead: usize,
+) -> String {
+    for offset in 1..=max_lookahead {
+        let Some(block) = blocks.get(after_idx + offset) else {
+            break;
+        };
+        if let Some(outcome) = formal_outcome(&block.text) {
+            return outcome.to_string();
+        }
+    }
+    String::new()
 }
 
 pub fn appendix_marker_for_vote(text: &str, vote_index: &str) -> bool {
@@ -223,7 +288,11 @@ pub fn looks_like_voter_names(text: &str) -> bool {
     if parse_appendix_vote_number(trimmed).is_some() {
         return false;
     }
-    if compact_vote_re().is_match(trimmed) || paragraph_vote_re().is_match(trimmed) {
+    if compact_vote_re().is_match(trimmed)
+        || paragraph_vote_re().is_match(trimmed)
+        || paragraph_vote_reverse_re().is_match(trimmed)
+        || paragraph_vote_tight_re().is_match(trimmed)
+    {
         return false;
     }
     trimmed.chars().any(|c| c.is_alphabetic())
@@ -249,5 +318,23 @@ mod tests {
             parse_participation("65/71 leden hebben deelgenomen aan de stemming.").unwrap();
         assert_eq!(participated, 65);
         assert_eq!(required, Some(71));
+    }
+
+    #[test]
+    fn parses_reuse_marker_variants() {
+        assert_eq!(
+            parse_reuse_marker_number("(Stemming/vote 1)").as_deref(),
+            Some("1")
+        );
+        // meeting 117 cache
+        assert_eq!(
+            parse_reuse_marker_number("(Vote/stemming 61)").as_deref(),
+            Some("61")
+        );
+        // meeting 127 cache — no space before digit
+        assert_eq!(
+            parse_reuse_marker_number("(Stemming/vote1\n)").as_deref(),
+            Some("1")
+        );
     }
 }
