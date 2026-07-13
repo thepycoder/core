@@ -76,7 +76,7 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "utterance.speech_char_coverage" => CheckDoc {
             what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
-            measures: "Per meeting: ratio of saved word count (all staging text: utterances, questions, votes, propositions, notices, commission chair) vs whole-document word count from cached HTML (all h1/h2/p/table blocks). Warns on kind p5 outlier or >15% drop vs committed `speech_coverage_baseline.parquet`.",
+            measures: "Per meeting: ratio of saved word count (utterances, questions incl. oral-written bodies, answers reply text only, plenary votes/propositions/notices, commission chair) vs whole-document word count from cached HTML (all h1/h2/p/table blocks). Warns on kind p5 outlier or >15% drop vs committed `speech_coverage_baseline.parquet`.",
         },
         "utterance.roundtrip_discussion" => CheckDoc {
             what: "Normalized utterances exist for a question but its staging `discussion` JSON is empty.",

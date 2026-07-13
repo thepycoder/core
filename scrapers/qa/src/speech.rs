@@ -132,12 +132,7 @@ fn load_saved_document_words(
                 *counts.entry(key).or_default() += sum_row_words(
                     &batch,
                     i,
-                    &[
-                        "text_nl",
-                        "text_fr",
-                        "question_body_nl",
-                        "question_body_fr",
-                    ],
+                    &["text_nl", "text_fr"],
                 );
             }
         }

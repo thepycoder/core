@@ -7,7 +7,8 @@ use crawl::utils::{clean_text, composite_id, composite_scoped_id, max_cached_mee
 use crawl::{
     appendix_marker_for_vote, classify_question_heading_bilingual, classify_question_heading_text,
     extract_proceedings_from_document, extract_utterances_from_document,
-    extract_written_oral_answers, has_pending_question_text, parse_compact_vote_number,
+    extract_written_oral_items, has_pending_question_text, oral_written_answer_drafts,
+    parse_compact_vote_number,
     parse_paragraph_vote_number, parse_report_blocks, write_answers_parquet, write_hearings_parquet,
     write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
     InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
@@ -674,22 +675,31 @@ async fn parse_meeting_from_cache(
     .await?;
     let mut questions = questions;
     let blocks = parse_report_blocks(&document);
-    let answers = extract_written_oral_answers(
+    let oral_written_items = extract_written_oral_items(
         &document,
         &blocks,
+        MeetingKind::Plenary,
+        session_id,
+        meeting_id,
+    );
+    for item in &oral_written_items {
+        if let Some(q) = questions
+            .iter_mut()
+            .find(|q| q.question_id == item.question_id)
+        {
+            q.question_body_nl = item.question_body_nl.clone();
+            q.question_body_fr = item.question_body_fr.clone();
+            q.treatment_mode = "oral_written".to_string();
+        }
+    }
+    let answers = oral_written_answer_drafts(
+        &oral_written_items,
         MeetingKind::Plenary,
         session_id,
         meeting_id,
         &url,
         &cache_path,
     );
-    for q in &mut questions {
-        if let Some(answer) = answers.iter().find(|a| a.question_id == q.question_id) {
-            q.question_body_nl = answer.question_body_nl.clone();
-            q.question_body_fr = answer.question_body_fr.clone();
-            q.treatment_mode = "oral_written".to_string();
-        }
-    }
     let propositions = extract_propositions(
         &document,
         session_id,

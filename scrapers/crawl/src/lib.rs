@@ -49,7 +49,8 @@ pub use qa_coverage::{count_document_words, count_document_words_from_cache, wor
 pub use utterance_io::write_utterances_parquet;
 pub use utterance_segment::{segment_utterances, UtteranceDraft};
 pub use written_oral_qa::{
-    extract_written_oral_answers, find_written_oral_zone_start, is_written_oral_section_heading,
+    extract_written_oral_items, find_written_oral_zone_start, is_written_oral_section_heading,
+    oral_written_answer_drafts, OralWrittenItem,
 };
 pub use vote_inventory::{
     appendix_marker_for_vote, inventory_vote_numbers, parse_appendix_vote_number,

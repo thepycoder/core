@@ -209,7 +209,7 @@ Uses the shared answer schema (see below).
 
 ### `data/sessions/{session}/{plenary,commission}/answers.parquet`
 
-Inline *mondelinge vragen schriftelijk behandeld* answer bodies from integraal verslag HTML.
+Inline *mondelinge vragen schriftelijk behandeld* minister replies from integraal verslag HTML. MP letters live on the linked oral `questions` row (`question_body_*`).
 
 ### Shared answer schema (`written/answers.parquet`, `{plenary,commission}/answers.parquet`)
 
@@ -223,8 +223,7 @@ Inline *mondelinge vragen schriftelijk behandeld* answer bodies from integraal v
 | `agenda_id` | Timeline agenda number when known |
 | `answer_slot` | 1–4 for QRVA; 1 for inline |
 | `kind` | `written` or `oral_written` |
-| `text_nl` / `text_fr` | Answer body |
-| `question_body_nl` / `question_body_fr` | Question body (inline only) |
+| `text_nl` / `text_fr` | Minister reply body |
 | `status` | Publication / lifecycle status |
 | `answer_num` / `publication_ref` / `casa` | QRVA metadata |
 | `source_kind` | `qrva` or `integraal` |
@@ -235,7 +234,7 @@ Oral `questions.parquet` (plenary + commission) gains trailing columns:
 
 | Column | Notes |
 |--------|--------|
-| `question_body_nl` / `question_body_fr` | Populated for `treatment_mode=oral_written` |
+| `question_body_nl` / `question_body_fr` | Canonical MP letter for `treatment_mode=oral_written` (analogous to `written/questions.text_*`) |
 | `treatment_mode` | `oral_written` or empty for live debate |
 
 ## Identity (`data/identity/`)

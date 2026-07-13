@@ -32,6 +32,17 @@ pub fn find_written_oral_zone_start(blocks: &[ReportBlock]) -> Option<u32> {
         .map(|b| b.index)
 }
 
+/// Parsed inline oral-written Q&A: MP letter + minister reply for one agenda question.
+#[derive(Debug, Clone)]
+pub struct OralWrittenItem {
+    pub question_id: String,
+    pub agenda_id: String,
+    pub question_body_nl: String,
+    pub question_body_fr: String,
+    pub text_nl: String,
+    pub text_fr: String,
+}
+
 fn paragraph_language(text: &str, block_lang: Option<&str>) -> &'static str {
     if let Some(lang) = block_lang {
         let u = lang.to_uppercase();
@@ -114,22 +125,20 @@ fn collect_item_paragraphs(
     out
 }
 
-/// Extract written oral answer rows for questions in the written-treatment section.
-pub fn extract_written_oral_answers(
+/// Extract written oral Q&A items (MP letter + minister reply) from the written-treatment section.
+pub fn extract_written_oral_items(
     document: &Html,
     blocks: &[ReportBlock],
     meeting_kind: MeetingKind,
     session_id: u32,
     meeting_id: u32,
-    source_url: &str,
-    cache_path: &str,
-) -> Vec<AnswerDraft> {
+) -> Vec<OralWrittenItem> {
     let Some(zone_start) = find_written_oral_zone_start(blocks) else {
         return Vec::new();
     };
 
     let timeline = build_agenda_timeline(document, blocks, meeting_kind, session_id, meeting_id);
-    let mut answers = Vec::new();
+    let mut items = Vec::new();
 
     for item in timeline.iter().filter(|i| i.item_kind == ItemKind::Question) {
         if item.start_block < zone_start {
@@ -144,9 +153,33 @@ pub fn extract_written_oral_answers(
             continue;
         }
 
-        answers.push(AnswerDraft {
-            answer_id: inline_answer_id(&item.item_id),
+        items.push(OralWrittenItem {
             question_id: item.item_id.clone(),
+            agenda_id: item.agenda_id.clone(),
+            question_body_nl: q_nl,
+            question_body_fr: q_fr,
+            text_nl: a_nl,
+            text_fr: a_fr,
+        });
+    }
+
+    items
+}
+
+/// Build answer staging rows (minister reply only) from parsed oral-written items.
+pub fn oral_written_answer_drafts(
+    items: &[OralWrittenItem],
+    meeting_kind: MeetingKind,
+    session_id: u32,
+    meeting_id: u32,
+    source_url: &str,
+    cache_path: &str,
+) -> Vec<AnswerDraft> {
+    items
+        .iter()
+        .map(|item| AnswerDraft {
+            answer_id: inline_answer_id(&item.question_id),
+            question_id: item.question_id.clone(),
             route_id: String::new(),
             session_id,
             meeting_id: meeting_id.to_string(),
@@ -154,10 +187,8 @@ pub fn extract_written_oral_answers(
             agenda_id: item.agenda_id.clone(),
             answer_slot: 1,
             kind: "oral_written".to_string(),
-            text_nl: a_nl,
-            text_fr: a_fr,
-            question_body_nl: q_nl,
-            question_body_fr: q_fr,
+            text_nl: item.text_nl.clone(),
+            text_fr: item.text_fr.clone(),
             status: String::new(),
             answer_num: String::new(),
             publication_ref: String::new(),
@@ -166,10 +197,8 @@ pub fn extract_written_oral_answers(
             confidence: "parsed".to_string(),
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
-        });
-    }
-
-    answers
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -220,16 +249,28 @@ mod tests {
         let html = read_report_html(path).unwrap();
         let document = Html::parse_document(&html);
         let blocks = parse_report_blocks(&document);
-        let answers = extract_written_oral_answers(
+        let items = extract_written_oral_items(
             &document,
             &blocks,
+            MeetingKind::Commission,
+            56,
+            407,
+        );
+        assert_eq!(items.len(), 5, "expected 5 written oral items in 407");
+        assert!(items
+            .iter()
+            .all(|i| !i.question_body_nl.is_empty() || !i.question_body_fr.is_empty()));
+        assert!(items.iter().all(|i| !i.text_fr.is_empty() || !i.text_nl.is_empty()));
+
+        let answers = oral_written_answer_drafts(
+            &items,
             MeetingKind::Commission,
             56,
             407,
             "https://example.test/ic407",
             "sessions/56/meetings/commission/56-407.html",
         );
-        assert_eq!(answers.len(), 5, "expected 5 written answer blocks in 407");
+        assert_eq!(answers.len(), 5);
         assert!(answers.iter().all(|a| !a.text_fr.is_empty() || !a.text_nl.is_empty()));
     }
 }

@@ -190,8 +190,6 @@ pub fn parse_route_record(
             kind: "written".to_string(),
             text_nl,
             text_fr,
-            question_body_nl: String::new(),
-            question_body_fr: String::new(),
             status,
             answer_num: field_str(
                 item,

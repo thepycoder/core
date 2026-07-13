@@ -6,7 +6,7 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Staging row for written / oral-written answer bodies (shared schema).
+/// Staging row for written / oral-written minister replies (shared schema).
 #[derive(Debug, Clone)]
 pub struct AnswerDraft {
     pub answer_id: String,
@@ -20,8 +20,6 @@ pub struct AnswerDraft {
     pub kind: String,
     pub text_nl: String,
     pub text_fr: String,
-    pub question_body_nl: String,
-    pub question_body_fr: String,
     pub status: String,
     pub answer_num: String,
     pub publication_ref: String,
@@ -54,8 +52,6 @@ pub fn write_answers_parquet(path: &Path, rows: &[AnswerDraft]) -> Result<(), Bo
         Field::new("kind", DataType::Utf8, false),
         Field::new("text_nl", DataType::Utf8, false),
         Field::new("text_fr", DataType::Utf8, false),
-        Field::new("question_body_nl", DataType::Utf8, false),
-        Field::new("question_body_fr", DataType::Utf8, false),
         Field::new("status", DataType::Utf8, false),
         Field::new("answer_num", DataType::Utf8, false),
         Field::new("publication_ref", DataType::Utf8, false),
@@ -80,8 +76,6 @@ pub fn write_answers_parquet(path: &Path, rows: &[AnswerDraft]) -> Result<(), Bo
             col!(rows, |r| r.kind.clone()),
             col!(rows, |r| r.text_nl.clone()),
             col!(rows, |r| r.text_fr.clone()),
-            col!(rows, |r| r.question_body_nl.clone()),
-            col!(rows, |r| r.question_body_fr.clone()),
             col!(rows, |r| r.status.clone()),
             col!(rows, |r| r.answer_num.clone()),
             col!(rows, |r| r.publication_ref.clone()),

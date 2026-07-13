@@ -5,8 +5,8 @@ use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::{clean_text, composite_scoped_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
     classify_question_heading_bilingual, classify_question_heading_text, extract_agenda_number,
-    extract_proceedings_from_document, extract_utterances_from_document, extract_written_oral_answers,
-    has_pending_question_text, looks_like_fr_heading, parse_report_blocks, read_report_html,
+    extract_proceedings_from_document, extract_utterances_from_document, extract_written_oral_items,
+    has_pending_question_text, looks_like_fr_heading, oral_written_answer_drafts, parse_report_blocks, read_report_html,
     is_non_question_proceeding_heading, write_answers_parquet, write_hearings_parquet,
     write_interpellations_parquet, write_utterances_parquet, AnswerDraft, HearingDraft,
     InterpellationDraft, MeetingKind, QuestionHeadingRole, UtteranceDraft,
@@ -604,23 +604,33 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         &cache_path,
     )?;
 
-    let mut answers = extract_written_oral_answers(
+    let oral_written_items = extract_written_oral_items(
         &document,
         &blocks,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+    );
+
+    for item in &oral_written_items {
+        if let Some(q) = questions
+            .iter_mut()
+            .find(|q| q.question_id == item.question_id)
+        {
+            q.question_body_nl = item.question_body_nl.clone();
+            q.question_body_fr = item.question_body_fr.clone();
+            q.treatment_mode = "oral_written".to_string();
+        }
+    }
+
+    let answers = oral_written_answer_drafts(
+        &oral_written_items,
         MeetingKind::Commission,
         session_id,
         meeting_id,
         &url,
         &cache_path,
     );
-
-    for q in &mut questions {
-        if let Some(answer) = answers.iter().find(|a| a.question_id == q.question_id) {
-            q.question_body_nl = answer.question_body_nl.clone();
-            q.question_body_fr = answer.question_body_fr.clone();
-            q.treatment_mode = "oral_written".to_string();
-        }
-    }
 
     let utterances = extract_utterances_from_document(
         &document,
