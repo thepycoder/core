@@ -1,3 +1,5 @@
+mod parse;
+
 use arrow::array::{ArrayRef, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::paths::{cache_dir, cache_only, data_dir};
@@ -42,8 +44,15 @@ struct ScrapedRemuneration {
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
-    let browser = Browser::default()?;
-    let tab = browser.new_tab()?;
+    let browser = if cache_only() {
+        None
+    } else {
+        Some(Browser::default()?)
+    };
+    let tab = match browser.as_ref() {
+        Some(browser) => Some(browser.new_tab()?),
+        None => None,
+    };
 
     let members_path = data_dir().join("sessions/56/members.parquet");
     let remunerations_path = data_dir().join("remunerations.parquet");
@@ -89,9 +98,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 web_requests, first_name, last_name, year
             ));
 
-            let mut rows =
-                extract_remunerations(&tab, &first_name, &last_name, year, &mut web_requests)
-                    .await?;
+            let mut rows = extract_remunerations(
+                tab.as_deref(),
+                &first_name,
+                &last_name,
+                year,
+                &mut web_requests,
+            )
+            .await?;
 
             all_remunerations.append(&mut rows);
 
@@ -152,7 +166,7 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
 }
 
 async fn extract_remunerations(
-    tab: &headless_chrome::Tab,
+    tab: Option<&headless_chrome::Tab>,
     first_name: &str,
     last_name: &str,
     year: u32,
@@ -172,6 +186,7 @@ async fn extract_remunerations(
         if cache_only() {
             return Ok(vec![]);
         }
+        let tab = tab.ok_or("browser tab required for live remuneration scrape")?;
         tab.navigate_to(&source_url)?;
         *web_requests += 1;
         tab.wait_for_element("kendo-autocomplete")?;
@@ -210,7 +225,7 @@ async fn extract_remunerations(
             .select(&SEL_REMUNERATION)
             .next()
             .map(|el| el.text().collect::<Vec<_>>().join(" "))
-            .and_then(|raw| clean_remuneration(&raw))
+            .and_then(|raw| parse::parse_remuneration_text(&raw))
             .unwrap_or_else(|| (String::new(), String::new()));
 
         rows.push(ScrapedRemuneration {
@@ -242,26 +257,4 @@ fn dedupe_remunerations(rows: &mut Vec<ScrapedRemuneration>) {
             row.remuneration_max.clone(),
         ))
     });
-}
-
-fn clean_remuneration(raw: &str) -> Option<(String, String)> {
-    if raw.contains("Niet bezoldigd") {
-        return Some(("0".to_string(), "0".to_string()));
-    }
-
-    let cleaned = raw
-        .replace("Afgerond op ", "")
-        .replace('\u{00a0}', "") // non-breaking space
-        .replace(['€', '&', ' ', ','], "")
-        .replace(',', ".");
-
-    if let Some((left, right)) = cleaned.split_once('-') {
-        if let (Ok(start), Ok(end)) = (left.trim().parse::<f64>(), right.trim().parse::<f64>()) {
-            return Some((start.to_string(), end.to_string()));
-        }
-    } else if let Ok(value) = cleaned.parse::<f64>() {
-        return Some((value.to_string(), value.to_string()));
-    }
-
-    None
 }

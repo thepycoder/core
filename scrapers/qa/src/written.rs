@@ -81,8 +81,10 @@ fn is_blank_published_qrva_answer(
     text_nl: &str,
     text_fr: &str,
 ) -> bool {
-    matches!(status.trim().to_ascii_lowercase().as_str(), "publicated" | "published")
-        && kind == "written"
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "publicated" | "published"
+    ) && kind == "written"
         && source_kind == "qrva"
         && text_nl.trim().is_empty()
         && text_fr.trim().is_empty()
@@ -312,26 +314,50 @@ mod tests {
     #[test]
     fn published_qrva_answer_with_both_languages_blank_is_flagged() {
         assert!(is_blank_published_qrva_answer(
-            "publicated", "written", "qrva", "", "  "
+            "publicated",
+            "written",
+            "qrva",
+            "",
+            "  "
         ));
         assert!(is_blank_published_qrva_answer(
-            "Published", "written", "qrva", "\n", "\t"
+            "Published",
+            "written",
+            "qrva",
+            "\n",
+            "\t"
         ));
     }
 
     #[test]
     fn nonpublished_or_nonqrva_or_populated_answer_is_not_flagged() {
         assert!(!is_blank_published_qrva_answer(
-            "answerReceived", "written", "qrva", "", ""
+            "answerReceived",
+            "written",
+            "qrva",
+            "",
+            ""
         ));
         assert!(!is_blank_published_qrva_answer(
-            "published", "oral", "qrva", "", ""
+            "published",
+            "oral",
+            "qrva",
+            "",
+            ""
         ));
         assert!(!is_blank_published_qrva_answer(
-            "published", "written", "other", "", ""
+            "published",
+            "written",
+            "other",
+            "",
+            ""
         ));
         assert!(!is_blank_published_qrva_answer(
-            "published", "written", "qrva", "Antwoord", ""
+            "published",
+            "written",
+            "qrva",
+            "Antwoord",
+            ""
         ));
     }
 }

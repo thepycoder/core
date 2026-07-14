@@ -7,6 +7,7 @@ pub mod graph;
 pub mod infrastructure;
 pub mod io;
 pub mod remaining;
+pub mod remunerations;
 pub mod schema;
 pub mod source_spans;
 pub mod speakers;
@@ -78,6 +79,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     let speech_out = speech::run_speech_checks(&data_root)?;
     details.extend(speech_out.details);
     details.extend(written::run_written_checks(&data_root)?);
+    details.extend(remunerations::run_remuneration_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
 
@@ -287,6 +289,9 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "question.grouped_internal_ids_complete",
         "question.questioner_resolved",
         "written.published_answer_text_present",
+        "remuneration.amount_valid",
+        "remuneration.amount_scale",
+        "remuneration.duplicate_mandate",
         "dossier.ref_exists",
         "meeting.chair_source_vs_parquet",
         "meeting.date_source_vs_parquet",

@@ -321,6 +321,32 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Flags published QRVA staging answers with blank NL and FR bodies.",
         },
     ],
+    "remuneration.amount_valid": [
+        {
+            "path": "scrapers/remunerations/src/parse.rs",
+            "symbol": "parse_remuneration_text",
+            "note": "Parses European-locale EUR amounts into canonical decimal strings.",
+        },
+        {
+            "path": "scrapers/qa/src/remunerations.rs",
+            "symbol": "check_amount_valid",
+            "note": "Requires finite nonnegative remuneration_min <= remuneration_max.",
+        },
+    ],
+    "remuneration.amount_scale": [
+        {
+            "path": "scrapers/qa/src/remunerations.rs",
+            "symbol": "check_amount_scale",
+            "note": "Warns when remuneration_max exceeds 1,000,000 EUR.",
+        },
+    ],
+    "remuneration.duplicate_mandate": [
+        {
+            "path": "scrapers/qa/src/remunerations.rs",
+            "symbol": "duplicate_mandate_detail",
+            "note": "Groups duplicate person/year/mandate/institute rows.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

@@ -55,8 +55,8 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 | `year` | Query year |
 | `mandate` | Mandate description |
 | `institute` | Institute name |
-| `remuneration_min` | Parsed min EUR |
-| `remuneration_max` | Parsed max EUR |
+| `remuneration_min` | Parsed min EUR as a canonical decimal string (European source amounts such as `279 463,46` become `279463.46`) |
+| `remuneration_max` | Parsed max EUR as a canonical decimal string; ranges such as `1,00 - 6 129,00 EUR` normalize each endpoint independently |
 | `source_url` | regimand.be search URL |
 | `cache_path` | e.g. `remunerations/Last-First-2024.html` |
 

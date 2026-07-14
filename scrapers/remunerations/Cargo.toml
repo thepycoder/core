@@ -17,6 +17,10 @@ indicatif = "0.18.4"
 dotenvy = "0.15.7"
 crawl = { path = "../crawl" }
 
+[lib]
+name = "remunerations"
+path = "src/lib.rs"
+
 [[bin]]
 name = "remunerations"
 path = "src/main.rs"

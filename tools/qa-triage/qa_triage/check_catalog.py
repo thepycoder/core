@@ -144,6 +144,18 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A published QRVA answer has neither a Dutch nor French answer body.",
         measures="Reads written answers staging and flags QRVA written answers in publicated/published states where both language text fields are blank.",
     ),
+    "remuneration.amount_valid": CheckDoc(
+        what="A remuneration row has a non-numeric, non-finite, negative, or reversed min/max EUR range.",
+        measures="Reads remunerations.parquet and requires finite nonnegative remuneration_min <= remuneration_max.",
+    ),
+    "remuneration.amount_scale": CheckDoc(
+        what="A remuneration maximum exceeds a conservative annual EUR threshold.",
+        measures="Warns when remuneration_max is greater than 1,000,000 EUR.",
+    ),
+    "remuneration.duplicate_mandate": CheckDoc(
+        what="The same person/year/mandate/institute appears on multiple remuneration rows.",
+        measures="Groups remunerations.parquet by person, year, mandate, and institute; emits one warning per group listing all amount ranges.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",
