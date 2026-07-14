@@ -8,8 +8,9 @@ use crate::question_boundaries::{
     is_questions_section, starts_new_question_unit,
 };
 use crate::report_blocks::{BlockTag, ReportBlock};
-use crate::utils::{clean_text, composite_scoped_id};
+use crate::utils::{clean_text, composite_scoped_id, normalize_site_ref};
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,6 +441,30 @@ pub fn build_agenda_timeline(
     if let Some((start, nl_title)) = pending_nl {
         if let Some(item) = items.iter_mut().find(|it| it.start_block == start) {
             item.title_nl = nl_title;
+        }
+    }
+
+    let mut interpellation_ids_by_ref: HashMap<String, String> = HashMap::new();
+    for item in &items {
+        if item.item_kind != ItemKind::Interpellation {
+            continue;
+        }
+        for site_ref in &item.internal_ids {
+            interpellation_ids_by_ref
+                .entry(normalize_site_ref(site_ref))
+                .or_insert_with(|| item.item_id.clone());
+        }
+    }
+    for item in &mut items {
+        if item.item_kind != ItemKind::Interpellation {
+            continue;
+        }
+        if let Some(canonical_id) = item
+            .internal_ids
+            .iter()
+            .find_map(|site_ref| interpellation_ids_by_ref.get(&normalize_site_ref(site_ref)))
+        {
+            item.item_id = canonical_id.clone();
         }
     }
 

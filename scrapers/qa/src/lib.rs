@@ -288,6 +288,7 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "agenda.interpellation_not_extracted",
         "question.grouped_internal_ids_complete",
         "question.questioner_resolved",
+        "fk.utterance_interpellation",
         "written.published_answer_text_present",
         "lobby.url_placement",
         "lobby.column_bleed",

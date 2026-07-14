@@ -182,6 +182,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A commission question has a nonempty staging questioner field but no resolved ASKED relation.",
             measures: "Joins commission question rows to normalized `asked.parquet` by canonical question id; warns separately when the staging questioner field is empty.",
         },
+        "fk.utterance_interpellation" => CheckDoc {
+            what: "An interpellation utterance does not resolve to exactly one canonical interpellation in its session, kind, and meeting.",
+            measures: "Checks direct canonical item_id first, then uses site-native question_ids only to diagnose a unique noncanonical target or missing/ambiguous target.",
+        },
         "written.published_answer_text_present" => CheckDoc {
             what: "A published QRVA answer has neither a Dutch nor French answer body.",
             measures: "Reads written answers staging and flags `source_kind=qrva`, written answers in publicated/published states where both language text fields are blank.",

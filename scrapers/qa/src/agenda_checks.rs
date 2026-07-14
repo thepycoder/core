@@ -5,7 +5,7 @@ use crawl::agenda_timeline::{
 use crawl::paths::cache_dir;
 use crawl::proceeding_entities::{is_hearing_heading, is_interpellation_heading};
 use crawl::report_blocks::{parse_report_blocks, read_report_html};
-use crawl::utils::ensure_question_id;
+use crawl::utils::{ensure_question_id, normalize_site_ref};
 use crawl::vote_inventory::numeric_sequence_gaps_from_one;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
@@ -23,6 +23,7 @@ pub fn run_agenda_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Er
     details.extend(check_interpellation_headings(data_dir)?);
     details.extend(check_question_internal_ids(data_dir)?);
     details.extend(check_commission_questioners_resolved(data_dir)?);
+    details.extend(check_utterance_interpellation_fk(data_dir)?);
     Ok(details)
 }
 
@@ -454,6 +455,149 @@ fn check_commission_questioners_resolved(
                     .with_entity("question", &question_id)
                     .with_values("at least one ASKED", raw_questioners)
                     .with_source(&source_urls[i], &cache_paths[i]),
+                );
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_utterance_interpellation_fk(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut canonical_ids: HashSet<(String, String, String)> = HashSet::new();
+    let mut site_ref_targets: HashMap<(String, String, String), HashSet<String>> = HashMap::new();
+
+    for (meeting_kind, rel_path) in [
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/interpellations.parquet"),
+        ),
+        (
+            "commission",
+            format!("sessions/{SESSION_ID}/commission/interpellations.parquet"),
+        ),
+    ] {
+        let path = data_dir.join(rel_path);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let ids = read_string_column(&batch, "interpellation_id")?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let internal_ids = read_string_column(&batch, "internal_ids")?;
+            for i in 0..batch.num_rows() {
+                let canonical_id = ensure_question_id(&session_ids[i], meeting_kind, &ids[i]);
+                let scope = (
+                    session_ids[i].clone(),
+                    meeting_kind.to_string(),
+                    meeting_ids[i].clone(),
+                );
+                canonical_ids.insert((scope.0.clone(), scope.1.clone(), canonical_id.clone()));
+                for site_ref in internal_ids[i].split(',') {
+                    let site_ref = normalize_site_ref(site_ref);
+                    if !site_ref.is_empty() {
+                        site_ref_targets
+                            .entry((scope.0.clone(), scope.1.clone(), site_ref))
+                            .or_default()
+                            .insert(canonical_id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut details = Vec::new();
+    let mut seen = HashSet::new();
+    for (meeting_kind, rel_path) in [
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/utterances.parquet"),
+        ),
+        (
+            "commission",
+            format!("sessions/{SESSION_ID}/commission/utterances.parquet"),
+        ),
+    ] {
+        let path = data_dir.join(rel_path);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let utterance_ids = read_string_column(&batch, "utterance_id")?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let item_kinds = read_string_column(&batch, "item_kind")?;
+            let item_ids = read_string_column(&batch, "item_id")?;
+            let question_ids = read_string_column(&batch, "question_ids")?;
+            let block_starts = read_string_column(&batch, "block_start")?;
+            let block_ends = read_string_column(&batch, "block_end")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                if item_kinds[i] != "interpellation" {
+                    continue;
+                }
+                let actual_id = ensure_question_id(&session_ids[i], meeting_kind, &item_ids[i]);
+                let scope = (
+                    session_ids[i].clone(),
+                    meeting_kind.to_string(),
+                    meeting_ids[i].clone(),
+                );
+                if canonical_ids.contains(&(scope.0.clone(), scope.1.clone(), actual_id.clone())) {
+                    continue;
+                }
+
+                let refs: Vec<String> = question_ids[i]
+                    .split(',')
+                    .map(normalize_site_ref)
+                    .filter(|site_ref| !site_ref.is_empty())
+                    .collect();
+                let mut candidates = HashSet::new();
+                for site_ref in &refs {
+                    if let Some(targets) =
+                        site_ref_targets.get(&(scope.0.clone(), scope.1.clone(), site_ref.clone()))
+                    {
+                        candidates.extend(targets.iter().cloned());
+                    }
+                }
+                let mut candidates: Vec<_> = candidates.into_iter().collect();
+                candidates.sort();
+                let canonical_id = (candidates.len() == 1).then(|| candidates[0].clone());
+                let status = if canonical_id.is_some() {
+                    "warn"
+                } else {
+                    "fail"
+                };
+                let key = (
+                    meeting_kind.to_string(),
+                    meeting_ids[i].clone(),
+                    actual_id.clone(),
+                    refs.join(","),
+                    canonical_id.clone().unwrap_or_default(),
+                    status.to_string(),
+                );
+                if !seen.insert(key) {
+                    continue;
+                }
+                let expected = canonical_id.as_deref().unwrap_or("exactly one target");
+                details.push(
+                    CheckDetail::new(
+                        "fk.utterance_interpellation",
+                        status,
+                        status,
+                        format!(
+                            "utterance {} interpellation item_id {} does not resolve canonically",
+                            utterance_ids[i], actual_id
+                        ),
+                    )
+                    .with_meeting(meeting_kind, &meeting_ids[i])
+                    .with_entity("utterance", &utterance_ids[i])
+                    .with_values(
+                        expected,
+                        format!("actual={actual_id}; site_refs={}", refs.join(",")),
+                    )
+                    .with_source(&source_urls[i], &cache_paths[i])
+                    .with_source_block(format!("{}:{}", block_starts[i], block_ends[i])),
                 );
             }
         }

@@ -144,6 +144,10 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A published QRVA answer has neither a Dutch nor French answer body.",
         measures="Reads written answers staging and flags QRVA written answers in publicated/published states where both language text fields are blank.",
     ),
+    "fk.utterance_interpellation": CheckDoc(
+        what="An interpellation utterance does not resolve to exactly one canonical interpellation in its session, kind, and meeting.",
+        measures="Checks direct canonical item_id first, then uses site-native question_ids only to diagnose a unique noncanonical target or missing/ambiguous target.",
+    ),
     "lobby.url_placement": CheckDoc(
         what="A lobby register URL or domain token appears outside the url column.",
         measures="Reads lobby.parquet and flags URL tokens in contacts or interests.",

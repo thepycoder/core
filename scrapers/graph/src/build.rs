@@ -1306,6 +1306,9 @@ fn resolve_proceeding_target_id(
             }
         }
     }
+    if node_type == "Interpellation" {
+        return None;
+    }
     let meeting_prefix = format!("{session_id}_{meeting_kind}_");
     let rest = raw_item_id
         .strip_prefix(&meeting_prefix)

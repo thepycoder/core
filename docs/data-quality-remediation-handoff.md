@@ -248,33 +248,33 @@ The timeline assigns sequence-based IDs in `scrapers/crawl/src/agenda_timeline.r
 ### Parser/normalization TODO
 
 - [ ] Add a minimal fixture from plenary 69 containing the bilingual/grouped interpellation shape.
-- [ ] Trace where the same logical interpellation receives different sequence positions between timeline utterances and proceeding entities.
-- [ ] Pair bilingual headings by site-native `...I` reference before assigning sequence IDs.
-- [ ] Assign one canonical interpellation ID per logical site reference.
-- [ ] Ensure utterances and `interpellations.parquet` receive the same ID from the same `AgendaItem` instance.
-- [ ] Do not repair this only in graph loading.
-- [ ] Remove or narrow the graph’s single-candidate fallback after canonical data is regenerated.
+- [x] Trace where the same logical interpellation receives different sequence positions between timeline utterances and proceeding entities.
+- [x] Pair bilingual headings by site-native `...I` reference before assigning sequence IDs.
+- [x] Assign one canonical interpellation ID per logical site reference.
+- [x] Ensure utterances and `interpellations.parquet` receive the same ID from the same `AgendaItem` instance.
+- [x] Do not repair this only in graph loading.
+- [x] Remove or narrow the graph’s single-candidate fallback after canonical data is regenerated.
 - [ ] Reparse plenary reports, normalize utterances, and rebuild the graph.
 
 ### QA TODO
 
-- [ ] Add `fk.utterance_interpellation` in `scrapers/qa/src/agenda_checks.rs`.
-- [ ] Require each interpellation utterance to resolve to exactly one interpellation in the same session, meeting kind, and meeting.
-- [ ] Accept direct canonical ID as the normal path.
-- [ ] Use site-native refs only to diagnose the expected target, not to silently pass a wrong `item_id`.
+- [x] Add `fk.utterance_interpellation` in `scrapers/qa/src/agenda_checks.rs`.
+- [x] Require each interpellation utterance to resolve to exactly one interpellation in the same session, meeting kind, and meeting.
+- [x] Accept direct canonical ID as the normal path.
+- [x] Use site-native refs only to diagnose the expected target, not to silently pass a wrong `item_id`.
 - [ ] Add `utterance.interpellation_item_id_canonical` if a separate warning is useful during migration.
-- [ ] Group details by distinct bad reference rather than emitting 287 repetitive turn-level rows.
-- [ ] Include sample utterance ID, actual ID, canonical ID, site ref, source block range, URL, and cache path.
-- [ ] Use `status=fail` for missing/ambiguous targets and `status=warn` for uniquely resolvable but noncanonical IDs.
+- [x] Group details by distinct bad reference rather than emitting 287 repetitive turn-level rows.
+- [x] Include sample utterance ID, actual ID, canonical ID, site ref, source block range, URL, and cache path.
+- [x] Use `status=fail` for missing/ambiguous targets and `status=warn` for uniquely resolvable but noncanonical IDs.
 
 ### Tests
 
-- Direct canonical ID passes.
-- Wrong ID plus one matching site ref produces the canonical-ID finding.
-- No matching site ref produces an FK failure.
-- Two candidates for one site ref produce an ambiguity failure.
-- Candidate in another meeting or meeting kind does not satisfy the FK.
-- Repeated utterances with one bad reference produce one grouped detail.
+- [ ] Direct canonical ID passes.
+- [ ] Wrong ID plus one matching site ref produces the canonical-ID finding.
+- [ ] No matching site ref produces an FK failure.
+- [ ] Two candidates for one site ref produce an ambiguity failure.
+- [ ] Candidate in another meeting or meeting kind does not satisfy the FK.
+- [ ] Repeated utterances with one bad reference produce one grouped detail.
 
 ### Acceptance criteria
 

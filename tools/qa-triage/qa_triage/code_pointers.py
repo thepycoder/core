@@ -326,6 +326,23 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Flags published QRVA staging answers with blank NL and FR bodies.",
         },
     ],
+    "fk.utterance_interpellation": [
+        {
+            "path": "scrapers/normalize/src/utterances.rs",
+            "symbol": "load_interpellation_targets",
+            "note": "Canonicalizes uniquely site-reference-resolvable interpellation utterance IDs before normalized output.",
+        },
+        {
+            "path": "scrapers/qa/src/agenda_checks.rs",
+            "symbol": "check_utterance_interpellation_fk",
+            "note": "Groups missing, ambiguous, and uniquely noncanonical interpellation targets by bad reference.",
+        },
+        {
+            "path": "scrapers/graph/src/build.rs",
+            "symbol": "resolve_proceeding_target_id",
+            "note": "Does not use same-meeting single-candidate guesses for Interpellation nodes.",
+        },
+    ],
     "lobby.url_placement": [
         {
             "path": "scrapers/lobby/src/lib.rs",
