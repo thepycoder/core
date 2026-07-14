@@ -15,7 +15,77 @@ pub fn run_written_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn E
     details.extend(check_oral_written_links(data_dir)?);
     details.extend(check_written_author_resolution(data_dir)?);
     details.extend(check_department_roles(data_dir)?);
+    details.extend(check_published_answer_text(data_dir)?);
     Ok(details)
+}
+
+fn check_published_answer_text(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut details = Vec::new();
+    let path = data_dir.join(format!("sessions/{SESSION_ID}/written/answers.parquet"));
+    if !path.exists() {
+        return Ok(details);
+    }
+
+    for batch in read_all_rows(&path)? {
+        let answer_ids = read_string_column(&batch, "answer_id")?;
+        let routes = read_string_column(&batch, "route_id")?;
+        let slots = read_string_column(&batch, "answer_slot")?;
+        let statuses = read_string_column(&batch, "status")?;
+        let kinds = read_string_column(&batch, "kind")?;
+        let source_kinds = read_string_column(&batch, "source_kind")?;
+        let text_nl = read_string_column(&batch, "text_nl")?;
+        let text_fr = read_string_column(&batch, "text_fr")?;
+        let publication_refs = read_string_column(&batch, "publication_ref")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+
+        for i in 0..batch.num_rows() {
+            if !is_blank_published_qrva_answer(
+                &statuses[i],
+                &kinds[i],
+                &source_kinds[i],
+                &text_nl[i],
+                &text_fr[i],
+            ) {
+                continue;
+            }
+            details.push(
+                CheckDetail::new(
+                    "written.published_answer_text_present",
+                    "error",
+                    "fail",
+                    format!(
+                        "published QRVA answer {} has no NL or FR text",
+                        answer_ids[i]
+                    ),
+                )
+                .with_entity("Answer", &answer_ids[i])
+                .with_values(
+                    "nonempty text_nl or text_fr",
+                    format!(
+                        "route={}, slot={}, publication_ref={}, status={}",
+                        routes[i], slots[i], publication_refs[i], statuses[i]
+                    ),
+                )
+                .with_source(&source_urls[i], &cache_paths[i]),
+            );
+        }
+    }
+    Ok(details)
+}
+
+fn is_blank_published_qrva_answer(
+    status: &str,
+    kind: &str,
+    source_kind: &str,
+    text_nl: &str,
+    text_fr: &str,
+) -> bool {
+    matches!(status.trim().to_ascii_lowercase().as_str(), "publicated" | "published")
+        && kind == "written"
+        && source_kind == "qrva"
+        && text_nl.trim().is_empty()
+        && text_fr.trim().is_empty()
 }
 
 fn check_written_docname_unique(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
@@ -233,4 +303,35 @@ fn check_department_roles(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn E
         }
     }
     Ok(details)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_blank_published_qrva_answer;
+
+    #[test]
+    fn published_qrva_answer_with_both_languages_blank_is_flagged() {
+        assert!(is_blank_published_qrva_answer(
+            "publicated", "written", "qrva", "", "  "
+        ));
+        assert!(is_blank_published_qrva_answer(
+            "Published", "written", "qrva", "\n", "\t"
+        ));
+    }
+
+    #[test]
+    fn nonpublished_or_nonqrva_or_populated_answer_is_not_flagged() {
+        assert!(!is_blank_published_qrva_answer(
+            "answerReceived", "written", "qrva", "", ""
+        ));
+        assert!(!is_blank_published_qrva_answer(
+            "published", "oral", "qrva", "", ""
+        ));
+        assert!(!is_blank_published_qrva_answer(
+            "published", "written", "other", "", ""
+        ));
+        assert!(!is_blank_published_qrva_answer(
+            "published", "written", "qrva", "Antwoord", ""
+        ));
+    }
 }

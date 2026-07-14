@@ -309,6 +309,18 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Plenary question extraction.",
         },
     ],
+    "written.published_answer_text_present": [
+        {
+            "path": "scrapers/qrva/src/xml.rs",
+            "symbol": "parse_qrva_xml",
+            "note": "Accumulates answer text across nested inline XML elements.",
+        },
+        {
+            "path": "scrapers/qa/src/written.rs",
+            "symbol": "check_published_answer_text",
+            "note": "Flags published QRVA staging answers with blank NL and FR bodies.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

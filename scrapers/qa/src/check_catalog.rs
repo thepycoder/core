@@ -182,6 +182,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A commission question has a nonempty staging questioner field but no resolved ASKED relation.",
             measures: "Joins commission question rows to normalized `asked.parquet` by canonical question id; warns separately when the staging questioner field is empty.",
         },
+        "written.published_answer_text_present" => CheckDoc {
+            what: "A published QRVA answer has neither a Dutch nor French answer body.",
+            measures: "Reads written answers staging and flags `source_kind=qrva`, written answers in publicated/published states where both language text fields are blank.",
+        },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",
             measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",

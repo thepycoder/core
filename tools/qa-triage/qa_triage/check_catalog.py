@@ -140,6 +140,10 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="Cached meeting HTML has question/agenda headings but no matching question rows were written.",
         measures="Counts agenda question headings in cache HTML vs question rows per meeting_id.",
     ),
+    "written.published_answer_text_present": CheckDoc(
+        what="A published QRVA answer has neither a Dutch nor French answer body.",
+        measures="Reads written answers staging and flags QRVA written answers in publicated/published states where both language text fields are blank.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

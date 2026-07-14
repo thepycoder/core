@@ -121,28 +121,28 @@ The current fixture at `scrapers/qrva/src/xml.rs:102-128` covers `<br>` but no n
 
 ### Parser TODO
 
-- [ ] Replace the single-tag state with outer-field state plus nested depth, or an explicit stack.
-- [ ] Treat direct children of `QRVADOC` as field boundaries.
-- [ ] Accumulate all descendant text while a field is open.
-- [ ] Preserve `<br>` as a line break.
-- [ ] Do not create output fields for inline tags such as `a`, `b`, `i`, `strong`, or `span`.
-- [ ] Close and store a field only when the matching direct child of `QRVADOC` closes.
-- [ ] Preserve existing whitespace normalization unless a fixture proves it loses meaningful separation.
-- [ ] Add a regression fixture with an `<a>` inside `TEXTA1N` and `TEXTA1F`.
-- [ ] Reference `56-B001-3-0001-0000202400004.xml` in the test comment as the originating document.
+- [x] Replace the single-tag state with outer-field state plus nested depth, or an explicit stack.
+- [x] Treat direct children of `QRVADOC` as field boundaries.
+- [x] Accumulate all descendant text while a field is open.
+- [x] Preserve `<br>` as a line break.
+- [x] Do not create output fields for inline tags such as `a`, `b`, `i`, `strong`, or `span`.
+- [x] Close and store a field only when the matching direct child of `QRVADOC` closes.
+- [x] Preserve existing whitespace normalization unless a fixture proves it loses meaningful separation.
+- [x] Add a regression fixture with an `<a>` inside `TEXTA1N` and `TEXTA1F`.
+- [x] Reference `56-B001-3-0001-0000202400004.xml` in the test comment as the originating document.
 - [ ] Reparse QRVA staging after the fix.
 - [ ] Rebuild normalized answers and the graph.
 
 ### QA TODO
 
-- [ ] Add `written.published_answer_text_present` in `scrapers/qa/src/written.rs`.
-- [ ] Register the check in `registered_check_ids()` and `check_catalog.rs`.
-- [ ] Mirror it in `tools/qa-triage/qa_triage/check_catalog.py` and `code_pointers.py`.
-- [ ] Read staging `written/answers.parquet`, because it retains answer slot and publication metadata.
-- [ ] Emit one detail when `kind=written`, `source_kind=qrva`, status is `publicated`/`published`, and both language texts are blank.
-- [ ] Use `entity_type=Answer` and `entity_id=answer_id`.
-- [ ] Carry route, slot, publication reference, source URL, and cache path in the detail.
-- [ ] Use deterministic failure semantics: `severity=error`, `status=fail`. Default `just qa` must still exit 0.
+- [x] Add `written.published_answer_text_present` in `scrapers/qa/src/written.rs`.
+- [x] Register the check in `registered_check_ids()` and `check_catalog.rs`.
+- [x] Mirror it in `tools/qa-triage/qa_triage/check_catalog.py` and `code_pointers.py`.
+- [x] Read staging `written/answers.parquet`, because it retains answer slot and publication metadata.
+- [x] Emit one detail when `kind=written`, `source_kind=qrva`, status is `publicated`/`published`, and both language texts are blank.
+- [x] Use `entity_type=Answer` and `entity_id=answer_id`.
+- [x] Carry route, slot, publication reference, source URL, and cache path in the detail.
+- [x] Use deterministic failure semantics: `severity=error`, `status=fail`. Default `just qa` must still exit 0.
 
 ### Tests
 
@@ -150,9 +150,9 @@ The current fixture at `scrapers/qrva/src/xml.rs:102-128` covers `<br>` but no n
 - Mixed-case `published` plus whitespace-only text -> finding.
 - Non-published lifecycle state plus blank -> no finding.
 - Either NL or FR populated -> no finding.
-- Inline oral-written answer -> not evaluated by this QRVA-specific check.
-- Nested `<a>` text survives XML parsing.
-- Multiple nested inline elements do not split or overwrite the field.
+- [x] Inline oral-written answer -> not evaluated by this QRVA-specific check.
+- [x] Nested `<a>` text survives XML parsing.
+- [x] Multiple nested inline elements do not split or overwrite the field.
 
 ### Acceptance criteria
 

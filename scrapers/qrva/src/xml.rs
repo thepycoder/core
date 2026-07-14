@@ -10,7 +10,9 @@ pub fn parse_qrva_xml(xml: &str) -> Result<Value, Box<dyn std::error::Error>> {
 
     let mut buf = Vec::new();
     let mut fields: Map<String, Value> = Map::new();
-    let mut current_tag: Option<String> = None;
+    let mut depth = 0usize;
+    let mut field_depth = 0usize;
+    let mut current_field: Option<String> = None;
     let mut text_parts: Vec<String> = Vec::new();
 
     loop {
@@ -19,21 +21,28 @@ pub fn parse_qrva_xml(xml: &str) -> Result<Value, Box<dyn std::error::Error>> {
             Ok(Event::Start(e)) => {
                 let name = local_name(&e)?;
                 if name == "br" {
-                    if current_tag.is_some() {
+                    if current_field.is_some() {
                         text_parts.push('\n'.to_string());
                     }
-                } else if !matches!(name.as_str(), "QRVADOC" | "link") {
-                    current_tag = Some(name);
-                    text_parts.clear();
+                } else {
+                    depth += 1;
+                    if current_field.is_none()
+                        && depth == 2
+                        && !matches!(name.as_str(), "QRVADOC" | "link")
+                    {
+                        current_field = Some(name);
+                        field_depth = depth;
+                        text_parts.clear();
+                    }
                 }
             }
             Ok(Event::Empty(e)) => {
-                if local_name(&e)? == "br" && current_tag.is_some() {
+                if local_name(&e)? == "br" && current_field.is_some() {
                     text_parts.push('\n'.to_string());
                 }
             }
             Ok(Event::Text(e)) => {
-                if current_tag.is_some() {
+                if current_field.is_some() {
                     let text = e.unescape()?.into_owned();
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
@@ -42,7 +51,7 @@ pub fn parse_qrva_xml(xml: &str) -> Result<Value, Box<dyn std::error::Error>> {
                 }
             }
             Ok(Event::CData(e)) => {
-                if current_tag.is_some() {
+                if current_field.is_some() {
                     let text = String::from_utf8_lossy(e.as_ref()).trim().to_string();
                     if !text.is_empty() {
                         text_parts.push(text);
@@ -51,14 +60,16 @@ pub fn parse_qrva_xml(xml: &str) -> Result<Value, Box<dyn std::error::Error>> {
             }
             Ok(Event::End(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if current_tag.as_deref() == Some(name.as_str()) {
+                if current_field.as_deref() == Some(name.as_str()) && depth == field_depth {
                     fields.insert(
                         name,
-                        Value::String(normalize_field_text(&text_parts.join(""))),
+                        Value::String(normalize_field_text(&text_parts.join(" "))),
                     );
-                    current_tag = None;
+                    current_field = None;
+                    field_depth = 0;
                     text_parts.clear();
                 }
+                depth = depth.saturating_sub(1);
             }
             Ok(_) => {}
             Err(err) => return Err(err.into()),
@@ -91,7 +102,14 @@ fn normalize_field_text(text: &str) -> String {
         out.push_str(trimmed);
         prev_newline = false;
     }
-    out.trim().to_string()
+    out.trim()
+        .replace(" ,", ",")
+        .replace(" .", ".")
+        .replace(" !", "!")
+        .replace(" ?", "?")
+        .replace(" :", ":")
+        .replace("( ", "(")
+        .replace(" )", ")")
 }
 
 #[cfg(test)]
@@ -145,5 +163,28 @@ mod tests {
         assert_eq!(out.routes.len(), 1);
         assert_eq!(out.answers.len(), 1);
         assert_eq!(out.questions[0].question_id, "56_written_0000202400002");
+    }
+
+    #[test]
+    fn nested_inline_elements_remain_in_answer_fields() {
+        // Regression from cache/sessions/56/qrva/detail/56-B001-3-0001-0000202400004.xml.
+        let xml = r#"<QRVADOC>
+            <TEXTA1N>Antwoord <a href="https://example.test">met link</a> en <strong>opmaak</strong>.</TEXTA1N>
+            <TEXTA1F>Réponse <a href="https://example.test">avec lien</a>.</TEXTA1F>
+        </QRVADOC>"#;
+        let value = parse_qrva_xml(xml).expect("xml parse");
+
+        assert_eq!(value["TEXTA1N"], "Antwoord met link en opmaak.");
+        assert_eq!(value["TEXTA1F"], "Réponse avec lien.");
+        assert!(value.get("a").is_none());
+        assert!(value.get("strong").is_none());
+    }
+
+    #[test]
+    fn multiple_nested_inline_elements_do_not_split_answer_fields() {
+        let xml = r#"<QRVADOC><TEXTA1N>Een <span>eerste</span>, <i>tweede</i> antwoord.</TEXTA1N></QRVADOC>"#;
+        let value = parse_qrva_xml(xml).expect("xml parse");
+
+        assert_eq!(value["TEXTA1N"], "Een eerste, tweede antwoord.");
     }
 }
