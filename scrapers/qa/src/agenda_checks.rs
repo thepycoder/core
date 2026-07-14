@@ -5,11 +5,12 @@ use crawl::agenda_timeline::{
 use crawl::paths::cache_dir;
 use crawl::proceeding_entities::{is_hearing_heading, is_interpellation_heading};
 use crawl::report_blocks::{parse_report_blocks, read_report_html};
+use crawl::utils::ensure_question_id;
 use crawl::vote_inventory::numeric_sequence_gaps_from_one;
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
 use scraper::Html;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
 
@@ -21,6 +22,7 @@ pub fn run_agenda_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Er
     details.extend(check_hearing_headings(data_dir)?);
     details.extend(check_interpellation_headings(data_dir)?);
     details.extend(check_question_internal_ids(data_dir)?);
+    details.extend(check_commission_questioners_resolved(data_dir)?);
     Ok(details)
 }
 
@@ -394,6 +396,65 @@ fn check_question_internal_ids(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<
                         .with_source(&source_urls[i], &cache_paths[i]),
                     );
                 }
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_commission_questioners_resolved(
+    data_dir: &Path,
+) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let questions_path = data_dir.join(format!(
+        "sessions/{SESSION_ID}/commission/questions.parquet"
+    ));
+    if !questions_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let asked_path = data_dir.join("normalized/asked.parquet");
+    let mut asked_question_ids = HashSet::new();
+    for batch in read_all_rows(&asked_path)? {
+        asked_question_ids.extend(read_string_column(&batch, "question_id")?);
+    }
+
+    let mut details = Vec::new();
+    for batch in read_all_rows(&questions_path)? {
+        let question_ids = read_string_column(&batch, "question_id")?;
+        let meeting_ids = read_string_column(&batch, "meeting_id")?;
+        let questioners = read_string_column(&batch, "questioners")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        for i in 0..batch.num_rows() {
+            let question_id =
+                ensure_question_id(&SESSION_ID.to_string(), "commission", &question_ids[i]);
+            let raw_questioners = questioners[i].trim();
+            if raw_questioners.is_empty() {
+                details.push(
+                    CheckDetail::new(
+                        "question.questioner_resolved",
+                        "warn",
+                        "warn",
+                        format!("commission question {question_id} has no staging questioner"),
+                    )
+                    .with_meeting("commission", &meeting_ids[i])
+                    .with_entity("question", &question_id)
+                    .with_values("non-empty questioners", raw_questioners)
+                    .with_source(&source_urls[i], &cache_paths[i]),
+                );
+            } else if !asked_question_ids.contains(&question_id) {
+                details.push(
+                    CheckDetail::new(
+                        "question.questioner_resolved",
+                        "error",
+                        "fail",
+                        format!("commission question {question_id} has no resolved ASKED relation"),
+                    )
+                    .with_meeting("commission", &meeting_ids[i])
+                    .with_entity("question", &question_id)
+                    .with_values("at least one ASKED", raw_questioners)
+                    .with_source(&source_urls[i], &cache_paths[i]),
+                );
             }
         }
     }

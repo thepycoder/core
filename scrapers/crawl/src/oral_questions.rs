@@ -303,6 +303,24 @@ mod tests {
     }
 
     #[test]
+    fn commission_meeting_157_questioners_have_no_heading_prefix() {
+        let Some(questions) = commission_fixture_questions(157) else {
+            return;
+        };
+        assert!(
+            questions.iter().all(|q| {
+                !q.questioners.contains("Vraag van") && !q.questioners.contains("Question de")
+            }),
+            "questioner headings must be stripped: {:?}",
+            questions
+                .iter()
+                .map(|q| &q.questioners)
+                .filter(|name| name.contains("Vraag van") || name.contains("Question de"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn commission_meeting_15_hearing_only_has_no_questions() {
         use crate::agenda_timeline::build_agenda_timeline;
         use crate::report_blocks::{parse_report_blocks, read_report_html};

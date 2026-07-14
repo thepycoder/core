@@ -178,6 +178,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A commission or plenary question row is missing `internal_ids` (site-native sub-question keys).",
             measures: "Requires non-empty `internal_ids` on staging question parquet rows.",
         },
+        "question.questioner_resolved" => CheckDoc {
+            what: "A commission question has a nonempty staging questioner field but no resolved ASKED relation.",
+            measures: "Joins commission question rows to normalized `asked.parquet` by canonical question id; warns separately when the staging questioner field is empty.",
+        },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",
             measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",
