@@ -2,6 +2,7 @@ use crate::types::{CheckDetail, MeetingCoverageSnapshot};
 use arrow::record_batch::RecordBatch;
 use chrono::Utc;
 use crawl::agenda_timeline::MeetingKind;
+use crawl::corpus_policy::{self, POLICY_DOC};
 use crawl::paths::cache_dir;
 use crawl::qa_coverage::{count_document_words_from_cache, word_count};
 use crawl::qa_markers::check_markers_vs_utterances;
@@ -367,10 +368,14 @@ fn check_speech_char_coverage(
         }
     }
 
+    let session_id = SESSION_ID.parse().unwrap_or(56);
     let p5_plenary = percentile_5(
         &meetings
             .iter()
-            .filter(|m| m.meeting_kind == "plenary")
+            .filter(|m| {
+                m.meeting_kind == "plenary"
+                    && !coverage_suppressed(session_id, &m.meeting_kind, &m.meeting_id)
+            })
             .map(|m| m.ratio)
             .collect::<Vec<_>>(),
     );
@@ -426,26 +431,48 @@ fn check_speech_char_coverage(
             continue;
         }
 
+        let meeting_kind = MeetingKind::parse(&meeting.meeting_kind);
+        let meeting_id = meeting.meeting_id.parse().unwrap_or(0);
+        let classification = corpus_policy::classify_meeting(session_id, meeting_kind, meeting_id);
+        let policy_expected = classification
+            .map(|c| format!("corpus_class={} policy={POLICY_DOC}", c.class.as_str()))
+            .unwrap_or_default();
+        let (severity, status) = if classification
+            .is_some_and(|c| c.class.suppresses_coverage_warning())
+        {
+            ("info", "info")
+        } else {
+            ("warn", "warn")
+        };
+        let policy_suffix = classification
+            .map(|c| format!("; corpus {} ({})", c.class.as_str(), c.note))
+            .unwrap_or_default();
+
         details.push(
             CheckDetail::new(
                 CHECK_ID,
-                "warn",
-                "warn",
+                severity,
+                status,
                 format!(
-                    "meeting {} {} document word coverage {:.3}: saved={} source={}; {}",
+                    "meeting {} {} document word coverage {:.3}: saved={} source={}; {}{}",
                     meeting.meeting_kind,
                     meeting.meeting_id,
                     meeting.ratio,
                     meeting.saved_words,
                     meeting.source_words,
-                    reasons.join(", ")
+                    reasons.join(", "),
+                    policy_suffix
                 ),
             )
             .with_session(SESSION_ID)
             .with_meeting(&meeting.meeting_kind, &meeting.meeting_id)
             .with_entity("meeting", &meeting.meeting_id)
             .with_values(
-                format!("source_words={}", meeting.source_words),
+                if policy_expected.is_empty() {
+                    format!("source_words={}", meeting.source_words)
+                } else {
+                    policy_expected
+                },
                 format!(
                     "saved_words={} ratio={:.3}",
                     meeting.saved_words, meeting.ratio
@@ -456,6 +483,13 @@ fn check_speech_char_coverage(
     }
 
     Ok(CoverageCheckOutput { details, snapshots })
+}
+
+fn coverage_suppressed(session_id: u32, meeting_kind: &str, meeting_id: &str) -> bool {
+    let kind = MeetingKind::parse(meeting_kind);
+    let id = meeting_id.parse().unwrap_or(0);
+    corpus_policy::classify_meeting(session_id, kind, id)
+        .is_some_and(|c| c.class.suppresses_coverage_warning())
 }
 
 fn percentile_5(values: &[f64]) -> f64 {
@@ -667,11 +701,27 @@ fn check_roundtrip_discussion(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<d
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crawl::corpus_policy::CorpusClass;
 
     #[test]
     fn percentile_5_picks_lowest_bucket() {
         let values: Vec<f64> = (1..=20).map(|n| n as f64 / 20.0).collect();
         let p5 = percentile_5(&values);
         assert!((p5 - 0.05).abs() < 0.01 || (p5 - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn constitutive_meetings_suppress_p5_pool() {
+        assert!(coverage_suppressed(56, "plenary", "2"));
+        assert!(coverage_suppressed(56, "plenary", "4"));
+        assert!(!coverage_suppressed(56, "plenary", "24"));
+        assert!(!coverage_suppressed(56, "plenary", "22"));
+    }
+
+    #[test]
+    fn mixed_meeting_24_not_suppressed() {
+        let c = corpus_policy::classify_meeting(56, MeetingKind::Plenary, 24).unwrap();
+        assert_eq!(c.class, CorpusClass::Mixed);
+        assert!(!c.class.suppresses_coverage_warning());
     }
 }

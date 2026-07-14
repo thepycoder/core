@@ -134,7 +134,7 @@ CHECK_DOCS: dict[str, CheckDoc] = {
     ),
     "utterance.speech_char_coverage": CheckDoc(
         what="Persisted meeting text volume is far below the whole cached report.",
-        measures="Per meeting: ratio of saved word count vs whole-document word count from cached HTML.",
+        measures="Per meeting: ratio of saved word count vs whole-document word count from cached HTML. Constitutive whole-report classes emit info with policy reference; mixed reports stay on warn.",
     ),
     "agenda.entity_count_vs_parquet": CheckDoc(
         what="Cached meeting HTML has question/agenda headings but no matching question rows were written.",

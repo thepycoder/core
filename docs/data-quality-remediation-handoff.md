@@ -203,20 +203,20 @@ Meeting 22 contains a political question about President Trump's oath. It is not
 
 ### Documentation TODO
 
-- [ ] Create `docs/meeting-report-corpus-policy.md` from this section.
-- [ ] Document that raw reports and report blocks remain canonical evidence even when text is intentionally not promoted to Utterance.
-- [ ] Document the difference between whole-report classification and isolated procedural agenda items.
-- [ ] Add the document to `README.md` near the meeting-report pipeline description.
+- [x] Create `docs/meeting-report-corpus-policy.md` from this section.
+- [x] Document that raw reports and report blocks remain canonical evidence even when text is intentionally not promoted to Utterance.
+- [x] Document the difference between whole-report classification and isolated procedural agenda items.
+- [x] Add the document to `README.md` near the meeting-report pipeline description.
 
 ### QA TODO
 
-- [ ] Add one central, explicit corpus-classification catalog rather than hardcoding `meeting_id <= 4` in the coverage calculation.
-- [ ] Catalog at least `constitutive`, `constitutive_administrative`, `mixed`, `session_opening`, and `vote_dominated`.
-- [ ] Downgrade expected low speech coverage for meetings 1-4 to `info` with a policy reference.
-- [ ] Do not suppress meeting 24.
-- [ ] Keep vote, agenda, source-span, and cache checks active for every classified report.
-- [ ] Add a QA test proving that a mixed report with one oath heading still receives normal speech-coverage evaluation.
-- [ ] Add a negative fixture based on meeting 22 so ordinary political use of the word “oath” does not trigger corpus classification.
+- [x] Add one central, explicit corpus-classification catalog rather than hardcoding `meeting_id <= 4` in the coverage calculation.
+- [x] Catalog at least `constitutive`, `constitutive_administrative`, `mixed`, `session_opening`, and `vote_dominated`.
+- [x] Downgrade expected low speech coverage for meetings 1-4 to `info` with a policy reference.
+- [x] Do not suppress meeting 24.
+- [x] Keep vote, agenda, source-span, and cache checks active for every classified report.
+- [x] Add a QA test proving that a mixed report with one oath heading still receives normal speech-coverage evaluation.
+- [x] Add a negative fixture based on meeting 22 so ordinary political use of the word “oath” does not trigger corpus classification.
 
 ### Acceptance criteria
 

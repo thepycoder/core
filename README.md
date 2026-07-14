@@ -21,6 +21,8 @@ scrapers/
 summarizers/            # summarize topics/dossiers/discussions
 ```
 
+Plenary and commission **integraal verslag** parsing deliberately excludes some procedural text (oaths, credentials, appointments) from utterance rows. Raw HTML and `report_blocks.parquet` remain canonical; see [docs/meeting-report-corpus-policy.md](docs/meeting-report-corpus-policy.md).
+
 ## Scrapers
 
 Every scraper follows the same pipeline:

@@ -1,6 +1,8 @@
 //! Supplemental distribution stats for QA summary output.
 
 use crate::types::{CheckDetail, MeetingCoverageSnapshot};
+use crawl::corpus_policy;
+use crawl::corpus_policy::POLICY_DOC;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -96,10 +98,37 @@ fn coverage_distribution_stats(snapshots: &[MeetingCoverageSnapshot]) -> Option<
     lines.push(String::new());
     lines.push("**Lowest ratios:**".to_string());
     for row in lowest.iter().take(8) {
+        let annotation = corpus_class_annotation(&row.meeting_kind, &row.meeting_id);
         lines.push(format!(
-            "- {} {}: {:.3} ({} / {} words)",
-            row.meeting_kind, row.meeting_id, row.ratio, row.saved_words, row.source_words
+            "- {} {}: {:.3} ({} / {} words){}",
+            row.meeting_kind,
+            row.meeting_id,
+            row.ratio,
+            row.saved_words,
+            row.source_words,
+            annotation
         ));
+    }
+
+    let policy_rows: Vec<String> = snapshots
+        .iter()
+        .filter_map(|row| {
+            let session_id = 56;
+            let kind = crawl::agenda_timeline::MeetingKind::parse(&row.meeting_kind);
+            let meeting_id = row.meeting_id.parse().ok()?;
+            let class = corpus_policy::classify_meeting(session_id, kind, meeting_id)?;
+            Some(format!(
+                "- {} {}: `{}` — {}",
+                row.meeting_kind, row.meeting_id, class.class.as_str(), class.note
+            ))
+        })
+        .collect();
+    if !policy_rows.is_empty() {
+        lines.push(String::new());
+        lines.push(format!(
+            "**Corpus policy classifications** (see `{POLICY_DOC}`):"
+        ));
+        lines.extend(policy_rows);
     }
 
     Some(lines.join("\n"))
@@ -135,12 +164,28 @@ pub fn coverage_console_lines(snapshots: &[MeetingCoverageSnapshot]) -> Vec<Stri
     let worst: Vec<String> = lowest
         .iter()
         .take(5)
-        .map(|r| format!("{} {} ({:.3})", r.meeting_kind, r.meeting_id, r.ratio))
+        .map(|r| {
+            format!(
+                "{} {} ({:.3}){}",
+                r.meeting_kind,
+                r.meeting_id,
+                r.ratio,
+                corpus_class_annotation(&r.meeting_kind, &r.meeting_id)
+            )
+        })
         .collect();
     if !worst.is_empty() {
         lines.push(format!("[qa] coverage lowest: {}", worst.join(", ")));
     }
     lines
+}
+
+fn corpus_class_annotation(meeting_kind: &str, meeting_id: &str) -> String {
+    let kind = crawl::agenda_timeline::MeetingKind::parse(meeting_kind);
+    let id = meeting_id.parse().unwrap_or(0);
+    corpus_policy::classify_meeting(56, kind, id)
+        .map(|c| format!(" [{}]", c.class.as_str()))
+        .unwrap_or_default()
 }
 
 struct Distribution {

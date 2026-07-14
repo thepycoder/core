@@ -287,6 +287,11 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
     ],
     "utterance.speech_char_coverage": [
         {
+            "path": "scrapers/crawl/src/corpus_policy.rs",
+            "symbol": "classify_meeting",
+            "note": "Explicit corpus classes; constitutive meetings downgrade coverage to info.",
+        },
+        {
             "path": "scrapers/crawl/src/agenda_timeline.rs",
             "symbol": "build_agenda_timeline",
             "note": "Section boundaries control what text is extracted.",

@@ -124,7 +124,7 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "utterance.speech_char_coverage" => CheckDoc {
             what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
-            measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind).",
+            measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind). Constitutive whole-report classes (`corpus_policy.rs`) emit `info` with policy reference instead of `warn` and are excluded from the p5 pool. Mixed reports (e.g. plenary 24) remain fully evaluated.",
         },
         "utterance.roundtrip_discussion" => CheckDoc {
             what: "Normalized utterances exist for a question but its staging `discussion` JSON is empty.",

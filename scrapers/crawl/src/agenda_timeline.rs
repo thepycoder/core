@@ -25,6 +25,13 @@ impl MeetingKind {
             MeetingKind::Commission => "commission",
         }
     }
+
+    pub fn parse(kind: &str) -> Self {
+        match kind {
+            "commission" => Self::Commission,
+            _ => Self::Plenary,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
