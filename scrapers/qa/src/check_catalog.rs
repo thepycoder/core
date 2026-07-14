@@ -186,6 +186,14 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A published QRVA answer has neither a Dutch nor French answer body.",
             measures: "Reads written answers staging and flags `source_kind=qrva`, written answers in publicated/published states where both language text fields are blank.",
         },
+        "lobby.url_placement" => CheckDoc {
+            what: "A lobby register URL or domain token appears outside the url column.",
+            measures: "Reads `lobby.parquet` and flags `www.`/`http` tokens in contacts or interests, or excessive distinct URL tokens in url.",
+        },
+        "lobby.column_bleed" => CheckDoc {
+            what: "A truncated URL fragment in contacts or interests matches a prefix of the canonical url field.",
+            measures: "Detects partial domain tokens in non-url columns that align with the row's canonical url value.",
+        },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",
             measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",

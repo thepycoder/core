@@ -144,6 +144,14 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A published QRVA answer has neither a Dutch nor French answer body.",
         measures="Reads written answers staging and flags QRVA written answers in publicated/published states where both language text fields are blank.",
     ),
+    "lobby.url_placement": CheckDoc(
+        what="A lobby register URL or domain token appears outside the url column.",
+        measures="Reads lobby.parquet and flags URL tokens in contacts or interests.",
+    ),
+    "lobby.column_bleed": CheckDoc(
+        what="A truncated URL fragment in contacts or interests matches the canonical url field.",
+        measures="Detects partial domain bleed from fixed-column PDF parsing.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

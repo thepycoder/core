@@ -326,6 +326,30 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Flags published QRVA staging answers with blank NL and FR bodies.",
         },
     ],
+    "lobby.url_placement": [
+        {
+            "path": "scrapers/lobby/src/lib.rs",
+            "symbol": "extract_lobby_from_layout",
+            "note": "Character-position column slicing for pdftotext -layout rows.",
+        },
+        {
+            "path": "scrapers/qa/src/lobby.rs",
+            "symbol": "check_url_placement",
+            "note": "Flags URL tokens outside the url column.",
+        },
+    ],
+    "lobby.column_bleed": [
+        {
+            "path": "scrapers/lobby/src/lib.rs",
+            "symbol": "slice_columns",
+            "note": "Column boundaries for organisation/contact/interest/url fields.",
+        },
+        {
+            "path": "scrapers/qa/src/lobby.rs",
+            "symbol": "check_column_bleed",
+            "note": "Detects truncated URL fragments in wrong columns.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

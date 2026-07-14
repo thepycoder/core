@@ -363,23 +363,23 @@ The parser uses fixed byte/character cuts at `scrapers/lobby/src/main.rs:182-205
 
 ### Parser TODO
 
-- [ ] Add source fixtures copied from the PDF layout for Agoria, Air Cargo Belgium, A&T Efficiency, and at least one accented contact.
-- [ ] Reference `cache/lobby/lobbyregister.pdf` and the source row in fixture comments.
-- [ ] Replace fragile byte cuts with character-position or whitespace-gap column detection.
-- [ ] Detect the header’s actual column boundaries where possible rather than assuming one global byte layout.
-- [ ] Preserve wrapped contacts, interests, and URLs in their originating column.
-- [ ] Treat a nonempty first column as a new organisation only when the line aligns with the organisation column.
-- [ ] Normalize one or more wrapped URL lines into the URL field.
-- [ ] Remove URL tokens from contact/interest output only when they were positively classified as URL-column content.
-- [ ] Do not use longest-field merging across duplicate organisations unless all fields come from the same logical source entry.
-- [ ] Reparse `lobby.parquet` and manually compare the fixture organisations to the PDF text.
+- [x] Add source fixtures copied from the PDF layout for Agoria, Air Cargo Belgium, A&T Efficiency, and at least one accented contact.
+- [x] Reference `cache/lobby/lobbyregister.pdf` and the source row in fixture comments.
+- [x] Replace fragile byte cuts with character-position or whitespace-gap column detection.
+- [x] Detect the header’s actual column boundaries where possible rather than assuming one global byte layout.
+- [x] Preserve wrapped contacts, interests, and URLs in their originating column.
+- [x] Treat a nonempty first column as a new organisation only when the line aligns with the organisation column.
+- [x] Normalize one or more wrapped URL lines into the URL field.
+- [x] Remove URL tokens from contact/interest output only when they were positively classified as URL-column content.
+- [x] Do not use longest-field merging across duplicate organisations unless all fields come from the same logical source entry.
+- [x] Reparse `lobby.parquet` and manually compare the fixture organisations to the PDF text.
 
 ### QA TODO
 
-- [ ] Add `lobby.url_placement` for URL/domain tokens outside the URL column or prose/multiple URLs inside the URL column.
-- [ ] Add `lobby.column_bleed` for truncated URL fragments in contact/interests that match a prefix of the canonical URL.
-- [ ] Include organisation, offending field/token, source URL, and PDF cache path.
-- [ ] Add source-side parser diagnostics if broader linguistic bleed cannot be detected from final Parquet.
+- [x] Add `lobby.url_placement` for URL/domain tokens outside the URL column or prose/multiple URLs inside the URL column.
+- [x] Add `lobby.column_bleed` for truncated URL fragments in contact/interests that match a prefix of the canonical URL.
+- [x] Include organisation, offending field/token, source URL, and PDF cache path.
+- [x] Add source-side parser diagnostics if broader linguistic bleed cannot be detected from final Parquet.
 
 ### Acceptance criteria
 
