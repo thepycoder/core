@@ -1,5 +1,6 @@
 use crate::build::{EdgeRow, register_artifact_edge};
-use identity::parquet_io::{read_all_rows, read_string_column};
+use crate::provenance::ArtifactEntry;
+use identity::parquet_io::{read_all_rows, read_f64_column, read_string_column};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::Path;
@@ -82,7 +83,7 @@ pub fn load_answer_nodes(
 pub fn load_written_qa_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     load_written_asked_edges(data_dir, edges, artifact_registry)?;
     load_addressed_to_edges(data_dir, edges, artifact_registry)?;
@@ -116,7 +117,7 @@ fn load_merged_written_ids(
 fn load_written_asked_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/written_asked.parquet");
     if !path.exists() {
@@ -127,7 +128,7 @@ fn load_written_asked_edges(
         let question_ids = read_string_column(&batch, "question_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             register_artifact_edge(
                 edges,
@@ -140,7 +141,7 @@ fn load_written_asked_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
                 "{}",
             );
         }
@@ -151,7 +152,7 @@ fn load_written_asked_edges(
 fn load_addressed_to_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/addressed_to.parquet");
     if !path.exists() {
@@ -164,7 +165,7 @@ fn load_addressed_to_edges(
         let properties = read_string_column(&batch, "properties_json")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             register_artifact_edge(
                 edges,
@@ -177,7 +178,7 @@ fn load_addressed_to_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
                 &properties[i],
             );
         }
@@ -188,7 +189,7 @@ fn load_addressed_to_edges(
 fn load_has_answer_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/answers.parquet");
     if !path.exists() {
@@ -199,7 +200,7 @@ fn load_has_answer_edges(
         let question_ids = read_string_column(&batch, "question_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             register_artifact_edge(
                 edges,
@@ -212,7 +213,7 @@ fn load_has_answer_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
                 "{}",
             );
         }
@@ -223,7 +224,7 @@ fn load_has_answer_edges(
 fn load_answered_by_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/answered_by.parquet");
     if !path.exists() {
@@ -235,7 +236,7 @@ fn load_answered_by_edges(
         let answer_ids = read_string_column(&batch, "answer_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             register_artifact_edge(
                 edges,
@@ -248,7 +249,7 @@ fn load_answered_by_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
                 "{}",
             );
         }
@@ -259,7 +260,7 @@ fn load_answered_by_edges(
 fn load_oral_reference_edges(
     data_dir: &Path,
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/oral_written_links.parquet");
     if !path.exists() {
@@ -270,6 +271,9 @@ fn load_oral_reference_edges(
         let canonical = read_string_column(&batch, "canonical_question_id")?;
         let oral_refs = read_string_column(&batch, "oral_ref")?;
         let statuses = read_string_column(&batch, "status")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             if statuses[i] != "exact" || written[i] == canonical[i] {
                 continue;
@@ -288,9 +292,9 @@ fn load_oral_reference_edges(
                 "Question",
                 &canonical[i],
                 "",
-                "",
-                "",
-                "exact",
+                &source_urls[i],
+                &cache_paths[i],
+                confidences[i],
                 &props,
             );
         }

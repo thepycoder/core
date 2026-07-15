@@ -9,6 +9,7 @@ pub mod graph;
 pub mod infrastructure;
 pub mod io;
 pub mod lobby;
+pub mod provenance;
 pub mod remaining;
 pub mod remunerations;
 pub mod schema;
@@ -87,6 +88,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(lobby::run_lobby_checks(&data_root)?);
     details.extend(commissions::run_commission_checks(&data_root)?);
     details.extend(dossiers::run_dossier_chronology_checks(&data_root)?);
+    details.extend(provenance::run_normalize_provenance_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
 
@@ -174,7 +176,11 @@ fn load_unresolved(data_dir: &Path) -> Result<Vec<UnresolvedRow>, Box<dyn Error>
         let source_content_hashes = optional("source_content_hash")?;
         let block_parser_versions = optional("block_parser_version")?;
         let extractor_versions = optional("extractor_version")?;
-        let confidences = optional("confidence")?;
+        let confidences = if batch.schema().index_of("confidence").is_ok() {
+            identity::parquet_io::read_f64_column(&batch, "confidence")?
+        } else {
+            vec![0.0; batch.num_rows()]
+        };
         for i in 0..batch.num_rows() {
             rows.push(UnresolvedRow {
                 raw_name: raw_names[i].clone(),
@@ -193,7 +199,7 @@ fn load_unresolved(data_dir: &Path) -> Result<Vec<UnresolvedRow>, Box<dyn Error>
                 source_content_hash: source_content_hashes[i].clone(),
                 block_parser_version: block_parser_versions[i].clone(),
                 extractor_version: extractor_versions[i].clone(),
-                confidence: confidences[i].parse().unwrap_or(0.0),
+                confidence: confidences[i],
             });
         }
     }
@@ -296,6 +302,10 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "source.cache_metadata",
         "source.freshness",
         "normalize.unresolved_persons_by_bucket",
+        "normalize.provenance_columns",
+        "normalize.provenance_complete",
+        "normalize.provenance_artifact_id",
+        "normalize.confidence_typed",
         "source.cache_exists",
         "agenda.entity_count_vs_parquet",
         "agenda.number_sequence",

@@ -161,7 +161,7 @@ What is missing:
 
 - A first-class `Membership` / `Mandate` shape. Party and commission membership need `role`, `start_date`, `end_date`, `source`, `active`, and sometimes replacement/permanent status; an edge with only a time range will become too thin.
 - `Motion`, `Interpellation`, `Hearing`, and probably `Notice` / procedural agenda entries. **Hearing and Interpellation nodes are now wired** (staging → normalize → graph). Remaining: Motion node, INQO id enrichment, procedural adoption tagging in commission prose.
-- A source/provenance table for raw artifacts: report HTML, dossier HTML, PDF, converted markdown, search result page. **Partially addressed:** `source_artifacts.parquet` + edge-level `source_artifact_id`/`source_url`/`cache_path` exist; staging rows now carry `source_url`/`cache_path`. Still missing: `scraped_at` on artifacts, PDF/markdown artifact registration, parser version on every source type.
+- A source/provenance table for raw artifacts: report HTML, dossier HTML, PDF, converted markdown, search result page. **Addressed for normalized edges:** transform-time `source_artifact_id` / `source_content_hash` / versions / FLOAT64 `confidence` on source-derived normalized tables; graph artifacts prefer those hashes and fill `scraped_at` from cache `.meta.json` / source manifests. Still missing: PDF/markdown artifact registration for every source type.
 - A canonical bilingual text strategy. Many entities have NL and FR titles/topics; some source `lang` attributes are wrong. The graph should keep language-tagged text variants rather than picking one string per entity.
 - Validation gates: row counts, referential integrity, unmatched names, duplicate site ids, and expected deltas per scrape run.
 - Stable, site-native ids for `Question` and `Vote`. **Partially addressed for questions:** ids are now `{session}_{meeting_kind}_{meeting_id}_{seq}` (deterministic given meeting content order) with site refs in `internal_ids`; plenary/commission meeting-number collisions are fixed. **Still open for votes** and for using site-native question refs as primary graph ids; the plenary scraper still re-scrapes every meeting `1..=last` on each run.
@@ -218,8 +218,8 @@ Steps 1–3 are working end-to-end (`just build-identity` → `just normalize-ed
 **3. Stand up the graph builder early (not last). Done and working**
 
 - `just build-graph` emits deterministic `data/graph/nodes.parquet`, `edges.parquet`, and `source_artifacts.parquet` from identity, staging, and normalized outputs.
-- Nodes and edges carry canonical `source_artifact_id`, `source_url`, and `cache_path`; edges also carry numeric `confidence`. Artifacts carry `source_content_hash`, `block_parser_version`, and `extractor_version`.
-- **Remaining in this step:** populate `scraped_at` on artifacts; decide whether to add explicit `VoteCast` nodes (today CAST is Person→Vote); fix or flag orphan `VOTED_ON` targets (145 edges to dossier refs not in the graph).
+- Nodes and edges carry canonical `source_artifact_id`, `source_url`, and `cache_path`; edges also carry numeric `confidence`. Artifacts carry transform-time `source_content_hash` when present on normalized rows, plus `block_parser_version`, `extractor_version`, and `scraped_at` (from cache meta / manifests).
+- **Remaining in this step:** decide whether to add explicit `VoteCast` nodes (today CAST is Person→Vote); fix or flag orphan `VOTED_ON` targets (145 edges to dossier refs not in the graph).
 
 **4. Add the missing parliamentary core sources — each behind the resolver + QA + graph edges.**
 

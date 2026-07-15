@@ -1,11 +1,14 @@
-use crate::provenance::register_artifact;
+use crate::provenance::{ArtifactEntry, register_artifact, register_artifact_with_hash};
 use crate::written_qa::{load_answer_nodes, load_written_qa_edges, load_written_question_nodes};
 use arrow::array::{ArrayRef, Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use crawl::paths::cache_dir;
 use crawl::report_blocks::read_report_html;
 use crawl::utils::{ensure_question_id, is_flwb_document_id, normalize_site_ref};
-use crawl::{BLOCK_PARSER_VERSION, VOTE_EXTRACTOR_VERSION, content_hash, content_hash_bytes};
+use crawl::{
+    BLOCK_PARSER_VERSION, VOTE_EXTRACTOR_VERSION, content_hash, content_hash_bytes,
+    read_cache_metadata,
+};
 use identity::parquet_io::{
     read_all_rows, read_f64_column, read_string_column, utf8_field, write_parquet,
 };
@@ -61,7 +64,7 @@ pub struct GraphBuild {
 pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     let mut nodes: Vec<NodeRow> = Vec::new();
     let mut edges: Vec<EdgeRow> = Vec::new();
-    let mut artifact_registry: HashMap<String, (String, String)> = HashMap::new();
+    let mut artifact_registry: HashMap<String, ArtifactEntry> = HashMap::new();
     let mut node_seen: HashMap<(String, String), ()> = HashMap::new();
 
     let mut add_node =
@@ -93,7 +96,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
                         role: &str,
                         source_url: &str,
                         cache_path: &str,
-                        confidence: &str| {
+                        confidence: f64| {
         if from_id.is_empty() || to_id.is_empty() {
             return;
         }
@@ -108,7 +111,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
             source_artifact_id: artifact,
             source_url: source_url.to_string(),
             cache_path: cache_path.to_string(),
-            confidence: confidence_score(confidence),
+            confidence,
             properties_json: "{}".to_string(),
         });
     };
@@ -149,6 +152,8 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
         }
     }
 
+    seed_transform_hashes_from_normalized(data_dir, &mut artifact_registry)?;
+
     nodes.sort_by(|a, b| {
         a.node_type
             .cmp(&b.node_type)
@@ -163,22 +168,30 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     });
 
     let extractor_version = format!("graph_{}", env!("CARGO_PKG_VERSION"));
+    let scraped_at_index = load_scraped_at_index(data_dir);
     let mut artifacts: Vec<ArtifactRow> = artifact_registry
         .into_iter()
-        .map(|(id, (source_url, cache_path))| ArtifactRow {
-            source_artifact_id: id,
-            source_url,
-            source_content_hash: source_content_hash(&cache_path),
-            block_parser_version: if cache_path.contains("/meetings/plenary/")
-                && cache_path.ends_with(".html")
-            {
-                BLOCK_PARSER_VERSION.to_string()
-            } else {
-                String::new()
-            },
-            cache_path,
-            extractor_version: extractor_version.clone(),
-            scraped_at: String::new(),
+        .map(|(id, entry)| {
+            let content_hash = entry
+                .transform_content_hash
+                .clone()
+                .filter(|h| !h.is_empty())
+                .unwrap_or_else(|| source_content_hash(&entry.cache_path));
+            ArtifactRow {
+                source_artifact_id: id,
+                source_url: entry.source_url,
+                source_content_hash: content_hash,
+                block_parser_version: if entry.cache_path.contains("/meetings/plenary/")
+                    && entry.cache_path.ends_with(".html")
+                {
+                    BLOCK_PARSER_VERSION.to_string()
+                } else {
+                    String::new()
+                },
+                scraped_at: resolve_scraped_at(&entry.cache_path, &scraped_at_index),
+                cache_path: entry.cache_path,
+                extractor_version: extractor_version.clone(),
+            }
         })
         .collect();
     artifacts.sort_by(|a, b| a.source_artifact_id.cmp(&b.source_artifact_id));
@@ -192,7 +205,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
 
 pub(crate) fn register_artifact_edge(
     edges: &mut Vec<EdgeRow>,
-    artifact_registry: &mut HashMap<String, (String, String)>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
     edge_type: &str,
     from_type: &str,
     from_id: &str,
@@ -201,13 +214,50 @@ pub(crate) fn register_artifact_edge(
     role: &str,
     source_url: &str,
     cache_path: &str,
-    confidence: &str,
+    confidence: f64,
+    properties_json: &str,
+) {
+    register_artifact_edge_with_hash(
+        edges,
+        artifact_registry,
+        edge_type,
+        from_type,
+        from_id,
+        to_type,
+        to_id,
+        role,
+        source_url,
+        cache_path,
+        None,
+        confidence,
+        properties_json,
+    );
+}
+
+pub(crate) fn register_artifact_edge_with_hash(
+    edges: &mut Vec<EdgeRow>,
+    artifact_registry: &mut HashMap<String, ArtifactEntry>,
+    edge_type: &str,
+    from_type: &str,
+    from_id: &str,
+    to_type: &str,
+    to_id: &str,
+    role: &str,
+    source_url: &str,
+    cache_path: &str,
+    transform_content_hash: Option<&str>,
+    confidence: f64,
     properties_json: &str,
 ) {
     if from_id.is_empty() || to_id.is_empty() {
         return;
     }
-    let artifact = register_artifact(artifact_registry, source_url, cache_path);
+    let artifact = register_artifact_with_hash(
+        artifact_registry,
+        source_url,
+        cache_path,
+        transform_content_hash,
+    );
     edges.push(EdgeRow {
         edge_type: edge_type.to_string(),
         from_type: from_type.to_string(),
@@ -218,7 +268,7 @@ pub(crate) fn register_artifact_edge(
         source_artifact_id: artifact,
         source_url: source_url.to_string(),
         cache_path: cache_path.to_string(),
-        confidence: confidence_score(confidence),
+        confidence,
         properties_json: if properties_json.is_empty() {
             "{}".to_string()
         } else {
@@ -241,7 +291,7 @@ fn source_content_hash(cache_path: &str) -> String {
         return String::new();
     }
     let path = cache_dir().join(cache_path);
-    if cache_path.ends_with(".html") {
+    if cache_path.contains("/meetings/") && cache_path.ends_with(".html") {
         return read_report_html(&path)
             .map(|html| content_hash(&html))
             .unwrap_or_default();
@@ -249,6 +299,171 @@ fn source_content_hash(cache_path: &str) -> String {
     std::fs::read(path)
         .map(|bytes| content_hash_bytes(&bytes))
         .unwrap_or_default()
+}
+
+/// Prefer transform-time hashes from normalized rows over recomputing from current cache.
+fn seed_transform_hashes_from_normalized(
+    data_dir: &Path,
+    registry: &mut HashMap<String, ArtifactEntry>,
+) -> Result<(), Box<dyn Error>> {
+    const TABLES: &[&str] = &[
+        "vote_casts",
+        "asked",
+        "answered",
+        "authored",
+        "holds_role",
+        "invited",
+        "interpellated",
+        "interpellation_responded",
+        "written_asked",
+        "addressed_to",
+        "answered_by",
+        "answers",
+        "oral_written_links",
+        "utterances",
+        "unresolved_persons",
+    ];
+    for table in TABLES {
+        let path = data_dir.join(format!("normalized/{table}.parquet"));
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            if batch.schema().index_of("source_content_hash").is_err() {
+                continue;
+            }
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            let artifact_ids = read_string_column(&batch, "source_artifact_id")?;
+            let content_hashes = read_string_column(&batch, "source_content_hash")?;
+            for i in 0..batch.num_rows() {
+                apply_transform_provenance(
+                    registry,
+                    &source_urls[i],
+                    &cache_paths[i],
+                    &artifact_ids[i],
+                    &content_hashes[i],
+                    &format!("{table} row {i}"),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_transform_provenance(
+    registry: &mut HashMap<String, ArtifactEntry>,
+    source_url: &str,
+    cache_path: &str,
+    source_artifact_id: &str,
+    transform_hash: &str,
+    context: &str,
+) -> Result<(), Box<dyn Error>> {
+    validate_transform_provenance(
+        source_url,
+        cache_path,
+        source_artifact_id,
+        transform_hash,
+        context,
+    )?;
+    if source_url.is_empty() && cache_path.is_empty() {
+        return Ok(());
+    }
+    register_artifact_with_hash(
+        registry,
+        source_url,
+        cache_path,
+        (!transform_hash.is_empty()).then_some(transform_hash),
+    );
+    Ok(())
+}
+
+fn validate_transform_provenance(
+    source_url: &str,
+    cache_path: &str,
+    source_artifact_id: &str,
+    transform_hash: &str,
+    context: &str,
+) -> Result<(), Box<dyn Error>> {
+    if source_url.is_empty() && cache_path.is_empty() {
+        return Ok(());
+    }
+    let canonical = crate::provenance::artifact_id(source_url, cache_path);
+    if !source_artifact_id.is_empty() && source_artifact_id != canonical {
+        return Err(format!(
+            "artifact id mismatch for {context}: row={source_artifact_id} canonical={canonical}"
+        )
+        .into());
+    }
+    // Reject silently accepting newer cache bytes for a transform-time hash.
+    if !transform_hash.is_empty() && !cache_path.is_empty() {
+        let current = source_content_hash(cache_path);
+        if !current.is_empty() && current != transform_hash {
+            return Err(format!(
+                "stale source content for {context}: transform-time hash differs from current cache"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Prefer cache sidecar `fetched_at`, then any source-manifest `fetched_at` for the path.
+fn load_scraped_at_index(data_dir: &Path) -> HashMap<String, String> {
+    let mut index = HashMap::new();
+    let manifest_dir = data_dir.join("source_manifests");
+    let Ok(entries) = std::fs::read_dir(&manifest_dir) else {
+        return index;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("parquet") {
+            continue;
+        }
+        let Ok(batches) = read_all_rows(&path) else {
+            continue;
+        };
+        for batch in batches {
+            let Ok(cache_paths) = read_string_column(&batch, "cache_path") else {
+                continue;
+            };
+            let Ok(fetched) = read_string_column(&batch, "fetched_at") else {
+                continue;
+            };
+            for i in 0..batch.num_rows() {
+                let cp = cache_paths[i].trim();
+                let ts = fetched[i].trim();
+                if cp.is_empty() || ts.is_empty() {
+                    continue;
+                }
+                index
+                    .entry(cp.to_string())
+                    .and_modify(|existing: &mut String| {
+                        if ts > existing.as_str() {
+                            *existing = ts.to_string();
+                        }
+                    })
+                    .or_insert_with(|| ts.to_string());
+            }
+        }
+    }
+    index
+}
+
+fn resolve_scraped_at(cache_path: &str, manifest_index: &HashMap<String, String>) -> String {
+    if cache_path.is_empty() {
+        return String::new();
+    }
+    let full = cache_dir().join(cache_path);
+    if let Ok(Some(meta)) = read_cache_metadata(&full) {
+        if !meta.fetched_at.trim().is_empty() {
+            return meta.fetched_at;
+        }
+        if !meta.checked_at.trim().is_empty() {
+            return meta.checked_at;
+        }
+    }
+    manifest_index.get(cache_path).cloned().unwrap_or_default()
 }
 
 fn load_identity_nodes(
@@ -604,7 +819,7 @@ fn load_normalized_nodes(
 
 fn load_membership_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join("identity/memberships.parquet"))? {
         let person_ids = read_string_column(&batch, "person_id")?;
@@ -628,7 +843,7 @@ fn load_membership_edges(
                 &roles[i],
                 &source_urls[i],
                 "",
-                &confidences[i],
+                confidence_score(&confidences[i]),
             );
         }
     }
@@ -637,7 +852,7 @@ fn load_membership_edges(
 
 fn load_has_result_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/votes.parquet"));
     if !path.exists() {
@@ -666,7 +881,7 @@ fn load_has_result_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                "exact",
+                1.0,
             );
         }
     }
@@ -675,7 +890,7 @@ fn load_has_result_edges(
 
 fn load_vote_cast_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/vote_casts.parquet");
     if !path.exists() {
@@ -701,23 +916,14 @@ fn load_vote_cast_edges(
                 &cache_paths[i],
                 &format!("CAST from {}", person_ids[i]),
             )?;
-            let canonical_artifact =
-                crate::provenance::artifact_id(&source_urls[i], &cache_paths[i]);
-            if source_artifact_ids[i] != canonical_artifact {
-                return Err(format!(
-                    "vote cast artifact mismatch for {} -> {}",
-                    person_ids[i], result_ids[i]
-                )
-                .into());
-            }
-            let canonical_hash = source_content_hash(&cache_paths[i]);
-            if source_content_hashes[i] != canonical_hash {
-                return Err(format!(
-                    "vote cast content hash mismatch for {} -> {}",
-                    person_ids[i], result_ids[i]
-                )
-                .into());
-            }
+            let context = format!("vote cast {} -> {}", person_ids[i], result_ids[i]);
+            validate_transform_provenance(
+                &source_urls[i],
+                &cache_paths[i],
+                &source_artifact_ids[i],
+                &source_content_hashes[i],
+                &context,
+            )?;
             if block_parser_versions[i] != BLOCK_PARSER_VERSION
                 || extractor_versions[i] != VOTE_EXTRACTOR_VERSION
             {
@@ -727,7 +933,6 @@ fn load_vote_cast_edges(
                 )
                 .into());
             }
-            let confidence = confidences[i].to_string();
             add_edge(
                 "CAST",
                 "Person",
@@ -737,7 +942,7 @@ fn load_vote_cast_edges(
                 &positions[i],
                 &source_urls[i],
                 &cache_paths[i],
-                &confidence,
+                confidences[i],
             );
         }
     }
@@ -746,7 +951,7 @@ fn load_vote_cast_edges(
 
 fn load_voted_on_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let result_provenance = load_vote_result_provenance(data_dir)?;
     for batch in
@@ -778,7 +983,7 @@ fn load_voted_on_edges(
                     "",
                     &source_urls[i],
                     &cache_paths[i],
-                    "exact",
+                    1.0,
                 );
             }
             if !document_ids[i].is_empty() && is_flwb_document_id(&document_ids[i]) {
@@ -791,7 +996,7 @@ fn load_voted_on_edges(
                     "",
                     &source_urls[i],
                     &cache_paths[i],
-                    "exact",
+                    1.0,
                 );
             }
         }
@@ -801,7 +1006,7 @@ fn load_voted_on_edges(
 
 fn load_submitted_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     for batch in
         read_all_rows(&data_dir.join(format!("sessions/{SESSION_ID}/subdocuments.parquet")))?
@@ -821,7 +1026,7 @@ fn load_submitted_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                "exact",
+                1.0,
             );
         }
     }
@@ -831,7 +1036,7 @@ fn load_submitted_edges(
 fn load_tagged_with_edges(
     data_dir: &Path,
     add_node: &mut impl FnMut(&str, &str, &str, &str, &str),
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     for batch in read_all_rows(&data_dir.join(format!("sessions/{SESSION_ID}/dossiers.parquet")))? {
         let session_ids = read_string_column(&batch, "session_id")?;
@@ -860,7 +1065,7 @@ fn load_tagged_with_edges(
                     "",
                     &source_urls[i],
                     &cache_paths[i],
-                    "exact",
+                    1.0,
                 );
             }
             for topic in descriptors[i]
@@ -881,7 +1086,7 @@ fn load_tagged_with_edges(
                     "",
                     &source_urls[i],
                     &cache_paths[i],
-                    "exact",
+                    1.0,
                 );
             }
         }
@@ -891,7 +1096,7 @@ fn load_tagged_with_edges(
 
 fn load_authored_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/authored.parquet");
     if !path.exists() {
@@ -905,7 +1110,7 @@ fn load_authored_edges(
         let target_ids = read_string_column(&batch, "target_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             let from_type = if !entity_types[i].is_empty() {
                 entity_types[i].clone()
@@ -934,7 +1139,7 @@ fn load_authored_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -943,7 +1148,7 @@ fn load_authored_edges(
 
 fn load_asked_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/asked.parquet");
     if !path.exists() {
@@ -954,7 +1159,7 @@ fn load_asked_edges(
         let question_ids = read_string_column(&batch, "question_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             add_edge(
                 "ASKED",
@@ -965,7 +1170,7 @@ fn load_asked_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -974,7 +1179,7 @@ fn load_asked_edges(
 
 fn load_answered_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/answered.parquet");
     if !path.exists() {
@@ -986,7 +1191,7 @@ fn load_answered_edges(
         let question_ids = read_string_column(&batch, "question_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             if entity_ids[i].is_empty() {
                 continue;
@@ -1000,7 +1205,7 @@ fn load_answered_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1009,7 +1214,7 @@ fn load_answered_edges(
 
 fn load_holds_role_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/holds_role.parquet");
     if !path.exists() {
@@ -1020,7 +1225,7 @@ fn load_holds_role_edges(
         let target_ids = read_string_column(&batch, "target_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             add_edge(
                 "HOLDS_ROLE",
@@ -1031,7 +1236,7 @@ fn load_holds_role_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1040,7 +1245,7 @@ fn load_holds_role_edges(
 
 fn load_interpellated_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/interpellated.parquet");
     if !path.exists() {
@@ -1051,7 +1256,7 @@ fn load_interpellated_edges(
         let interpellation_ids = read_string_column(&batch, "interpellation_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             add_edge(
                 "INTERPELLED",
@@ -1062,7 +1267,7 @@ fn load_interpellated_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1071,7 +1276,7 @@ fn load_interpellated_edges(
 
 fn load_interpellation_responded_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/interpellation_responded.parquet");
     if !path.exists() {
@@ -1083,7 +1288,7 @@ fn load_interpellation_responded_edges(
         let interpellation_ids = read_string_column(&batch, "interpellation_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             if entity_ids[i].is_empty() {
                 continue;
@@ -1097,7 +1302,7 @@ fn load_interpellation_responded_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1106,7 +1311,7 @@ fn load_interpellation_responded_edges(
 
 fn load_invited_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/invited.parquet");
     if !path.exists() {
@@ -1118,7 +1323,7 @@ fn load_invited_edges(
         let hearing_ids = read_string_column(&batch, "hearing_id")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         for i in 0..batch.num_rows() {
             if entity_ids[i].is_empty() {
                 continue;
@@ -1132,7 +1337,7 @@ fn load_invited_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1141,7 +1346,7 @@ fn load_invited_edges(
 
 fn load_proceeding_meeting_edges(
     data_dir: &Path,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let session = data_dir.join(format!("sessions/{SESSION_ID}"));
     for (kind, rel, node_type, id_col) in [
@@ -1192,7 +1397,7 @@ fn load_proceeding_meeting_edges(
                     "",
                     &source_urls[i],
                     &cache_paths[i],
-                    "exact",
+                    1.0,
                 );
             }
         }
@@ -1333,7 +1538,7 @@ fn load_spoke_and_part_of_edges(
     data_dir: &Path,
     site_ref_nodes: &HashMap<String, (String, String)>,
     node_seen: &HashMap<(String, String), ()>,
-    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, &str),
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
 ) -> Result<(), Box<dyn Error>> {
     let path = data_dir.join("normalized/utterances.parquet");
     if !path.exists() {
@@ -1350,7 +1555,7 @@ fn load_spoke_and_part_of_edges(
         let speaker_ids = read_string_column(&batch, "speaker_person_id")?;
         let entity_types = read_string_column(&batch, "speaker_entity_type")?;
         let entity_ids = read_string_column(&batch, "speaker_entity_id")?;
-        let confidences = read_string_column(&batch, "confidence")?;
+        let confidences = read_f64_column(&batch, "confidence")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
@@ -1365,7 +1570,7 @@ fn load_spoke_and_part_of_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                "exact",
+                1.0,
             );
             if item_kinds[i] == "question" && !item_ids[i].is_empty() {
                 if let Some(target_id) = resolve_proceeding_target_id(
@@ -1386,7 +1591,7 @@ fn load_spoke_and_part_of_edges(
                         "",
                         &source_urls[i],
                         &cache_paths[i],
-                        "exact",
+                        1.0,
                     );
                 }
             } else if item_kinds[i] == "hearing" && !item_ids[i].is_empty() {
@@ -1408,7 +1613,7 @@ fn load_spoke_and_part_of_edges(
                         "",
                         &source_urls[i],
                         &cache_paths[i],
-                        "exact",
+                        1.0,
                     );
                 }
             } else if item_kinds[i] == "interpellation" && !item_ids[i].is_empty() {
@@ -1430,7 +1635,7 @@ fn load_spoke_and_part_of_edges(
                         "",
                         &source_urls[i],
                         &cache_paths[i],
-                        "exact",
+                        1.0,
                     );
                 }
             }
@@ -1453,7 +1658,7 @@ fn load_spoke_and_part_of_edges(
                 "",
                 &source_urls[i],
                 &cache_paths[i],
-                &confidences[i],
+                confidences[i],
             );
         }
     }
@@ -1676,7 +1881,7 @@ mod tests {
                                 role: &str,
                                 source_url: &str,
                                 cache_path: &str,
-                                confidence: &str| {
+                                confidence: f64| {
                 register_artifact_edge(
                     &mut edges,
                     &mut artifacts,

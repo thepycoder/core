@@ -1,4 +1,7 @@
 use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
+use crate::provenance::{
+    CONFIDENCE_EXACT, ContentHashCache, provenance_columns, provenance_fields, provenance_of,
+};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use crawl::utils::{ensure_question_id, normalize_site_ref};
@@ -38,7 +41,11 @@ pub struct UtteranceRow {
     pub source_url: String,
     pub cache_path: String,
     pub speaker_person_id: String,
-    pub confidence: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 pub struct UtteranceOutput {
@@ -60,6 +67,7 @@ pub fn normalize_utterances(
 ) -> Result<UtteranceOutput, Box<dyn Error>> {
     let mut rows = Vec::new();
     let mut unresolved = Vec::new();
+    let mut hashes = ContentHashCache::new();
     let (interpellation_targets, canonical_interpellation_ids) =
         load_interpellation_targets(data_dir)?;
 
@@ -104,9 +112,11 @@ pub fn normalize_utterances(
             for i in 0..batch.num_rows() {
                 let speaker = raw_speakers[i].trim().to_string();
                 let role = speaker_roles[i].trim().to_string();
+                let prov =
+                    hashes.meeting_report(&source_urls[i], &cache_paths[i], CONFIDENCE_EXACT);
                 let (speaker_person_id, speaker_entity_type, speaker_entity_id, confidence) =
                     if skip_speaker(&speaker, &role) {
-                        (String::new(), String::new(), String::new(), String::new())
+                        (String::new(), String::new(), String::new(), 0.0)
                     } else {
                         let detail = actor_resolver.resolve_actor_detail(&speaker, Bucket::Speaker);
                         match detail.resolution {
@@ -114,31 +124,32 @@ pub fn normalize_utterances(
                                 person_id.clone(),
                                 "Person".to_string(),
                                 person_id,
-                                "exact".to_string(),
+                                CONFIDENCE_EXACT,
                             ),
                             ActorResolution::ExternalPerson(ext_id) => (
                                 String::new(),
                                 "ExternalPerson".to_string(),
                                 ext_id,
-                                "exact".to_string(),
+                                CONFIDENCE_EXACT,
                             ),
                             ActorResolution::Unresolved(reason) => {
-                                unresolved.push(UnresolvedRow {
-                                    raw_name: detail.raw_name,
-                                    typo_corrected: detail.typo_corrected,
-                                    norm_primary: detail.norm_primary,
-                                    norm_reordered: detail.norm_reordered,
-                                    reason: reason_label(&reason).to_string(),
-                                    source_bucket: "speakers".to_string(),
-                                    role: "speaker".to_string(),
-                                    context_id: utterance_ids[i].clone(),
-                                    context_label: format!("utterance {}", utterance_ids[i]),
-                                    raw_field: speaker.clone(),
-                                    source_url: source_urls[i].clone(),
-                                    cache_path: cache_paths[i].clone(),
-                                    ..UnresolvedRow::default()
-                                });
-                                (String::new(), String::new(), String::new(), String::new())
+                                unresolved.push(
+                                    UnresolvedRow {
+                                        raw_name: detail.raw_name,
+                                        typo_corrected: detail.typo_corrected,
+                                        norm_primary: detail.norm_primary,
+                                        norm_reordered: detail.norm_reordered,
+                                        reason: reason_label(&reason).to_string(),
+                                        source_bucket: "speakers".to_string(),
+                                        role: "speaker".to_string(),
+                                        context_id: utterance_ids[i].clone(),
+                                        context_label: format!("utterance {}", utterance_ids[i]),
+                                        raw_field: speaker.clone(),
+                                        ..UnresolvedRow::default()
+                                    }
+                                    .with_provenance(prov.clone()),
+                                );
+                                (String::new(), String::new(), String::new(), 0.0)
                             }
                         }
                     };
@@ -198,9 +209,13 @@ pub fn normalize_utterances(
                     block_start: block_starts[i].clone(),
                     block_end: block_ends[i].clone(),
                     source_section: source_sections[i].clone(),
-                    source_url: source_urls[i].clone(),
-                    cache_path: cache_paths[i].clone(),
+                    source_url: prov.source_url.clone(),
+                    cache_path: prov.cache_path.clone(),
                     speaker_person_id,
+                    source_artifact_id: prov.source_artifact_id,
+                    source_content_hash: prov.source_content_hash,
+                    block_parser_version: prov.block_parser_version,
+                    extractor_version: prov.extractor_version,
                     confidence,
                 });
             }
@@ -272,7 +287,7 @@ fn load_interpellation_targets(
 }
 
 pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("utterance_id", false),
         utf8_field("session_id", false),
         utf8_field("meeting_id", false),
@@ -296,11 +311,10 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         utf8_field("block_start", false),
         utf8_field("block_end", false),
         utf8_field("source_section", false),
-        utf8_field("source_url", false),
-        utf8_field("cache_path", false),
         utf8_field("speaker_person_id", false),
-        utf8_field("confidence", false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
 
     macro_rules! col {
         ($f:expr) => {
@@ -308,37 +322,42 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         };
     }
 
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(|r| r.utterance_id.clone()),
-            col!(|r| r.session_id.clone()),
-            col!(|r| r.meeting_id.clone()),
-            col!(|r| r.meeting_kind.clone()),
-            col!(|r| r.agenda_id.clone()),
-            col!(|r| r.turn_number.clone()),
-            col!(|r| r.seq.clone()),
-            col!(|r| r.item_kind.clone()),
-            col!(|r| r.item_id.clone()),
-            col!(|r| r.question_ids.clone()),
-            col!(|r| r.dossier_id.clone()),
-            col!(|r| r.document_id.clone()),
-            col!(|r| r.motion_id.clone()),
-            col!(|r| r.vote_id.clone()),
-            col!(|r| r.raw_speaker.clone()),
-            col!(|r| r.speaker_role.clone()),
-            col!(|r| r.speaker_entity_type.clone()),
-            col!(|r| r.speaker_entity_id.clone()),
-            col!(|r| r.text.clone()),
-            col!(|r| r.language.clone()),
-            col!(|r| r.block_start.clone()),
-            col!(|r| r.block_end.clone()),
-            col!(|r| r.source_section.clone()),
-            col!(|r| r.source_url.clone()),
-            col!(|r| r.cache_path.clone()),
-            col!(|r| r.speaker_person_id.clone()),
-            col!(|r| r.confidence.clone()),
-        ],
-    )
+    let mut columns = vec![
+        col!(|r| r.utterance_id.clone()),
+        col!(|r| r.session_id.clone()),
+        col!(|r| r.meeting_id.clone()),
+        col!(|r| r.meeting_kind.clone()),
+        col!(|r| r.agenda_id.clone()),
+        col!(|r| r.turn_number.clone()),
+        col!(|r| r.seq.clone()),
+        col!(|r| r.item_kind.clone()),
+        col!(|r| r.item_id.clone()),
+        col!(|r| r.question_ids.clone()),
+        col!(|r| r.dossier_id.clone()),
+        col!(|r| r.document_id.clone()),
+        col!(|r| r.motion_id.clone()),
+        col!(|r| r.vote_id.clone()),
+        col!(|r| r.raw_speaker.clone()),
+        col!(|r| r.speaker_role.clone()),
+        col!(|r| r.speaker_entity_type.clone()),
+        col!(|r| r.speaker_entity_id.clone()),
+        col!(|r| r.text.clone()),
+        col!(|r| r.language.clone()),
+        col!(|r| r.block_start.clone()),
+        col!(|r| r.block_end.clone()),
+        col!(|r| r.source_section.clone()),
+        col!(|r| r.speaker_person_id.clone()),
+    ];
+    columns.extend(provenance_columns(rows.iter().map(|r| {
+        provenance_of(
+            &r.source_url,
+            &r.cache_path,
+            &r.source_artifact_id,
+            &r.source_content_hash,
+            &r.block_parser_version,
+            &r.extractor_version,
+            r.confidence,
+        )
+    })));
+    write_parquet(path, schema, columns)
 }

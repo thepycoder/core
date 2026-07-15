@@ -196,6 +196,22 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A mutable source manifest has not been checked within its documented refresh interval.",
         measures="Compares oldest checked_at in each source_manifests parquet against FRESHNESS_POLICIES max_age_days.",
     ),
+    "normalize.provenance_columns": CheckDoc(
+        what="A source-derived normalized table lacks the required transform-time provenance schema.",
+        measures="Checks catalogued normalized parquet tables for the seven provenance columns.",
+    ),
+    "normalize.provenance_complete": CheckDoc(
+        what="A source-derived normalized row is missing required transform-time provenance values.",
+        measures="Requires nonempty artifact id, content hash, and extractor_version when URL/cache are set.",
+    ),
+    "normalize.provenance_artifact_id": CheckDoc(
+        what="A normalized row source_artifact_id is not canonical or missing from graph source artifacts.",
+        measures="Compares to crawl artifact_id and joins graph/source_artifacts when present.",
+    ),
+    "normalize.confidence_typed": CheckDoc(
+        what="A normalized confidence column is not FLOAT64 in [0,1].",
+        measures="Validates Arrow type and finite numeric range.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

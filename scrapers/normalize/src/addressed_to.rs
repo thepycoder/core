@@ -1,4 +1,8 @@
 use crate::common::SESSION_ID;
+use crate::provenance::{
+    CONFIDENCE_EXACT, ContentHashCache, normalize_extractor_version, provenance_columns,
+    provenance_fields, provenance_of,
+};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::ActorResolver;
@@ -25,7 +29,11 @@ pub struct AddressedToRow {
     pub properties_json: String,
     pub source_url: String,
     pub cache_path: String,
-    pub confidence: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 pub fn normalize_addressed_to(
@@ -40,6 +48,8 @@ pub fn normalize_addressed_to(
 
     let mut rows = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut hashes = ContentHashCache::new();
+    let extractor = normalize_extractor_version("addressed_to");
 
     for batch in read_all_rows(&path)? {
         let question_ids = read_string_column(&batch, "question_id")?;
@@ -72,6 +82,12 @@ pub fn normalize_addressed_to(
                 "statusq": statusq[i],
             })
             .to_string();
+            let prov = hashes.staging(
+                &source_urls[i],
+                &cache_paths[i],
+                &extractor,
+                CONFIDENCE_EXACT,
+            );
             rows.push(AddressedToRow {
                 addressed_id: format!("{question_id}_{entity_id}"),
                 question_id,
@@ -84,9 +100,13 @@ pub fn normalize_addressed_to(
                 dept_title_nl: dept_nl[i].clone(),
                 dept_title_fr: dept_fr[i].clone(),
                 properties_json,
-                source_url: source_urls[i].clone(),
-                cache_path: cache_paths[i].clone(),
-                confidence: "exact".to_string(),
+                source_url: prov.source_url,
+                cache_path: prov.cache_path,
+                source_artifact_id: prov.source_artifact_id,
+                source_content_hash: prov.source_content_hash,
+                block_parser_version: prov.block_parser_version,
+                extractor_version: prov.extractor_version,
+                confidence: prov.confidence,
             });
         }
     }
@@ -100,7 +120,7 @@ pub fn normalize_addressed_to(
 }
 
 pub fn write_addressed_to(path: &Path, rows: &[AddressedToRow]) -> Result<(), Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("addressed_id", false),
         utf8_field("question_id", false),
         utf8_field("entity_type", false),
@@ -112,35 +132,39 @@ pub fn write_addressed_to(path: &Path, rows: &[AddressedToRow]) -> Result<(), Bo
         utf8_field("dept_title_nl", false),
         utf8_field("dept_title_fr", false),
         utf8_field("properties_json", false),
-        utf8_field("source_url", false),
-        utf8_field("cache_path", false),
-        utf8_field("confidence", false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
     macro_rules! col {
         ($f:expr) => {
             Arc::new(StringArray::from(rows.iter().map($f).collect::<Vec<_>>())) as ArrayRef
         };
     }
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(|r| r.addressed_id.clone()),
-            col!(|r| r.question_id.clone()),
-            col!(|r| r.entity_type.clone()),
-            col!(|r| r.entity_id.clone()),
-            col!(|r| r.route_id.clone()),
-            col!(|r| r.deptnum.clone()),
-            col!(|r| r.questnum.clone()),
-            col!(|r| r.statusq.clone()),
-            col!(|r| r.dept_title_nl.clone()),
-            col!(|r| r.dept_title_fr.clone()),
-            col!(|r| r.properties_json.clone()),
-            col!(|r| r.source_url.clone()),
-            col!(|r| r.cache_path.clone()),
-            col!(|r| r.confidence.clone()),
-        ],
-    )
+    let mut columns = vec![
+        col!(|r| r.addressed_id.clone()),
+        col!(|r| r.question_id.clone()),
+        col!(|r| r.entity_type.clone()),
+        col!(|r| r.entity_id.clone()),
+        col!(|r| r.route_id.clone()),
+        col!(|r| r.deptnum.clone()),
+        col!(|r| r.questnum.clone()),
+        col!(|r| r.statusq.clone()),
+        col!(|r| r.dept_title_nl.clone()),
+        col!(|r| r.dept_title_fr.clone()),
+        col!(|r| r.properties_json.clone()),
+    ];
+    columns.extend(provenance_columns(rows.iter().map(|r| {
+        provenance_of(
+            &r.source_url,
+            &r.cache_path,
+            &r.source_artifact_id,
+            &r.source_content_hash,
+            &r.block_parser_version,
+            &r.extractor_version,
+            r.confidence,
+        )
+    })));
+    write_parquet(path, schema, columns)
 }
 
 pub fn dept_alias_norms(title_nl: &str, title_fr: &str) -> Vec<String> {

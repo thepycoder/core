@@ -65,7 +65,7 @@ const NODES: NodeDef[] = [
   { id: "Remuneration", label: "Remuneration", domain: "enrichment", status: "scraped", idKey: "{person, year, mandate}", note: "regimand.be; name match only" },
   { id: "MediaRecording", label: "MediaRecording", domain: "enrichment", status: "planned", idKey: "media id", note: "media.dekamer.be; fuzzy date match" },
   { id: "InterventionAnalysis", label: "InterventionAnalysis", domain: "enrichment", status: "planned", idKey: "dossier / meeting ref", note: "Structured speaker/topic data" },
-  { id: "SourceArtifact", label: "SourceArtifact", domain: "foundation", status: "working", idKey: "source_artifact_id", note: "graph/source_artifacts.parquet; hash of url+cache_path" },
+  { id: "SourceArtifact", label: "SourceArtifact", domain: "foundation", status: "working", idKey: "source_artifact_id", note: "graph/source_artifacts.parquet; transform-time hash + scraped_at from meta/manifests" },
   { id: "ReportBlock", label: "ReportBlock", domain: "proceedings", status: "working", idKey: "{artifact_id, block_index}", note: "Derived structured blocks from integraal HTML" },
   { id: "SourceSpan", label: "SourceSpan", domain: "proceedings", status: "working", idKey: "span_id", note: "Block-range provenance for votes, utterances, hearings…" },
 ];

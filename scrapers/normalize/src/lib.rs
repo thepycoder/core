@@ -4,6 +4,7 @@ pub mod authored;
 pub mod common;
 pub mod hearings;
 pub mod interpellations;
+pub mod provenance;
 pub mod questions;
 pub mod roles;
 pub mod utterances;
@@ -19,6 +20,11 @@ pub use hearings::{InvitedOutput, normalize_invited, write_invited};
 pub use interpellations::{
     InterpellationOutput, normalize_interpellations, write_interpellated,
     write_interpellation_responded,
+};
+pub use provenance::{
+    CONFIDENCE_EXACT, CONFIDENCE_HEURISTIC, CONFIDENCE_PARSED, ContentHashCache, Provenance,
+    confidence_from_label, normalize_extractor_version, provenance_columns, provenance_fields,
+    provenance_of,
 };
 pub use utterances::{UtteranceOutput, UtteranceRow, normalize_utterances, write_utterances};
 pub use vote_casts::{VoteCastOutput, normalize_vote_casts};

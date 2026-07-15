@@ -1,4 +1,8 @@
 use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label, split_csv};
+use crate::provenance::{
+    CONFIDENCE_EXACT, ContentHashCache, normalize_extractor_version, provenance_columns,
+    provenance_fields, provenance_of,
+};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
 use identity::actor_resolver::{ActorResolution, ActorResolver};
@@ -21,7 +25,11 @@ pub struct AuthoredRow {
     pub raw_name: String,
     pub source_url: String,
     pub cache_path: String,
-    pub confidence: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 pub struct AuthoredOutput {
@@ -41,6 +49,8 @@ pub fn normalize_authored(
     let mut rows = Vec::new();
     let mut unresolved = Vec::new();
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut hashes = ContentHashCache::new();
+    let extractor = normalize_extractor_version("authored");
 
     let dossiers_path = data_dir.join(format!("sessions/{SESSION_ID}/dossiers.parquet"));
     for batch in read_all_rows(&dossiers_path)? {
@@ -61,6 +71,8 @@ pub fn normalize_authored(
                 &source_urls[i],
                 &cache_paths[i],
                 &dossier_ids[i],
+                &extractor,
+                &mut hashes,
                 &mut rows,
                 &mut unresolved,
                 &mut seen,
@@ -86,6 +98,8 @@ pub fn normalize_authored(
                 &source_urls[i],
                 &cache_paths[i],
                 &format!("dossier {} doc {}", dossier_ids[i], doc_ids[i]),
+                &extractor,
+                &mut hashes,
                 &mut rows,
                 &mut unresolved,
                 &mut seen,
@@ -113,10 +127,13 @@ fn ingest_authors(
     source_url: &str,
     cache_path: &str,
     context_label: &str,
+    extractor: &str,
+    hashes: &mut ContentHashCache,
     rows: &mut Vec<AuthoredRow>,
     unresolved: &mut Vec<UnresolvedRow>,
     seen: &mut HashSet<(String, String, String)>,
 ) {
+    let prov = hashes.staging(source_url, cache_path, extractor, CONFIDENCE_EXACT);
     for name in split_csv(authors_csv) {
         if is_government_author(&name) {
             continue;
@@ -139,9 +156,13 @@ fn ingest_authors(
                         target_id: target_id.to_string(),
                         session_id: session_id.to_string(),
                         raw_name: name.clone(),
-                        source_url: source_url.to_string(),
-                        cache_path: cache_path.to_string(),
-                        confidence: "exact".to_string(),
+                        source_url: prov.source_url.clone(),
+                        cache_path: prov.cache_path.clone(),
+                        source_artifact_id: prov.source_artifact_id.clone(),
+                        source_content_hash: prov.source_content_hash.clone(),
+                        block_parser_version: prov.block_parser_version.clone(),
+                        extractor_version: prov.extractor_version.clone(),
+                        confidence: prov.confidence,
                     });
                 }
             }
@@ -161,35 +182,40 @@ fn ingest_authors(
                         target_id: target_id.to_string(),
                         session_id: session_id.to_string(),
                         raw_name: name.clone(),
-                        source_url: source_url.to_string(),
-                        cache_path: cache_path.to_string(),
-                        confidence: "exact".to_string(),
+                        source_url: prov.source_url.clone(),
+                        cache_path: prov.cache_path.clone(),
+                        source_artifact_id: prov.source_artifact_id.clone(),
+                        source_content_hash: prov.source_content_hash.clone(),
+                        block_parser_version: prov.block_parser_version.clone(),
+                        extractor_version: prov.extractor_version.clone(),
+                        confidence: prov.confidence,
                     });
                 }
             }
             ActorResolution::Unresolved(reason) => {
-                unresolved.push(UnresolvedRow {
-                    raw_name: detail.raw_name,
-                    typo_corrected: detail.typo_corrected,
-                    norm_primary: detail.norm_primary,
-                    norm_reordered: detail.norm_reordered,
-                    reason: reason_label(&reason).to_string(),
-                    source_bucket: "authors".to_string(),
-                    role: "author".to_string(),
-                    context_id: target_id.to_string(),
-                    context_label: context_label.to_string(),
-                    raw_field: name,
-                    source_url: source_url.to_string(),
-                    cache_path: cache_path.to_string(),
-                    ..UnresolvedRow::default()
-                });
+                unresolved.push(
+                    UnresolvedRow {
+                        raw_name: detail.raw_name,
+                        typo_corrected: detail.typo_corrected,
+                        norm_primary: detail.norm_primary,
+                        norm_reordered: detail.norm_reordered,
+                        reason: reason_label(&reason).to_string(),
+                        source_bucket: "authors".to_string(),
+                        role: "author".to_string(),
+                        context_id: target_id.to_string(),
+                        context_label: context_label.to_string(),
+                        raw_field: name,
+                        ..UnresolvedRow::default()
+                    }
+                    .with_provenance(prov.clone()),
+                );
             }
         }
     }
 }
 
 pub fn write_authored(path: &Path, rows: &[AuthoredRow]) -> Result<(), Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("authored_id", false),
         utf8_field("person_id", false),
         utf8_field("entity_type", false),
@@ -198,10 +224,9 @@ pub fn write_authored(path: &Path, rows: &[AuthoredRow]) -> Result<(), Box<dyn E
         utf8_field("target_id", false),
         utf8_field("session_id", false),
         utf8_field("raw_name", false),
-        utf8_field("source_url", false),
-        utf8_field("cache_path", false),
-        utf8_field("confidence", false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
 
     macro_rules! col {
         ($f:expr) => {
@@ -209,21 +234,26 @@ pub fn write_authored(path: &Path, rows: &[AuthoredRow]) -> Result<(), Box<dyn E
         };
     }
 
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(|r| r.authored_id.clone()),
-            col!(|r| r.person_id.clone()),
-            col!(|r| r.entity_type.clone()),
-            col!(|r| r.entity_id.clone()),
-            col!(|r| r.target_type.clone()),
-            col!(|r| r.target_id.clone()),
-            col!(|r| r.session_id.clone()),
-            col!(|r| r.raw_name.clone()),
-            col!(|r| r.source_url.clone()),
-            col!(|r| r.cache_path.clone()),
-            col!(|r| r.confidence.clone()),
-        ],
-    )
+    let mut columns = vec![
+        col!(|r| r.authored_id.clone()),
+        col!(|r| r.person_id.clone()),
+        col!(|r| r.entity_type.clone()),
+        col!(|r| r.entity_id.clone()),
+        col!(|r| r.target_type.clone()),
+        col!(|r| r.target_id.clone()),
+        col!(|r| r.session_id.clone()),
+        col!(|r| r.raw_name.clone()),
+    ];
+    columns.extend(provenance_columns(rows.iter().map(|r| {
+        provenance_of(
+            &r.source_url,
+            &r.cache_path,
+            &r.source_artifact_id,
+            &r.source_content_hash,
+            &r.block_parser_version,
+            &r.extractor_version,
+            r.confidence,
+        )
+    })));
+    write_parquet(path, schema, columns)
 }

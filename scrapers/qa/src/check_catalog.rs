@@ -166,6 +166,22 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "Unresolved person names remain after identity resolution, grouped by source bucket and reason.",
             measures: "Rolls up `normalized/unresolved_persons.parquet` counts per (`source_bucket`, `reason`).",
         },
+        "normalize.provenance_columns" => CheckDoc {
+            what: "A source-derived normalized table lacks the required transform-time provenance schema.",
+            measures: "Checks each catalogued normalized/*.parquet for source_url/cache_path/source_artifact_id/source_content_hash/block_parser_version/extractor_version/confidence.",
+        },
+        "normalize.provenance_complete" => CheckDoc {
+            what: "A source-derived normalized row is missing required transform-time provenance values.",
+            measures: "For rows with URL/cache, requires nonempty artifact id, content hash, and extractor_version.",
+        },
+        "normalize.provenance_artifact_id" => CheckDoc {
+            what: "A normalized row's source_artifact_id is not canonical or is missing from graph source artifacts.",
+            measures: "Compares artifact id to crawl::artifact_id(url, cache_path) and joins to graph/source_artifacts.parquet when present.",
+        },
+        "normalize.confidence_typed" => CheckDoc {
+            what: "A normalized confidence column is not FLOAT64 in [0,1].",
+            measures: "Validates Arrow type and finite numeric range on every source-derived normalized table.",
+        },
         "source.cache_exists" => CheckDoc {
             what: "A staging row references a `cache_path` that is not present on disk under `SCRAPER_CACHE_DIR`.",
             measures: "Joins `cache_path` from votes, questions, and source_artifacts against the local cache root.",

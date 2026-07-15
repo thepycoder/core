@@ -472,6 +472,49 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Warns when oldest checked_at exceeds policy.",
         },
     ],
+    "normalize.provenance_columns": [
+        {
+            "path": "scrapers/normalize/src/provenance.rs",
+            "symbol": "provenance_fields",
+            "note": "Shared transform-time provenance schema for normalized tables.",
+        },
+        {
+            "path": "scrapers/qa/src/provenance.rs",
+            "symbol": "run_normalize_provenance_checks",
+            "note": "Table-level required provenance columns.",
+        },
+    ],
+    "normalize.provenance_complete": [
+        {
+            "path": "scrapers/qa/src/provenance.rs",
+            "symbol": "run_normalize_provenance_checks",
+            "note": "Row-level nonempty artifact/hash/extractor_version.",
+        },
+    ],
+    "normalize.provenance_artifact_id": [
+        {
+            "path": "scrapers/graph/src/build.rs",
+            "symbol": "seed_transform_hashes_from_normalized / apply_transform_provenance",
+            "note": "Graph prefers transform-time hashes; rejects stale cache bytes.",
+        },
+        {
+            "path": "scrapers/qa/src/provenance.rs",
+            "symbol": "run_normalize_provenance_checks",
+            "note": "Canonical artifact id + join to graph source_artifacts.",
+        },
+    ],
+    "normalize.confidence_typed": [
+        {
+            "path": "scrapers/normalize/src/provenance.rs",
+            "symbol": "CONFIDENCE_EXACT / provenance_fields",
+            "note": "FLOAT64 confidence in [0,1].",
+        },
+        {
+            "path": "scrapers/qa/src/provenance.rs",
+            "symbol": "run_normalize_provenance_checks",
+            "note": "Type and range validation.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

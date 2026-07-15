@@ -1,5 +1,6 @@
-use arrow::array::{ArrayRef, Float64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use crate::provenance::{Provenance, provenance_columns, provenance_fields};
+use arrow::array::{ArrayRef, StringArray};
+use arrow::datatypes::Schema;
 use identity::parquet_io::{read_all_rows, utf8_field, write_parquet};
 use identity::resolver::{Resolution, UnresolvedReason};
 use std::collections::HashSet;
@@ -30,6 +31,32 @@ pub struct UnresolvedRow {
     pub confidence: f64,
 }
 
+impl UnresolvedRow {
+    /// Attach transform-time provenance. Prefer this over `..Default` when url/cache are known.
+    pub fn with_provenance(mut self, p: Provenance) -> Self {
+        self.source_url = p.source_url;
+        self.cache_path = p.cache_path;
+        self.source_artifact_id = p.source_artifact_id;
+        self.source_content_hash = p.source_content_hash;
+        self.block_parser_version = p.block_parser_version;
+        self.extractor_version = p.extractor_version;
+        self.confidence = p.confidence;
+        self
+    }
+
+    fn to_provenance(&self) -> Provenance {
+        Provenance {
+            source_url: self.source_url.clone(),
+            cache_path: self.cache_path.clone(),
+            source_artifact_id: self.source_artifact_id.clone(),
+            source_content_hash: self.source_content_hash.clone(),
+            block_parser_version: self.block_parser_version.clone(),
+            extractor_version: self.extractor_version.clone(),
+            confidence: self.confidence,
+        }
+    }
+}
+
 pub fn split_csv(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -58,7 +85,7 @@ pub fn person_id_from(resolution: &Resolution) -> Option<String> {
 }
 
 pub fn write_unresolved_persons(path: &Path, rows: &[UnresolvedRow]) -> Result<(), Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("raw_name", false),
         utf8_field("typo_corrected", false),
         utf8_field("norm_primary", false),
@@ -69,14 +96,9 @@ pub fn write_unresolved_persons(path: &Path, rows: &[UnresolvedRow]) -> Result<(
         utf8_field("context_id", false),
         utf8_field("context_label", false),
         utf8_field("raw_field", false),
-        utf8_field("source_url", false),
-        utf8_field("cache_path", false),
-        utf8_field("source_artifact_id", false),
-        utf8_field("source_content_hash", false),
-        utf8_field("block_parser_version", false),
-        utf8_field("extractor_version", false),
-        Field::new("confidence", DataType::Float64, false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
 
     macro_rules! col {
         ($f:expr) => {
@@ -84,7 +106,7 @@ pub fn write_unresolved_persons(path: &Path, rows: &[UnresolvedRow]) -> Result<(
         };
     }
 
-    let columns = vec![
+    let mut columns = vec![
         col!(|r| r.raw_name.clone()),
         col!(|r| r.typo_corrected.clone()),
         col!(|r| r.norm_primary.clone()),
@@ -95,16 +117,10 @@ pub fn write_unresolved_persons(path: &Path, rows: &[UnresolvedRow]) -> Result<(
         col!(|r| r.context_id.clone()),
         col!(|r| r.context_label.clone()),
         col!(|r| r.raw_field.clone()),
-        col!(|r| r.source_url.clone()),
-        col!(|r| r.cache_path.clone()),
-        col!(|r| r.source_artifact_id.clone()),
-        col!(|r| r.source_content_hash.clone()),
-        col!(|r| r.block_parser_version.clone()),
-        col!(|r| r.extractor_version.clone()),
-        Arc::new(Float64Array::from(
-            rows.iter().map(|r| r.confidence).collect::<Vec<_>>(),
-        )) as ArrayRef,
     ];
+    columns.extend(provenance_columns(
+        rows.iter().map(UnresolvedRow::to_provenance),
+    ));
 
     write_parquet(path, schema, columns)
 }

@@ -676,37 +676,37 @@ Artifact ID must be the canonical hash of URL plus cache path. Content hash must
 
 ### Producer TODO
 
-- [ ] Extract the proven vote-cast provenance pattern into a small shared normalize helper.
-- [ ] Migrate `asked`, `answered`, `answered_by`, `authored`, `holds_role`, `invited`, `interpellated`, `interpellation_responded`, `written_asked`, `addressed_to`, and `oral_written_links`.
-- [ ] Apply the same contract to normalized `utterances`, `answers`, and unresolved-person diagnostics where source-derived.
-- [ ] Decide explicitly whether derived `vote_reconciliation` is outside the source-derived contract.
-- [ ] Replace categorical confidence strings such as `exact`/`parsed` with documented numeric values.
-- [ ] Populate artifact/hash/version fields when an unresolved row is emitted; do not use `..Default` to erase known provenance.
-- [ ] Add source provenance to oral-written links rather than emitting graph edges with empty URL/cache.
-- [ ] Populate `scraped_at` from cache metadata/source manifests when graph source artifacts are built.
+- [x] Extract the proven vote-cast provenance pattern into a small shared normalize helper.
+- [x] Migrate `asked`, `answered`, `answered_by`, `authored`, `holds_role`, `invited`, `interpellated`, `interpellation_responded`, `written_asked`, `addressed_to`, and `oral_written_links`.
+- [x] Apply the same contract to normalized `utterances`, `answers`, and unresolved-person diagnostics where source-derived.
+- [x] Decide explicitly whether derived `vote_reconciliation` is outside the source-derived contract.
+- [x] Replace categorical confidence strings such as `exact`/`parsed` with documented numeric values.
+- [x] Populate artifact/hash/version fields when an unresolved row is emitted; do not use `..Default` to erase known provenance.
+- [x] Add source provenance to oral-written links rather than emitting graph edges with empty URL/cache.
+- [x] Populate `scraped_at` from cache metadata/source manifests when graph source artifacts are built.
 
 ### Graph TODO
 
-- [ ] Read artifact ID/content hash/version from normalized rows.
-- [ ] Validate them against `graph/source_artifacts.parquet`.
-- [ ] Stop recomputing provenance from current cache content for migrated relations.
-- [ ] Reject or warn on transform-time hash mismatch rather than silently relabeling the edge.
-- [ ] Preserve source provenance on every normalized graph edge.
+- [x] Read artifact ID/content hash/version from normalized rows.
+- [x] Validate them against `graph/source_artifacts.parquet`.
+- [x] Stop recomputing provenance from current cache content for migrated relations.
+- [x] Reject or warn on transform-time hash mismatch rather than silently relabeling the edge.
+- [x] Preserve source provenance on every normalized graph edge.
 
 ### QA TODO
 
-- [ ] Add `normalize.provenance_columns` for table-level schema requirements.
-- [ ] Add `normalize.provenance_complete` for row-level required values.
-- [ ] Add `normalize.provenance_artifact_id` for canonical ID and graph-artifact joins.
-- [ ] Add `normalize.confidence_typed` for `FLOAT64` and range `[0,1]`.
-- [ ] Use an explicit normalized-table catalog with each table’s row ID column.
-- [ ] Validate empty table schemas as well as populated tables.
+- [x] Add `normalize.provenance_columns` for table-level schema requirements.
+- [x] Add `normalize.provenance_complete` for row-level required values.
+- [x] Add `normalize.provenance_artifact_id` for canonical ID and graph-artifact joins.
+- [x] Add `normalize.confidence_typed` for `FLOAT64` and range `[0,1]`.
+- [x] Use an explicit normalized-table catalog with each table’s row ID column.
+- [x] Validate empty table schemas as well as populated tables.
 
 ### Documentation TODO
 
-- [ ] Update every normalized schema in `STAGING.md`.
-- [ ] Update provenance implementation status in `DATA_GRAPH.md`.
-- [ ] Synchronize `canvases/data-graph-overview.canvas.tsx` if implementation status or coverage counts change.
+- [x] Update every normalized schema in `STAGING.md`.
+- [x] Update provenance implementation status in `DATA_GRAPH.md`.
+- [x] Synchronize `canvases/data-graph-overview.canvas.tsx` if implementation status or coverage counts change.
 
 ### Tests
 

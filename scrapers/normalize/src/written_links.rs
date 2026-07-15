@@ -1,4 +1,8 @@
 use crate::common::SESSION_ID;
+use crate::provenance::{
+    CONFIDENCE_EXACT, ContentHashCache, normalize_extractor_version, provenance_columns,
+    provenance_fields, provenance_of,
+};
 use identity::parquet_io::{read_all_rows, read_string_column};
 use std::collections::HashMap;
 use std::error::Error;
@@ -19,6 +23,13 @@ pub struct OralWrittenLink {
     pub oral_ref: String,
     pub status: String,
     pub docname: String,
+    pub source_url: String,
+    pub cache_path: String,
+    pub source_artifact_id: String,
+    pub source_content_hash: String,
+    pub block_parser_version: String,
+    pub extractor_version: String,
+    pub confidence: f64,
 }
 
 pub fn build_oral_index(data_dir: &Path) -> Result<HashMap<String, Vec<String>>, Box<dyn Error>> {
@@ -96,11 +107,15 @@ pub fn collect_oral_written_links(data_dir: &Path) -> Result<Vec<OralWrittenLink
         return Ok(Vec::new());
     }
     let oral_index = build_oral_index(data_dir)?;
+    let mut hashes = ContentHashCache::new();
+    let extractor = normalize_extractor_version("oral_written_links");
     let mut links = Vec::new();
     for batch in read_all_rows(&path)? {
         let question_ids = read_string_column(&batch, "question_id")?;
         let docnames = read_string_column(&batch, "docname")?;
         let oral_refs = read_string_column(&batch, "oral_refs")?;
+        let source_urls = read_string_column(&batch, "source_url")?;
+        let cache_paths = read_string_column(&batch, "cache_path")?;
         for i in 0..batch.num_rows() {
             let (canonical, status, oral_ref) =
                 resolve_canonical_question_id(&question_ids[i], &oral_refs[i], &oral_index);
@@ -110,12 +125,25 @@ pub fn collect_oral_written_links(data_dir: &Path) -> Result<Vec<OralWrittenLink
                 OralLinkStatus::Unmatched => "unmatched",
                 OralLinkStatus::None => "none",
             };
+            let prov = hashes.staging(
+                &source_urls[i],
+                &cache_paths[i],
+                &extractor,
+                CONFIDENCE_EXACT,
+            );
             links.push(OralWrittenLink {
                 written_question_id: question_ids[i].clone(),
                 canonical_question_id: canonical,
                 oral_ref: oral_ref.unwrap_or_default(),
                 status: status_str.to_string(),
                 docname: docnames[i].clone(),
+                source_url: prov.source_url,
+                cache_path: prov.cache_path,
+                source_artifact_id: prov.source_artifact_id,
+                source_content_hash: prov.source_content_hash,
+                block_parser_version: prov.block_parser_version,
+                extractor_version: prov.extractor_version,
+                confidence: prov.confidence,
             });
         }
     }
@@ -144,29 +172,39 @@ pub fn write_oral_written_links(
     use identity::parquet_io::{utf8_field, write_parquet};
     use std::sync::Arc;
 
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("written_question_id", false),
         utf8_field("canonical_question_id", false),
         utf8_field("oral_ref", false),
         utf8_field("status", false),
         utf8_field("docname", false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
     macro_rules! col {
         ($f:expr) => {
             Arc::new(StringArray::from(rows.iter().map($f).collect::<Vec<_>>())) as ArrayRef
         };
     }
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(|r| r.written_question_id.clone()),
-            col!(|r| r.canonical_question_id.clone()),
-            col!(|r| r.oral_ref.clone()),
-            col!(|r| r.status.clone()),
-            col!(|r| r.docname.clone()),
-        ],
-    )
+    let mut columns = vec![
+        col!(|r| r.written_question_id.clone()),
+        col!(|r| r.canonical_question_id.clone()),
+        col!(|r| r.oral_ref.clone()),
+        col!(|r| r.status.clone()),
+        col!(|r| r.docname.clone()),
+    ];
+    columns.extend(provenance_columns(rows.iter().map(|r| {
+        provenance_of(
+            &r.source_url,
+            &r.cache_path,
+            &r.source_artifact_id,
+            &r.source_content_hash,
+            &r.block_parser_version,
+            &r.extractor_version,
+            r.confidence,
+        )
+    })));
+    write_parquet(path, schema, columns)
 }
 
 #[cfg(test)]

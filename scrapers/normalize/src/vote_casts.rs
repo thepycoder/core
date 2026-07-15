@@ -1,9 +1,9 @@
 use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
-use arrow::array::{ArrayRef, Float64Array, StringArray, UInt32Array};
+use crate::provenance::{
+    CONFIDENCE_EXACT, ContentHashCache, provenance_columns, provenance_fields, provenance_of,
+};
+use arrow::array::{ArrayRef, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema};
-use crawl::paths::cache_dir;
-use crawl::report_blocks::read_report_html;
-use crawl::{BLOCK_PARSER_VERSION, VOTE_EXTRACTOR_VERSION, artifact_id, content_hash};
 use identity::parquet_io::{
     read_all_rows, read_bool_column, read_string_column, read_u32_column, utf8_field, write_parquet,
 };
@@ -31,6 +31,8 @@ pub struct VoteCastRow {
     pub confidence: f64,
 }
 
+/// Derived aggregate comparing tallies to named member counts.
+/// Outside the source-derived provenance contract — keep url/cache only (no artifact/hash/versions).
 #[derive(Debug, Clone)]
 pub struct VoteReconciliationRow {
     pub result_id: String,
@@ -139,7 +141,7 @@ pub fn normalize_vote_casts(
     }
 
     if members_path.exists() {
-        let mut source_hashes: HashMap<String, String> = HashMap::new();
+        let mut hashes = ContentHashCache::new();
         let mut seen_members: HashSet<(String, String, u32, String)> = HashSet::new();
         let mut member_counts: HashMap<String, HashMap<String, usize>> = HashMap::new();
 
@@ -169,17 +171,8 @@ pub fn normalize_vote_casts(
                     .entry(position.clone())
                     .or_default() += 1;
                 let detail = resolver.resolve_detail(&name, Bucket::Vote);
-                let source_url = result.source_url.clone();
-                let cache_path = result.cache_path.clone();
-                let source_artifact_id = artifact_id(&source_url, &cache_path);
-                let source_content_hash = source_hashes
-                    .entry(cache_path.clone())
-                    .or_insert_with(|| {
-                        read_report_html(&cache_dir().join(&cache_path))
-                            .map(|html| content_hash(&html))
-                            .unwrap_or_default()
-                    })
-                    .clone();
+                let prov =
+                    hashes.vote_report(&result.source_url, &result.cache_path, CONFIDENCE_EXACT);
                 match &detail.resolution {
                     Resolution::Resolved(person_id) => {
                         casts.push(VoteCastRow {
@@ -190,35 +183,32 @@ pub fn normalize_vote_casts(
                             person_id: person_id.clone(),
                             position: position.clone(),
                             raw_name: name.clone(),
-                            source_url: source_url.clone(),
-                            cache_path: cache_path.clone(),
-                            source_artifact_id,
-                            source_content_hash,
-                            block_parser_version: BLOCK_PARSER_VERSION.to_string(),
-                            extractor_version: VOTE_EXTRACTOR_VERSION.to_string(),
-                            confidence: 1.0,
+                            source_url: prov.source_url.clone(),
+                            cache_path: prov.cache_path.clone(),
+                            source_artifact_id: prov.source_artifact_id.clone(),
+                            source_content_hash: prov.source_content_hash.clone(),
+                            block_parser_version: prov.block_parser_version.clone(),
+                            extractor_version: prov.extractor_version.clone(),
+                            confidence: prov.confidence,
                         });
                     }
                     Resolution::Unresolved(reason) => {
-                        unresolved.push(UnresolvedRow {
-                            raw_name: detail.raw_name,
-                            typo_corrected: detail.typo_corrected,
-                            norm_primary: detail.norm_primary,
-                            norm_reordered: detail.norm_reordered,
-                            reason: reason_label(reason).to_string(),
-                            source_bucket: "vote_result_members".to_string(),
-                            role: position.clone(),
-                            context_id: result_id.clone(),
-                            context_label: format!("vote result {result_id}"),
-                            raw_field: name.clone(),
-                            source_url,
-                            cache_path,
-                            source_artifact_id,
-                            source_content_hash,
-                            block_parser_version: BLOCK_PARSER_VERSION.to_string(),
-                            extractor_version: VOTE_EXTRACTOR_VERSION.to_string(),
-                            confidence: 1.0,
-                        });
+                        unresolved.push(
+                            UnresolvedRow {
+                                raw_name: detail.raw_name,
+                                typo_corrected: detail.typo_corrected,
+                                norm_primary: detail.norm_primary,
+                                norm_reordered: detail.norm_reordered,
+                                reason: reason_label(reason).to_string(),
+                                source_bucket: "vote_result_members".to_string(),
+                                role: position.clone(),
+                                context_id: result_id.clone(),
+                                context_label: format!("vote result {result_id}"),
+                                raw_field: name.clone(),
+                                ..UnresolvedRow::default()
+                            }
+                            .with_provenance(prov),
+                        );
                     }
                 }
             }
@@ -277,7 +267,7 @@ pub fn normalize_vote_casts(
 }
 
 pub fn write_vote_casts(path: &Path, rows: &[VoteCastRow]) -> Result<(), Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let mut fields = vec![
         utf8_field("vote_cast_id", false),
         utf8_field("result_id", false),
         Field::new("session_id", DataType::UInt32, false),
@@ -285,14 +275,9 @@ pub fn write_vote_casts(path: &Path, rows: &[VoteCastRow]) -> Result<(), Box<dyn
         utf8_field("person_id", false),
         utf8_field("position", false),
         utf8_field("raw_name", false),
-        utf8_field("source_url", false),
-        utf8_field("cache_path", false),
-        utf8_field("source_artifact_id", false),
-        utf8_field("source_content_hash", false),
-        utf8_field("block_parser_version", false),
-        utf8_field("extractor_version", false),
-        Field::new("confidence", DataType::Float64, false),
-    ]);
+    ];
+    fields.extend(provenance_fields());
+    let schema = Schema::new(fields);
 
     macro_rules! col {
         ($f:expr) => {
@@ -300,32 +285,31 @@ pub fn write_vote_casts(path: &Path, rows: &[VoteCastRow]) -> Result<(), Box<dyn
         };
     }
 
-    write_parquet(
-        path,
-        schema,
-        vec![
-            col!(|r| r.vote_cast_id.clone()),
-            col!(|r| r.result_id.clone()),
-            Arc::new(UInt32Array::from(
-                rows.iter().map(|r| r.session_id).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(UInt32Array::from(
-                rows.iter().map(|r| r.meeting_id).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            col!(|r| r.person_id.clone()),
-            col!(|r| r.position.clone()),
-            col!(|r| r.raw_name.clone()),
-            col!(|r| r.source_url.clone()),
-            col!(|r| r.cache_path.clone()),
-            col!(|r| r.source_artifact_id.clone()),
-            col!(|r| r.source_content_hash.clone()),
-            col!(|r| r.block_parser_version.clone()),
-            col!(|r| r.extractor_version.clone()),
-            Arc::new(Float64Array::from(
-                rows.iter().map(|r| r.confidence).collect::<Vec<_>>(),
-            )) as ArrayRef,
-        ],
-    )
+    let mut columns = vec![
+        col!(|r| r.vote_cast_id.clone()),
+        col!(|r| r.result_id.clone()),
+        Arc::new(UInt32Array::from(
+            rows.iter().map(|r| r.session_id).collect::<Vec<_>>(),
+        )) as ArrayRef,
+        Arc::new(UInt32Array::from(
+            rows.iter().map(|r| r.meeting_id).collect::<Vec<_>>(),
+        )) as ArrayRef,
+        col!(|r| r.person_id.clone()),
+        col!(|r| r.position.clone()),
+        col!(|r| r.raw_name.clone()),
+    ];
+    columns.extend(provenance_columns(rows.iter().map(|r| {
+        provenance_of(
+            &r.source_url,
+            &r.cache_path,
+            &r.source_artifact_id,
+            &r.source_content_hash,
+            &r.block_parser_version,
+            &r.extractor_version,
+            r.confidence,
+        )
+    })));
+    write_parquet(path, schema, columns)
 }
 
 pub fn write_vote_reconciliation(

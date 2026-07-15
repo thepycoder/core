@@ -103,11 +103,52 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 
 **source_spans.parquet** (canonical provenance): `span_id`, `artifact_id`, `source_content_hash`, `session_id` (UINT32), `meeting_id` (UINT32), `entity_type`, `entity_id`, `span_role`, `block_start`/`block_end` (UINT32, half-open), `coverage_kind` (`extraction`|`scope`), `field_names`, `confidence` (FLOAT64, 0–1), `extractor`, `block_parser_version`, `extractor_version`, `source_url`, `cache_path`, `validation_status` (`valid`|`unresolved`), `unresolved_reason` (empty for valid spans; otherwise `wrong_artifact`, `stale_source_content`, `stale_block_parser`, `missing_entity_id`, `invalid_half_open_range`, or `out_of_bounds`). Invalid candidates are retained as explicit unresolved rows.
 
-**normalized/vote_casts.parquet:** `vote_cast_id`, `result_id`, `session_id` (UINT32), `meeting_id` (UINT32), `person_id`, `position`, `raw_name`, `source_url`, `cache_path`, `source_artifact_id`, `source_content_hash`, `block_parser_version`, `extractor_version`, `confidence` (FLOAT64, 0–1)
+**normalized/vote_casts.parquet:** `vote_cast_id`, `result_id`, `session_id` (UINT32), `meeting_id` (UINT32), `person_id`, `position`, `raw_name`, plus the [canonical provenance contract](#normalized-provenance) below.
 
-**normalized/vote_reconciliation.parquet:** `result_id`, `session_id`, `meeting_id`, `yes`, `no`, `abstain`, `members_yes_count`, `members_no_count`, `members_abstain_count`, `reconciled`, `source_url`, `cache_path`
+**normalized/vote_reconciliation.parquet:** `result_id`, `session_id`, `meeting_id`, `yes`, `no`, `abstain`, `members_yes_count`, `members_no_count`, `members_abstain_count`, `reconciled`, `source_url`, `cache_path` — derived tally cross-check; intentionally outside the full provenance contract (no artifact/hash/version/confidence).
 
-**normalized/unresolved_persons.parquet:** unresolved identity fields plus `source_url`, `cache_path`, `source_artifact_id`, `source_content_hash`, `block_parser_version`, `extractor_version`, and numeric `confidence`; vote-member rows carry the same canonical artifact provenance as their resolved casts.
+**normalized/unresolved_persons.parquet:** unresolved identity fields plus the canonical provenance contract; vote-member rows carry the same artifact provenance as their resolved casts.
+
+**normalized/asked.parquet:** `asked_id`, `person_id`, `question_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
+
+**normalized/answered.parquet:** `answered_id`, `entity_type`, `entity_id`, `question_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
+
+**normalized/authored.parquet:** `authored_id`, `person_id`, `entity_type`, `entity_id`, `target_type`, `target_id`, `raw_name`, plus provenance.
+
+**normalized/holds_role.parquet:** `holds_role_id`, `person_id`, `role`, `target_type`, `target_id`, `raw_name`, plus provenance.
+
+**normalized/invited.parquet:** `invited_id`, `entity_type`, `entity_id`, `hearing_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
+
+**normalized/interpellated.parquet:** `interpellated_id`, `person_id`, `interpellation_id`, `raw_name`, plus provenance.
+
+**normalized/interpellation_responded.parquet:** `responded_id`, `entity_type`, `entity_id`, `interpellation_id`, `raw_name`, plus provenance.
+
+**normalized/written_asked.parquet:** `asked_id`, `person_id`, `question_id`, `raw_name`, plus provenance.
+
+**normalized/addressed_to.parquet:** `addressed_id`, `question_id`, `entity_type`, `entity_id`, `route_id`, `deptnum`, `questnum`, `statusq`, `dept_title_nl`, `dept_title_fr`, `properties_json`, plus provenance.
+
+**normalized/answers.parquet:** `answer_id`, `question_id`, `text_nl`, `text_fr`, plus provenance.
+
+**normalized/answered_by.parquet:** `answered_by_id`, `entity_type`, `entity_id`, `answer_id`, `raw_name`, plus provenance.
+
+**normalized/oral_written_links.parquet:** `written_question_id`, `canonical_question_id`, `oral_ref`, `status`, `docname`, plus provenance.
+
+**normalized/utterances.parquet:** staging utterance fields with resolved speaker ids plus provenance (meeting-report `block_parser_version` / report extractor when applicable).
+
+<a id="normalized-provenance"></a>
+**Canonical normalized provenance** (every source-derived table above except `vote_reconciliation`):
+
+| Column | Type | Notes |
+|--------|------|--------|
+| `source_url` | Utf8 | Source page URL |
+| `cache_path` | Utf8 | Relative path under `SCRAPER_CACHE_DIR` |
+| `source_artifact_id` | Utf8 | `crawl::artifact_id(source_url, cache_path)` |
+| `source_content_hash` | Utf8 | Hash of bytes used at **normalize** time (not recomputed later as canonical) |
+| `block_parser_version` | Utf8 | Report-derived rows; empty when not applicable |
+| `extractor_version` | Utf8 | e.g. `normalize_asked_v1` / vote extractor stamp |
+| `confidence` | FLOAT64 | In `[0,1]`; `1.0` exact, `0.8` parsed, `0.5` heuristic |
+
+Graph `source_artifacts.parquet` prefers these transform-time hashes; a mismatch vs current cache bytes is rejected rather than silently overwritten. `scraped_at` is filled from cache `.meta.json` / source manifests at graph build.
 
 **graph/nodes.parquet:** `node_type`, `node_id`, `label`, `source_artifact_id`, `source_url`, `cache_path`
 
