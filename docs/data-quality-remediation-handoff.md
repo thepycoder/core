@@ -203,20 +203,20 @@ Meeting 22 contains a political question about President Trump's oath. It is not
 
 ### Documentation TODO
 
-- [ ] Create `docs/meeting-report-corpus-policy.md` from this section.
-- [ ] Document that raw reports and report blocks remain canonical evidence even when text is intentionally not promoted to Utterance.
-- [ ] Document the difference between whole-report classification and isolated procedural agenda items.
-- [ ] Add the document to `README.md` near the meeting-report pipeline description.
+- [x] Create `docs/meeting-report-corpus-policy.md` from this section.
+- [x] Document that raw reports and report blocks remain canonical evidence even when text is intentionally not promoted to Utterance.
+- [x] Document the difference between whole-report classification and isolated procedural agenda items.
+- [x] Add the document to `README.md` near the meeting-report pipeline description.
 
 ### QA TODO
 
-- [ ] Add one central, explicit corpus-classification catalog rather than hardcoding `meeting_id <= 4` in the coverage calculation.
-- [ ] Catalog at least `constitutive`, `constitutive_administrative`, `mixed`, `session_opening`, and `vote_dominated`.
-- [ ] Downgrade expected low speech coverage for meetings 1-4 to `info` with a policy reference.
-- [ ] Do not suppress meeting 24.
-- [ ] Keep vote, agenda, source-span, and cache checks active for every classified report.
-- [ ] Add a QA test proving that a mixed report with one oath heading still receives normal speech-coverage evaluation.
-- [ ] Add a negative fixture based on meeting 22 so ordinary political use of the word “oath” does not trigger corpus classification.
+- [x] Add one central, explicit corpus-classification catalog rather than hardcoding `meeting_id <= 4` in the coverage calculation.
+- [x] Catalog at least `constitutive`, `constitutive_administrative`, `mixed`, `session_opening`, and `vote_dominated`.
+- [x] Downgrade expected low speech coverage for meetings 1-4 to `info` with a policy reference.
+- [x] Do not suppress meeting 24.
+- [x] Keep vote, agenda, source-span, and cache checks active for every classified report.
+- [x] Add a QA test proving that a mixed report with one oath heading still receives normal speech-coverage evaluation.
+- [x] Add a negative fixture based on meeting 22 so ordinary political use of the word “oath” does not trigger corpus classification.
 
 ### Acceptance criteria
 
@@ -248,33 +248,33 @@ The timeline assigns sequence-based IDs in `scrapers/crawl/src/agenda_timeline.r
 ### Parser/normalization TODO
 
 - [ ] Add a minimal fixture from plenary 69 containing the bilingual/grouped interpellation shape.
-- [ ] Trace where the same logical interpellation receives different sequence positions between timeline utterances and proceeding entities.
-- [ ] Pair bilingual headings by site-native `...I` reference before assigning sequence IDs.
-- [ ] Assign one canonical interpellation ID per logical site reference.
-- [ ] Ensure utterances and `interpellations.parquet` receive the same ID from the same `AgendaItem` instance.
-- [ ] Do not repair this only in graph loading.
-- [ ] Remove or narrow the graph’s single-candidate fallback after canonical data is regenerated.
+- [x] Trace where the same logical interpellation receives different sequence positions between timeline utterances and proceeding entities.
+- [x] Pair bilingual headings by site-native `...I` reference before assigning sequence IDs.
+- [x] Assign one canonical interpellation ID per logical site reference.
+- [x] Ensure utterances and `interpellations.parquet` receive the same ID from the same `AgendaItem` instance.
+- [x] Do not repair this only in graph loading.
+- [x] Remove or narrow the graph’s single-candidate fallback after canonical data is regenerated.
 - [ ] Reparse plenary reports, normalize utterances, and rebuild the graph.
 
 ### QA TODO
 
-- [ ] Add `fk.utterance_interpellation` in `scrapers/qa/src/agenda_checks.rs`.
-- [ ] Require each interpellation utterance to resolve to exactly one interpellation in the same session, meeting kind, and meeting.
-- [ ] Accept direct canonical ID as the normal path.
-- [ ] Use site-native refs only to diagnose the expected target, not to silently pass a wrong `item_id`.
+- [x] Add `fk.utterance_interpellation` in `scrapers/qa/src/agenda_checks.rs`.
+- [x] Require each interpellation utterance to resolve to exactly one interpellation in the same session, meeting kind, and meeting.
+- [x] Accept direct canonical ID as the normal path.
+- [x] Use site-native refs only to diagnose the expected target, not to silently pass a wrong `item_id`.
 - [ ] Add `utterance.interpellation_item_id_canonical` if a separate warning is useful during migration.
-- [ ] Group details by distinct bad reference rather than emitting 287 repetitive turn-level rows.
-- [ ] Include sample utterance ID, actual ID, canonical ID, site ref, source block range, URL, and cache path.
-- [ ] Use `status=fail` for missing/ambiguous targets and `status=warn` for uniquely resolvable but noncanonical IDs.
+- [x] Group details by distinct bad reference rather than emitting 287 repetitive turn-level rows.
+- [x] Include sample utterance ID, actual ID, canonical ID, site ref, source block range, URL, and cache path.
+- [x] Use `status=fail` for missing/ambiguous targets and `status=warn` for uniquely resolvable but noncanonical IDs.
 
 ### Tests
 
-- Direct canonical ID passes.
-- Wrong ID plus one matching site ref produces the canonical-ID finding.
-- No matching site ref produces an FK failure.
-- Two candidates for one site ref produce an ambiguity failure.
-- Candidate in another meeting or meeting kind does not satisfy the FK.
-- Repeated utterances with one bad reference produce one grouped detail.
+- [ ] Direct canonical ID passes.
+- [ ] Wrong ID plus one matching site ref produces the canonical-ID finding.
+- [ ] No matching site ref produces an FK failure.
+- [ ] Two candidates for one site ref produce an ambiguity failure.
+- [ ] Candidate in another meeting or meeting kind does not satisfy the FK.
+- [ ] Repeated utterances with one bad reference produce one grouped detail.
 
 ### Acceptance criteria
 
@@ -363,23 +363,23 @@ The parser uses fixed byte/character cuts at `scrapers/lobby/src/main.rs:182-205
 
 ### Parser TODO
 
-- [ ] Add source fixtures copied from the PDF layout for Agoria, Air Cargo Belgium, A&T Efficiency, and at least one accented contact.
-- [ ] Reference `cache/lobby/lobbyregister.pdf` and the source row in fixture comments.
-- [ ] Replace fragile byte cuts with character-position or whitespace-gap column detection.
-- [ ] Detect the header’s actual column boundaries where possible rather than assuming one global byte layout.
-- [ ] Preserve wrapped contacts, interests, and URLs in their originating column.
-- [ ] Treat a nonempty first column as a new organisation only when the line aligns with the organisation column.
-- [ ] Normalize one or more wrapped URL lines into the URL field.
-- [ ] Remove URL tokens from contact/interest output only when they were positively classified as URL-column content.
-- [ ] Do not use longest-field merging across duplicate organisations unless all fields come from the same logical source entry.
-- [ ] Reparse `lobby.parquet` and manually compare the fixture organisations to the PDF text.
+- [x] Add source fixtures copied from the PDF layout for Agoria, Air Cargo Belgium, A&T Efficiency, and at least one accented contact.
+- [x] Reference `cache/lobby/lobbyregister.pdf` and the source row in fixture comments.
+- [x] Replace fragile byte cuts with character-position or whitespace-gap column detection.
+- [x] Detect the header’s actual column boundaries where possible rather than assuming one global byte layout.
+- [x] Preserve wrapped contacts, interests, and URLs in their originating column.
+- [x] Treat a nonempty first column as a new organisation only when the line aligns with the organisation column.
+- [x] Normalize one or more wrapped URL lines into the URL field.
+- [x] Remove URL tokens from contact/interest output only when they were positively classified as URL-column content.
+- [x] Do not use longest-field merging across duplicate organisations unless all fields come from the same logical source entry.
+- [x] Reparse `lobby.parquet` and manually compare the fixture organisations to the PDF text.
 
 ### QA TODO
 
-- [ ] Add `lobby.url_placement` for URL/domain tokens outside the URL column or prose/multiple URLs inside the URL column.
-- [ ] Add `lobby.column_bleed` for truncated URL fragments in contact/interests that match a prefix of the canonical URL.
-- [ ] Include organisation, offending field/token, source URL, and PDF cache path.
-- [ ] Add source-side parser diagnostics if broader linguistic bleed cannot be detected from final Parquet.
+- [x] Add `lobby.url_placement` for URL/domain tokens outside the URL column or prose/multiple URLs inside the URL column.
+- [x] Add `lobby.column_bleed` for truncated URL fragments in contact/interests that match a prefix of the canonical URL.
+- [x] Include organisation, offending field/token, source URL, and PDF cache path.
+- [x] Add source-side parser diagnostics if broader linguistic bleed cannot be detected from final Parquet.
 
 ### Acceptance criteria
 

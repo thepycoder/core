@@ -479,10 +479,8 @@ fn merge_interpellation_drafts(existing: &mut InterpellationDraft, incoming: &In
     if existing.internal_ids.is_empty() {
         existing.internal_ids = incoming.internal_ids.clone();
     }
-    // Keep the lowest-seq agenda item_id so utterance PART_OF matches graph nodes.
-    if incoming.interpellation_id < existing.interpellation_id {
-        existing.interpellation_id = incoming.interpellation_id.clone();
-    }
+    // Keep the first agenda occurrence as the canonical ID. The timeline has
+    // already paired later bilingual occurrences to this ID when possible.
 }
 
 fn clean_heading(text: &str) -> String {
@@ -554,6 +552,41 @@ mod tests {
         assert!(parsed.respondents[0].contains("Bart De Wever"));
         assert!(parsed.topics[0].contains("huisvestingstoelage"));
         assert_eq!(parsed.internal_ids[0], "56000070I");
+    }
+
+    #[test]
+    fn merged_bilingual_interpellation_keeps_first_agenda_id() {
+        let item = |item_id: &str, title: &str| AgendaItem {
+            agenda_id: "01".to_string(),
+            item_kind: ItemKind::Interpellation,
+            start_block: 1,
+            end_block: 2,
+            title_nl: title.to_string(),
+            title_fr: String::new(),
+            dossier_id: String::new(),
+            document_id: String::new(),
+            internal_ids: vec!["56000027I".to_string()],
+            item_id: item_id.to_string(),
+            source_section: "interpellaties".to_string(),
+            title_blocks: vec![1],
+        };
+        let (_, rows) = extract_proceedings_from_agenda(
+            &[
+                item(
+                    "56_plenary_69_9",
+                    "- A aan M over \"Onderwerp\" (56000027I)",
+                ),
+                item("56_plenary_69_17", "- A à M sur \"Sujet\" (56000027I)"),
+            ],
+            MeetingKind::Plenary,
+            56,
+            69,
+            "url",
+            "cache",
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].interpellation_id, "56_plenary_69_9");
     }
 
     #[test]

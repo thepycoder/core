@@ -4,6 +4,7 @@ pub mod paths;
 pub mod utils;
 
 pub mod agenda_timeline;
+pub mod corpus_policy;
 pub mod answer_io;
 pub mod artifact_id;
 pub mod meeting_parse;
@@ -34,6 +35,10 @@ pub mod vote_inventory;
 pub use agenda_timeline::{
     AgendaItem, ItemKind, MeetingKind, count_agenda_questions_from_cache, extract_agenda_number,
     looks_like_fr_heading,
+};
+pub use corpus_policy::{
+    CorpusClass, CorpusClassification, POLICY_DOC, classify_meeting,
+    is_procedural_credentials_heading, whole_report_constitutive_from_blocks,
 };
 pub use answer_io::{AnswerDraft, write_answers_parquet};
 pub use artifact_id::{

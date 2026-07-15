@@ -287,6 +287,11 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
     ],
     "utterance.speech_char_coverage": [
         {
+            "path": "scrapers/crawl/src/corpus_policy.rs",
+            "symbol": "classify_meeting",
+            "note": "Explicit corpus classes; constitutive meetings downgrade coverage to info.",
+        },
+        {
             "path": "scrapers/crawl/src/agenda_timeline.rs",
             "symbol": "build_agenda_timeline",
             "note": "Section boundaries control what text is extracted.",
@@ -345,6 +350,47 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "path": "scrapers/qa/src/remunerations.rs",
             "symbol": "duplicate_mandate_detail",
             "note": "Groups duplicate person/year/mandate/institute rows.",
+        },
+    ],
+    "fk.utterance_interpellation": [
+        {
+            "path": "scrapers/normalize/src/utterances.rs",
+            "symbol": "load_interpellation_targets",
+            "note": "Canonicalizes uniquely site-reference-resolvable interpellation utterance IDs before normalized output.",
+        },
+        {
+            "path": "scrapers/qa/src/agenda_checks.rs",
+            "symbol": "check_utterance_interpellation_fk",
+            "note": "Groups missing, ambiguous, and uniquely noncanonical interpellation targets by bad reference.",
+        },
+        {
+            "path": "scrapers/graph/src/build.rs",
+            "symbol": "resolve_proceeding_target_id",
+            "note": "Does not use same-meeting single-candidate guesses for Interpellation nodes.",
+        },
+    ],
+    "lobby.url_placement": [
+        {
+            "path": "scrapers/lobby/src/lib.rs",
+            "symbol": "extract_lobby_from_layout",
+            "note": "Character-position column slicing for pdftotext -layout rows.",
+        },
+        {
+            "path": "scrapers/qa/src/lobby.rs",
+            "symbol": "check_url_placement",
+            "note": "Flags URL tokens outside the url column.",
+        },
+    ],
+    "lobby.column_bleed": [
+        {
+            "path": "scrapers/lobby/src/lib.rs",
+            "symbol": "slice_columns",
+            "note": "Column boundaries for organisation/contact/interest/url fields.",
+        },
+        {
+            "path": "scrapers/qa/src/lobby.rs",
+            "symbol": "check_column_bleed",
+            "note": "Detects truncated URL fragments in wrong columns.",
         },
     ],
     "schema.unique_keys": [

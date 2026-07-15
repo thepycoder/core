@@ -134,7 +134,7 @@ CHECK_DOCS: dict[str, CheckDoc] = {
     ),
     "utterance.speech_char_coverage": CheckDoc(
         what="Persisted meeting text volume is far below the whole cached report.",
-        measures="Per meeting: ratio of saved word count vs whole-document word count from cached HTML.",
+        measures="Per meeting: ratio of saved word count vs whole-document word count from cached HTML. Constitutive whole-report classes emit info with policy reference; mixed reports stay on warn.",
     ),
     "agenda.entity_count_vs_parquet": CheckDoc(
         what="Cached meeting HTML has question/agenda headings but no matching question rows were written.",
@@ -155,6 +155,18 @@ CHECK_DOCS: dict[str, CheckDoc] = {
     "remuneration.duplicate_mandate": CheckDoc(
         what="The same person/year/mandate/institute appears on multiple remuneration rows.",
         measures="Groups remunerations.parquet by person, year, mandate, and institute; emits one warning per group listing all amount ranges.",
+    ),
+    "fk.utterance_interpellation": CheckDoc(
+        what="An interpellation utterance does not resolve to exactly one canonical interpellation in its session, kind, and meeting.",
+        measures="Checks direct canonical item_id first, then uses site-native question_ids only to diagnose a unique noncanonical target or missing/ambiguous target.",
+    ),
+    "lobby.url_placement": CheckDoc(
+        what="A lobby register URL or domain token appears outside the url column.",
+        measures="Reads lobby.parquet and flags URL tokens in contacts or interests.",
+    ),
+    "lobby.column_bleed": CheckDoc(
+        what="A truncated URL fragment in contacts or interests matches the canonical url field.",
+        measures="Detects partial domain bleed from fixed-column PDF parsing.",
     ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",

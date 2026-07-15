@@ -124,7 +124,7 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "utterance.speech_char_coverage" => CheckDoc {
             what: "Persisted meeting text volume is far below the whole cached report — signals dropped content or parser regressions.",
-            measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind).",
+            measures: "Per meeting: ratio of covered word count (union of extraction `source_spans` block `word_count` from `report_blocks`, with legacy saved-column fallback) vs whole-document word count from cached HTML. Warns on kind p5 outlier (≥10 meetings per kind). Constitutive whole-report classes (`corpus_policy.rs`) emit `info` with policy reference instead of `warn` and are excluded from the p5 pool. Mixed reports (e.g. plenary 24) remain fully evaluated.",
         },
         "utterance.roundtrip_discussion" => CheckDoc {
             what: "Normalized utterances exist for a question but its staging `discussion` JSON is empty.",
@@ -182,6 +182,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A commission question has a nonempty staging questioner field but no resolved ASKED relation.",
             measures: "Joins commission question rows to normalized `asked.parquet` by canonical question id; warns separately when the staging questioner field is empty.",
         },
+        "fk.utterance_interpellation" => CheckDoc {
+            what: "An interpellation utterance does not resolve to exactly one canonical interpellation in its session, kind, and meeting.",
+            measures: "Checks direct canonical item_id first, then uses site-native question_ids only to diagnose a unique noncanonical target or missing/ambiguous target.",
+        },
         "written.published_answer_text_present" => CheckDoc {
             what: "A published QRVA answer has neither a Dutch nor French answer body.",
             measures: "Reads written answers staging and flags `source_kind=qrva`, written answers in publicated/published states where both language text fields are blank.",
@@ -197,6 +201,14 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         "remuneration.duplicate_mandate" => CheckDoc {
             what: "The same person/year/mandate/institute appears on multiple remuneration rows.",
             measures: "Groups `remunerations.parquet` by person, year, mandate, and institute; emits one warning per group listing all amount ranges.",
+        },
+        "lobby.url_placement" => CheckDoc {
+            what: "A lobby register URL or domain token appears outside the url column.",
+            measures: "Reads `lobby.parquet` and flags `www.`/`http` tokens in contacts or interests, or excessive distinct URL tokens in url.",
+        },
+        "lobby.column_bleed" => CheckDoc {
+            what: "A truncated URL fragment in contacts or interests matches a prefix of the canonical url field.",
+            measures: "Detects partial domain tokens in non-url columns that align with the row's canonical url value.",
         },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",

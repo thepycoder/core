@@ -1,9 +1,11 @@
 use crate::common::{SESSION_ID, UnresolvedRow, dedupe_unresolved, reason_label};
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::Schema;
+use crawl::utils::{ensure_question_id, normalize_site_ref};
 use identity::actor_resolver::{ActorResolution, ActorResolver};
 use identity::parquet_io::{read_all_rows, read_string_column, utf8_field, write_parquet};
 use identity::resolver::Bucket;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
 use std::sync::Arc;
@@ -58,6 +60,8 @@ pub fn normalize_utterances(
 ) -> Result<UtteranceOutput, Box<dyn Error>> {
     let mut rows = Vec::new();
     let mut unresolved = Vec::new();
+    let (interpellation_targets, canonical_interpellation_ids) =
+        load_interpellation_targets(data_dir)?;
 
     for (meeting_kind, rel_path) in [
         (
@@ -139,6 +143,37 @@ pub fn normalize_utterances(
                         }
                     };
 
+                let mut item_id = item_ids[i].clone();
+                if item_kinds[i] == "interpellation" {
+                    let actual_id = ensure_question_id(&session_ids[i], meeting_kind, &item_id);
+                    let scope = (
+                        session_ids[i].clone(),
+                        meeting_kind.to_string(),
+                        meeting_ids[i].clone(),
+                    );
+                    if !canonical_interpellation_ids.contains(&(
+                        scope.0.clone(),
+                        scope.1.clone(),
+                        actual_id,
+                    )) {
+                        let mut candidates = HashSet::new();
+                        for site_ref in question_ids[i].split(',') {
+                            let site_ref = normalize_site_ref(site_ref);
+                            if let Some(targets) = interpellation_targets.get(&(
+                                scope.0.clone(),
+                                scope.1.clone(),
+                                scope.2.clone(),
+                                site_ref,
+                            )) {
+                                candidates.extend(targets.iter().cloned());
+                            }
+                        }
+                        if candidates.len() == 1 {
+                            item_id = candidates.into_iter().next().unwrap_or(item_id);
+                        }
+                    }
+                }
+
                 rows.push(UtteranceRow {
                     utterance_id: utterance_ids[i].clone(),
                     session_id: session_ids[i].clone(),
@@ -148,7 +183,7 @@ pub fn normalize_utterances(
                     turn_number: turn_numbers[i].clone(),
                     seq: seqs[i].clone(),
                     item_kind: item_kinds[i].clone(),
-                    item_id: item_ids[i].clone(),
+                    item_id,
                     question_ids: question_ids[i].clone(),
                     dossier_id: dossier_ids[i].clone(),
                     document_id: document_ids[i].clone(),
@@ -181,6 +216,59 @@ pub fn normalize_utterances(
     });
     dedupe_unresolved(&mut unresolved);
     Ok(UtteranceOutput { rows, unresolved })
+}
+
+fn load_interpellation_targets(
+    data_dir: &Path,
+) -> Result<
+    (
+        HashMap<(String, String, String, String), HashSet<String>>,
+        HashSet<(String, String, String)>,
+    ),
+    Box<dyn Error>,
+> {
+    let mut targets = HashMap::new();
+    let mut canonical_ids = HashSet::new();
+    for (meeting_kind, rel_path) in [
+        (
+            "plenary",
+            format!("sessions/{SESSION_ID}/plenary/interpellations.parquet"),
+        ),
+        (
+            "commission",
+            format!("sessions/{SESSION_ID}/commission/interpellations.parquet"),
+        ),
+    ] {
+        let path = data_dir.join(rel_path);
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let ids = read_string_column(&batch, "interpellation_id")?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let internal_ids = read_string_column(&batch, "internal_ids")?;
+            for i in 0..batch.num_rows() {
+                let canonical_id = ensure_question_id(&session_ids[i], meeting_kind, &ids[i]);
+                let scope = (
+                    session_ids[i].clone(),
+                    meeting_kind.to_string(),
+                    meeting_ids[i].clone(),
+                );
+                canonical_ids.insert((scope.0.clone(), scope.1.clone(), canonical_id.clone()));
+                for site_ref in internal_ids[i].split(',') {
+                    let site_ref = normalize_site_ref(site_ref);
+                    if !site_ref.is_empty() {
+                        targets
+                            .entry((scope.0.clone(), scope.1.clone(), scope.2.clone(), site_ref))
+                            .or_insert_with(HashSet::new)
+                            .insert(canonical_id.clone());
+                    }
+                }
+            }
+        }
+    }
+    Ok((targets, canonical_ids))
 }
 
 pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dyn Error>> {

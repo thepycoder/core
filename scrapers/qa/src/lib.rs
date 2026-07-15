@@ -6,6 +6,7 @@ pub mod coverage_baseline;
 pub mod graph;
 pub mod infrastructure;
 pub mod io;
+pub mod lobby;
 pub mod remaining;
 pub mod remunerations;
 pub mod schema;
@@ -80,6 +81,7 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(speech_out.details);
     details.extend(written::run_written_checks(&data_root)?);
     details.extend(remunerations::run_remuneration_checks(&data_root)?);
+    details.extend(lobby::run_lobby_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
 
@@ -288,10 +290,13 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "agenda.interpellation_not_extracted",
         "question.grouped_internal_ids_complete",
         "question.questioner_resolved",
+        "fk.utterance_interpellation",
         "written.published_answer_text_present",
         "remuneration.amount_valid",
         "remuneration.amount_scale",
         "remuneration.duplicate_mandate",
+        "lobby.url_placement",
+        "lobby.column_bleed",
         "dossier.ref_exists",
         "meeting.chair_source_vs_parquet",
         "meeting.date_source_vs_parquet",
