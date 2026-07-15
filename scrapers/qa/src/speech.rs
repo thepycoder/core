@@ -437,13 +437,12 @@ fn check_speech_char_coverage(
         let policy_expected = classification
             .map(|c| format!("corpus_class={} policy={POLICY_DOC}", c.class.as_str()))
             .unwrap_or_default();
-        let (severity, status) = if classification
-            .is_some_and(|c| c.class.suppresses_coverage_warning())
-        {
-            ("info", "info")
-        } else {
-            ("warn", "warn")
-        };
+        let (severity, status) =
+            if classification.is_some_and(|c| c.class.suppresses_coverage_warning()) {
+                ("info", "info")
+            } else {
+                ("warn", "warn")
+            };
         let policy_suffix = classification
             .map(|c| format!("; corpus {} ({})", c.class.as_str(), c.note))
             .unwrap_or_default();

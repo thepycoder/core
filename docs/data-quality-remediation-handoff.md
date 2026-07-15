@@ -41,7 +41,7 @@ The counts below were rechecked against the reparsed data on 2026-07-14. `data/q
 | Remunerations above EUR 1,000,000 | 1,946 / 6,977 | Fix decimal parsing and add QA |
 | Remuneration logical duplicate groups | 176 | Preserve evidence; add QA |
 | Lobby interests containing URL fragments | 212 / 299 | Fix PDF parsing and add QA |
-| Chair/subchair overlaps | 51 names across 25 / 35 commissions | Fix role parsing and add QA |
+| Chair/subchair overlaps | 0 / 35 commissions | Verified fixed by reparse |
 | Graph artifacts with blank `scraped_at` | 15,050 / 15,050 | Fix provenance |
 | Current commission source gaps | 8 | Plan source completeness work |
 
@@ -409,21 +409,21 @@ Current impact is 51 overlapping names across 25 of 35 commissions.
 
 ### Parser TODO
 
-- [ ] Normalize the first bold label to a canonical role token.
-- [ ] Match complete role labels, not substrings.
-- [ ] Parse `Voorzitter(s)` and `Ondervoorzitters` independently.
-- [ ] Add fixtures for Justice and one commission without subchairs.
-- [ ] Reference the source detail page in test comments.
-- [ ] Re-scrape or reparse `commissions.parquet`.
-- [ ] Rebuild identity memberships and the graph.
+- [x] Normalize the first bold label to a canonical role token.
+- [x] Match complete role labels, not substrings.
+- [x] Parse `Voorzitter(s)` and `Ondervoorzitters` independently.
+- [x] Add fixtures for Justice and one commission without subchairs.
+- [x] Reference the source detail page in test comments.
+- [x] Re-scrape or reparse `commissions.parquet`.
+- [x] Rebuild identity memberships and the graph.
 
 ### QA TODO
 
-- [ ] Add `commission.chair_subchair_overlap`.
-- [ ] Split, trim, and case-fold both lists, then emit one detail per overlapping person.
-- [ ] Use `status=fail`; these roles are semantically disjoint in the source layout.
-- [ ] Add `commissions.parquet` to schema/table-loaded QA.
-- [ ] Preserve accents when comparing names.
+- [x] Add `commission.chair_subchair_overlap`.
+- [x] Split, trim, and case-fold both lists, then emit one detail per overlapping person.
+- [x] Use `status=fail`; these roles are semantically disjoint in the source layout.
+- [x] Add `commissions.parquet` to schema/table-loaded QA.
+- [x] Preserve accents when comparing names.
 
 ### Acceptance criteria
 

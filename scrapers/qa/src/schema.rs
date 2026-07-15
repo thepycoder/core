@@ -89,6 +89,17 @@ fn staging_tables() -> Vec<TableSpec> {
             required_columns: vec!["name".into()],
         },
         TableSpec {
+            rel_path: "commissions.parquet".into(),
+            table_name: "commissions".into(),
+            id_columns: vec!["name".into()],
+            required_columns: vec![
+                "name".into(),
+                "type".into(),
+                "chairs".into(),
+                "subchairs".into(),
+            ],
+        },
+        TableSpec {
             rel_path: "remunerations.parquet".into(),
             table_name: "remunerations".into(),
             id_columns: vec![

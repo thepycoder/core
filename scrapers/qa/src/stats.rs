@@ -119,7 +119,10 @@ fn coverage_distribution_stats(snapshots: &[MeetingCoverageSnapshot]) -> Option<
             let class = corpus_policy::classify_meeting(session_id, kind, meeting_id)?;
             Some(format!(
                 "- {} {}: `{}` — {}",
-                row.meeting_kind, row.meeting_id, class.class.as_str(), class.note
+                row.meeting_kind,
+                row.meeting_id,
+                class.class.as_str(),
+                class.note
             ))
         })
         .collect();

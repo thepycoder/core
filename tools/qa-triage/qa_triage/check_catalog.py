@@ -168,6 +168,10 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A truncated URL fragment in contacts or interests matches the canonical url field.",
         measures="Detects partial domain bleed from fixed-column PDF parsing.",
     ),
+    "commission.chair_subchair_overlap": CheckDoc(
+        what="A person appears in both the chair and subchair lists for the same commission.",
+        measures="Reads commissions.parquet, splits/trims/case-folds chairs and subchairs, and fails once per overlapping person.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

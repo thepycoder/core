@@ -1,6 +1,7 @@
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use commissions::{CommissionRole, extract_members};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
@@ -14,9 +15,6 @@ use tokio::fs;
 
 static SEL_INDEX: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("div.linklist_0 > a, h4").unwrap());
-static SEL_P: LazyLock<Selector> = LazyLock::new(|| Selector::parse("p").unwrap());
-static SEL_B: LazyLock<Selector> = LazyLock::new(|| Selector::parse("b").unwrap());
-static SEL_A: LazyLock<Selector> = LazyLock::new(|| Selector::parse("a").unwrap());
 
 #[derive(Debug)]
 struct ScrapedCommission {
@@ -89,10 +87,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         all_commissions.push(ScrapedCommission {
             name: entry.name.clone(),
             ctype: entry.ctype.clone(),
-            chairs: extract_members(&doc, "Voorzitter"),
-            subchairs: extract_members(&doc, "Ondervoorzitter"),
-            permanent_members: extract_members(&doc, "Vaste Leden"),
-            replacement_members: extract_members(&doc, "Plaatsvervangers"),
+            chairs: extract_members(&doc, CommissionRole::Chair),
+            subchairs: extract_members(&doc, CommissionRole::Subchair),
+            permanent_members: extract_members(&doc, CommissionRole::Permanent),
+            replacement_members: extract_members(&doc, CommissionRole::Replacement),
             source_url: entry.url.clone(),
             cache_path: relative_cache_path(&entry.cache_path, &cache_dir()),
         });
@@ -191,31 +189,4 @@ fn extract_index(document: &Html, detail_dir: &Path) -> Vec<CommissionIndex> {
     }
 
     entries
-}
-
-fn extract_members(doc: &Html, role: &str) -> String {
-    let role = role.to_lowercase();
-    let mut names = Vec::new();
-
-    for p in doc.select(&SEL_P) {
-        let Some(first_b) = p.select(&SEL_B).next() else {
-            continue;
-        };
-        if !first_b
-            .text()
-            .collect::<String>()
-            .to_lowercase()
-            .contains(&role)
-        {
-            continue;
-        }
-        for a in p.select(&SEL_A) {
-            let name = a.text().collect::<String>().trim().to_string();
-            if !name.is_empty() {
-                names.push(name);
-            }
-        }
-    }
-
-    names.join(", ")
 }

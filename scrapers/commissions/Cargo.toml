@@ -15,6 +15,10 @@ arrow = "54.3.0"
 reqwest = "0.12.14"
 dotenvy = "0.15.7"
 
+[lib]
+name = "commissions"
+path = "src/lib.rs"
+
 [[bin]]
 name = "commissions"
 path = "src/main.rs"

@@ -393,6 +393,18 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Detects truncated URL fragments in wrong columns.",
         },
     ],
+    "commission.chair_subchair_overlap": [
+        {
+            "path": "scrapers/commissions/src/lib.rs",
+            "symbol": "normalize_role_label",
+            "note": "Canonical role tokens so Ondervoorzitters does not match Voorzitter.",
+        },
+        {
+            "path": "scrapers/qa/src/commissions.rs",
+            "symbol": "check_chair_subchair_overlap",
+            "note": "Fails when the same person appears in both chairs and subchairs.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

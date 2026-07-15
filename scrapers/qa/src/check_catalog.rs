@@ -210,6 +210,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A truncated URL fragment in contacts or interests matches a prefix of the canonical url field.",
             measures: "Detects partial domain tokens in non-url columns that align with the row's canonical url value.",
         },
+        "commission.chair_subchair_overlap" => CheckDoc {
+            what: "A person appears in both the chair and subchair lists for the same commission.",
+            measures: "Reads `commissions.parquet`, splits/trims/case-folds `chairs` and `subchairs`, and fails once per overlapping person name.",
+        },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",
             measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",

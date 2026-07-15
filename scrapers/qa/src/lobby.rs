@@ -7,8 +7,9 @@ use std::sync::LazyLock;
 
 static URL_TOKEN_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)(?:https?://|www\.)[\w./\-]+").unwrap());
-static DOMAIN_FRAGMENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b(?:www\.|[a-z0-9-]+\.(?:be|com|org|eu|net|int))\S*").unwrap());
+static DOMAIN_FRAGMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:www\.|[a-z0-9-]+\.(?:be|com|org|eu|net|int))\S*").unwrap()
+});
 
 const URL_PLACEMENT_CHECK: &str = "lobby.url_placement";
 const COLUMN_BLEED_CHECK: &str = "lobby.column_bleed";
@@ -63,22 +64,20 @@ fn check_url_placement(
 
     for (field, value) in [("contacts", contacts), ("interests", interests)] {
         for mat in URL_TOKEN_RE.find_iter(value) {
-            details.push(
-                lobby_detail(
-                    URL_PLACEMENT_CHECK,
-                    "warn",
-                    name,
-                    field,
-                    mat.as_str(),
-                    url,
-                    source_url,
-                    cache_path,
-                    format!(
-                        "organisation `{name}` has URL token `{token}` in `{field}`",
-                        token = mat.as_str()
-                    ),
+            details.push(lobby_detail(
+                URL_PLACEMENT_CHECK,
+                "warn",
+                name,
+                field,
+                mat.as_str(),
+                url,
+                source_url,
+                cache_path,
+                format!(
+                    "organisation `{name}` has URL token `{token}` in `{field}`",
+                    token = mat.as_str()
                 ),
-            );
+            ));
         }
     }
 
