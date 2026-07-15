@@ -349,7 +349,12 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         {
             "path": "scrapers/qa/src/remunerations.rs",
             "symbol": "duplicate_mandate_detail",
-            "note": "Groups duplicate person/year/mandate/institute rows.",
+            "note": "Groups exact duplicate person/year/mandate/institute/period rows.",
+        },
+        {
+            "path": "scrapers/remunerations/src/main.rs",
+            "symbol": "dedupe_remunerations",
+            "note": "Preserves distinct Begin/Einde date segments as separate occurrences.",
         },
     ],
     "fk.utterance_interpellation": [
@@ -360,13 +365,25 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
         },
         {
             "path": "scrapers/qa/src/agenda_checks.rs",
-            "symbol": "check_utterance_interpellation_fk",
-            "note": "Groups missing, ambiguous, and uniquely noncanonical interpellation targets by bad reference.",
+            "symbol": "diagnose_interpellation_item_id",
+            "note": "Fails when no unique same-meeting interpellation target exists.",
         },
         {
             "path": "scrapers/graph/src/build.rs",
             "symbol": "resolve_proceeding_target_id",
             "note": "Does not use same-meeting single-candidate guesses for Interpellation nodes.",
+        },
+    ],
+    "utterance.interpellation_item_id_canonical": [
+        {
+            "path": "scrapers/qa/src/agenda_checks.rs",
+            "symbol": "diagnose_interpellation_item_id",
+            "note": "Warns when a site ref uniquely identifies a canonical ID that differs from the stored item_id.",
+        },
+        {
+            "path": "scrapers/crawl/src/agenda_timeline.rs",
+            "symbol": "build_agenda_timeline",
+            "note": "Pairs bilingual interpellation headings by site-native ...I reference before assigning sequence IDs.",
         },
     ],
     "lobby.url_placement": [

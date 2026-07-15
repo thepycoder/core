@@ -25,6 +25,35 @@ pub const ACCEPTED_GAP_REASONS: &[&str] = &[
     GAP_REASON_NO_RESULT,
 ];
 
+/// Result of classifying a live meeting HTTP status before caching bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeetingHttpOutcome {
+    /// Confirmed remote absence — may become an accepted `not_found` gap.
+    NotFound,
+    /// Successful response — continue with body/content-type handling.
+    Success,
+}
+
+/// Map an HTTP status from a meeting download probe.
+///
+/// - 404 → accepted remote absence
+/// - 2xx → success
+/// - anything else (500, 429, …) → abort; do not publish a partial snapshot
+///
+/// Transport failures (timeouts, connection errors) never reach this helper —
+/// they already abort via `?` on the HTTP client.
+pub fn classify_meeting_http_status(
+    status: reqwest::StatusCode,
+) -> Result<MeetingHttpOutcome, String> {
+    if status == reqwest::StatusCode::NOT_FOUND {
+        Ok(MeetingHttpOutcome::NotFound)
+    } else if status.is_success() {
+        Ok(MeetingHttpOutcome::Success)
+    } else {
+        Err(format!("unexpected HTTP {status}"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeetingGapRow {
     pub session_id: u32,
@@ -454,6 +483,35 @@ mod tests {
         let result = discover_last_from_probes(10, 2, exists);
         assert_eq!(result.last_id, 10);
         assert!(result.interior_missing.is_empty());
+    }
+
+    #[test]
+    fn classify_http_404_is_not_found() {
+        assert_eq!(
+            classify_meeting_http_status(reqwest::StatusCode::NOT_FOUND).unwrap(),
+            MeetingHttpOutcome::NotFound
+        );
+    }
+
+    #[test]
+    fn classify_http_200_is_success() {
+        assert_eq!(
+            classify_meeting_http_status(reqwest::StatusCode::OK).unwrap(),
+            MeetingHttpOutcome::Success
+        );
+    }
+
+    #[test]
+    fn classify_http_500_aborts() {
+        let err =
+            classify_meeting_http_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR).unwrap_err();
+        assert!(err.contains("500"));
+    }
+
+    #[test]
+    fn classify_http_429_aborts() {
+        let err = classify_meeting_http_status(reqwest::StatusCode::TOO_MANY_REQUESTS).unwrap_err();
+        assert!(err.contains("429"));
     }
 
     #[test]

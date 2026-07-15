@@ -48,6 +48,8 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 
 ### `data/remunerations.parquet`
 
+Amounts are stored as Utf8 canonical decimal EUR strings (not Arrow DECIMAL/FLOAT64): European source text such as `279 463,46` becomes `279463.46`. The regimand grid emits distinct Begin/Einde period segments for the same mandate; those are retained as separate rows.
+
 | Column | Notes |
 |--------|--------|
 | `first_name` | From members parquet |
@@ -57,6 +59,8 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 | `institute` | Institute name |
 | `remuneration_min` | Parsed min EUR as a canonical decimal string (European source amounts such as `279 463,46` become `279463.46`) |
 | `remuneration_max` | Parsed max EUR as a canonical decimal string; ranges such as `1,00 - 6 129,00 EUR` normalize each endpoint independently |
+| `period_start` | Raw Begin cell (e.g. `Voorafgaand aan 2018`, `03/12/2018`, `Verlengd`) |
+| `period_end` | Raw Einde cell (e.g. `03/12/2018`, `Verlengd`) |
 | `source_url` | regimand.be search URL |
 | `cache_path` | e.g. `remunerations/Last-First-2024.html` |
 

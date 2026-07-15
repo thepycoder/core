@@ -26,6 +26,10 @@ pub fn run_remuneration_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<
         let institutes = read_string_column(&batch, "institute")?;
         let mins = read_string_column(&batch, "remuneration_min")?;
         let maxs = read_string_column(&batch, "remuneration_max")?;
+        let period_starts = read_string_column(&batch, "period_start")
+            .unwrap_or_else(|_| (0..batch.num_rows()).map(|_| String::new()).collect());
+        let period_ends = read_string_column(&batch, "period_end")
+            .unwrap_or_else(|_| (0..batch.num_rows()).map(|_| String::new()).collect());
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
 
@@ -38,10 +42,14 @@ pub fn run_remuneration_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<
                 institute: institutes[i].clone(),
                 remuneration_min: mins[i].clone(),
                 remuneration_max: maxs[i].clone(),
+                period_start: period_starts[i].clone(),
+                period_end: period_ends[i].clone(),
                 source_url: source_urls[i].clone(),
                 cache_path: cache_paths[i].clone(),
             };
-            let key = mandate_business_key(&row);
+            // Exact business key includes period segments — same mandate with
+            // distinct Begin/Einde is not a duplicate (Clarinval-David-2018.html).
+            let key = occurrence_business_key(&row);
             mandate_groups.entry(key).or_default().push(rows.len());
             rows.push(row);
         }
@@ -71,19 +79,27 @@ struct RemunerationRow {
     institute: String,
     remuneration_min: String,
     remuneration_max: String,
+    period_start: String,
+    period_end: String,
     source_url: String,
     cache_path: String,
 }
 
-fn mandate_business_key(row: &RemunerationRow) -> String {
+fn occurrence_business_key(row: &RemunerationRow) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
-        row.last_name, row.first_name, row.year, row.mandate, row.institute
+        "{}|{}|{}|{}|{}|{}|{}",
+        row.last_name,
+        row.first_name,
+        row.year,
+        row.mandate,
+        row.institute,
+        row.period_start,
+        row.period_end
     )
 }
 
 fn entity_id(row: &RemunerationRow) -> String {
-    mandate_business_key(row)
+    occurrence_business_key(row)
 }
 
 fn person_label(row: &RemunerationRow) -> String {
@@ -128,11 +144,13 @@ fn check_amount_valid(row: &RemunerationRow) -> Result<Vec<CheckDetail>, Box<dyn
         .with_values(
             "finite nonnegative min <= max EUR",
             format!(
-                "person={}, year={}, mandate={}, institute={}, min={}, max={}",
+                "person={}, year={}, mandate={}, institute={}, period={}→{}, min={}, max={}",
                 person_label(row),
                 row.year,
                 row.mandate,
                 row.institute,
+                row.period_start,
+                row.period_end,
                 row.remuneration_min,
                 row.remuneration_max
             ),
@@ -163,11 +181,13 @@ fn check_amount_scale(row: &RemunerationRow) -> Result<Vec<CheckDetail>, Box<dyn
         .with_values(
             format!("max <= {AMOUNT_SCALE_THRESHOLD_EUR} EUR"),
             format!(
-                "person={}, year={}, mandate={}, institute={}, min={}, max={}",
+                "person={}, year={}, mandate={}, institute={}, period={}→{}, min={}, max={}",
                 person_label(row),
                 row.year,
                 row.mandate,
                 row.institute,
+                row.period_start,
+                row.period_end,
                 row.remuneration_min,
                 row.remuneration_max
             ),
@@ -198,19 +218,21 @@ fn duplicate_mandate_detail(
         "warn",
         "warn",
         format!(
-            "logical duplicate remuneration mandate for {} {} ({})",
+            "duplicate remuneration occurrence for {} {} ({})",
             sample.first_name, sample.last_name, sample.year
         ),
     )
     .with_entity("Remuneration", &entity_id(sample))
     .with_values(
-        "one row per person/year/mandate/institute",
+        "one row per person/year/mandate/institute/period",
         format!(
-            "person={}, year={}, mandate={}, institute={}, rows={}, amounts=[{}]",
+            "person={}, year={}, mandate={}, institute={}, period={}→{}, rows={}, amounts=[{}]",
             person_label(sample),
             sample.year,
             sample.mandate,
             sample.institute,
+            sample.period_start,
+            sample.period_end,
             indices.len(),
             ranges.join("; ")
         ),
@@ -231,6 +253,8 @@ mod tests {
             institute: "Federale Regering".into(),
             remuneration_min: min.into(),
             remuneration_max: max.into(),
+            period_start: "Voorafgaand aan 2024".into(),
+            period_end: "Verlengd".into(),
             source_url: "https://public.regimand.be/".into(),
             cache_path: "remunerations/Clarinval-David-2024.html".into(),
         }
@@ -265,5 +289,21 @@ mod tests {
         let detail = duplicate_mandate_detail(&rows, &[0, 1]).unwrap();
         assert_eq!(detail.check_id, "remuneration.duplicate_mandate");
         assert!(detail.actual.contains("amounts=[1; 2]"));
+    }
+
+    #[test]
+    fn distinct_periods_are_not_the_same_business_key() {
+        // cache/remunerations/Clarinval-David-2018.html — Burgemeester Bièvre date segments.
+        let mut a = sample_row("10001", "50000");
+        a.mandate = "Burgemeester (titelvoerend of wnd.)".into();
+        a.institute = "Bièvre (Gemeente)".into();
+        a.period_start = "Voorafgaand aan 2018".into();
+        a.period_end = "03/12/2018".into();
+        let mut b = a.clone();
+        b.remuneration_min = "1".into();
+        b.remuneration_max = "5000".into();
+        b.period_start = "03/12/2018".into();
+        b.period_end = "Verlengd".into();
+        assert_ne!(occurrence_business_key(&a), occurrence_business_key(&b));
     }
 }

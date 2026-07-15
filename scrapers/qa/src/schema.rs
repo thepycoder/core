@@ -108,12 +108,15 @@ fn staging_tables() -> Vec<TableSpec> {
         TableSpec {
             rel_path: "remunerations.parquet".into(),
             table_name: "remunerations".into(),
+            // Occurrence identity includes Begin/Einde period segments.
             id_columns: vec![
                 "first_name".into(),
                 "last_name".into(),
                 "year".into(),
                 "mandate".into(),
                 "institute".into(),
+                "period_start".into(),
+                "period_end".into(),
             ],
             required_columns: vec![
                 "year".into(),
@@ -121,6 +124,8 @@ fn staging_tables() -> Vec<TableSpec> {
                 "institute".into(),
                 "remuneration_min".into(),
                 "remuneration_max".into(),
+                "period_start".into(),
+                "period_end".into(),
             ],
         },
         TableSpec {

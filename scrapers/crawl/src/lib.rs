@@ -61,9 +61,10 @@ pub use freshness::{
 };
 pub use meeting_gaps::{
     ACCEPTED_GAP_REASONS, DiscoveryResult, GAP_REASON_NO_RESULT, GAP_REASON_NOT_FOUND,
-    GAP_REASON_UNSUPPORTED_FORMAT, MeetingGapRow, discover_last_from_probes,
-    gap_reason_to_manifest_status, load_prior_gaps, manifest_status_for_parsed,
-    reconcile_meeting_coverage, record_gap, upsert_gap, write_meeting_gaps_parquet,
+    GAP_REASON_UNSUPPORTED_FORMAT, MeetingGapRow, MeetingHttpOutcome, classify_meeting_http_status,
+    discover_last_from_probes, gap_reason_to_manifest_status, load_prior_gaps,
+    manifest_status_for_parsed, reconcile_meeting_coverage, record_gap, upsert_gap,
+    write_meeting_gaps_parquet,
 };
 pub use meeting_parse::{
     MeetingParseOutput, materialize_commission_source_spans, parse_commission_meeting_report,

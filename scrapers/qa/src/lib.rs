@@ -314,6 +314,7 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "question.grouped_internal_ids_complete",
         "question.questioner_resolved",
         "fk.utterance_interpellation",
+        "utterance.interpellation_item_id_canonical",
         "written.published_answer_text_present",
         "remuneration.amount_valid",
         "remuneration.amount_scale",

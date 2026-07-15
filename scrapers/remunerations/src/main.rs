@@ -29,6 +29,11 @@ static SEL_INSTITUTE: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("tbody td[aria-colindex='4'] button").unwrap());
 static SEL_REMUNERATION: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("tbody td[aria-colindex='6']").unwrap());
+// Begin / Einde columns — date segments for the same mandate (e.g. Clarinval-David-2018.html).
+static SEL_PERIOD_START: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("tbody td[aria-colindex='7']").unwrap());
+static SEL_PERIOD_END: LazyLock<Selector> =
+    LazyLock::new(|| Selector::parse("tbody td[aria-colindex='8']").unwrap());
 static SEL_NO_RESULT: LazyLock<Selector> =
     LazyLock::new(|| Selector::parse("tbody tr.k-grid-norecords td").unwrap());
 
@@ -47,6 +52,10 @@ struct ScrapedRemuneration {
     institute: String,
     remuneration_min: String,
     remuneration_max: String,
+    /// Raw Begin cell from the regimand grid (period segment identity).
+    period_start: String,
+    /// Raw Einde cell from the regimand grid (period segment identity).
+    period_end: String,
     source_url: String,
     cache_path: String,
 }
@@ -358,6 +367,17 @@ fn parse_remuneration_html(
             .and_then(|raw| parse::parse_remuneration_text(&raw))
             .unwrap_or_else(|| (String::new(), String::new()));
 
+        let period_start = row
+            .select(&SEL_PERIOD_START)
+            .next()
+            .map(|el| clean_cell_text(&el.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+        let period_end = row
+            .select(&SEL_PERIOD_END)
+            .next()
+            .map(|el| clean_cell_text(&el.text().collect::<Vec<_>>().join(" ")))
+            .unwrap_or_default();
+
         rows.push(ScrapedRemuneration {
             first_name: first_name.to_string(),
             last_name: last_name.to_string(),
@@ -366,6 +386,8 @@ fn parse_remuneration_html(
             institute,
             remuneration_min,
             remuneration_max,
+            period_start,
+            period_end,
             source_url: source_url.to_string(),
             cache_path: cache_path_rel.clone(),
         });
@@ -374,7 +396,13 @@ fn parse_remuneration_html(
     Ok((rows, MANIFEST_STATUS_PARSED))
 }
 
+fn clean_cell_text(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dyn Error>> {
+    // Amounts stay Utf8 decimal EUR strings (not Arrow DECIMAL): staging is string-oriented
+    // and parse.rs already normalizes European locale into canonical decimal text.
     let schema = Arc::new(Schema::new(vec![
         Field::new("first_name", DataType::Utf8, false),
         Field::new("last_name", DataType::Utf8, false),
@@ -383,6 +411,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
         Field::new("institute", DataType::Utf8, false),
         Field::new("remuneration_min", DataType::Utf8, false),
         Field::new("remuneration_max", DataType::Utf8, false),
+        Field::new("period_start", DataType::Utf8, false),
+        Field::new("period_end", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -403,6 +433,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
             col!(|r| r.institute.clone()),
             col!(|r| r.remuneration_min.clone()),
             col!(|r| r.remuneration_max.clone()),
+            col!(|r| r.period_start.clone()),
+            col!(|r| r.period_end.clone()),
             col!(|r| r.source_url.clone()),
             col!(|r| r.cache_path.clone()),
         ],
@@ -414,6 +446,8 @@ fn write_parquet(path: &Path, rows: &[ScrapedRemuneration]) -> Result<(), Box<dy
     Ok(())
 }
 
+/// Exact-row dedupe only. Same mandate with distinct Begin/Einde periods is kept —
+/// those are source date segments (Clarinval-David-2018.html Burgemeester Bièvre).
 fn dedupe_remunerations(rows: &mut Vec<ScrapedRemuneration>) {
     let mut seen = HashSet::new();
     rows.retain(|row| {
@@ -423,6 +457,8 @@ fn dedupe_remunerations(rows: &mut Vec<ScrapedRemuneration>) {
             row.year,
             row.mandate.clone(),
             row.institute.clone(),
+            row.period_start.clone(),
+            row.period_end.clone(),
             row.remuneration_min.clone(),
             row.remuneration_max.clone(),
         ))

@@ -469,8 +469,9 @@ fn check_commission_questioners_resolved(
 }
 
 fn check_utterance_interpellation_fk(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
-    let mut canonical_ids: HashSet<(String, String, String)> = HashSet::new();
-    let mut site_ref_targets: HashMap<(String, String, String), HashSet<String>> = HashMap::new();
+    let mut canonical_ids: HashSet<(String, String, String, String)> = HashSet::new();
+    let mut site_ref_targets: HashMap<(String, String, String, String), HashSet<String>> =
+        HashMap::new();
 
     for (meeting_kind, rel_path) in [
         (
@@ -498,12 +499,17 @@ fn check_utterance_interpellation_fk(data_dir: &Path) -> Result<Vec<CheckDetail>
                     meeting_kind.to_string(),
                     meeting_ids[i].clone(),
                 );
-                canonical_ids.insert((scope.0.clone(), scope.1.clone(), canonical_id.clone()));
+                canonical_ids.insert((
+                    scope.0.clone(),
+                    scope.1.clone(),
+                    scope.2.clone(),
+                    canonical_id.clone(),
+                ));
                 for site_ref in internal_ids[i].split(',') {
                     let site_ref = normalize_site_ref(site_ref);
                     if !site_ref.is_empty() {
                         site_ref_targets
-                            .entry((scope.0.clone(), scope.1.clone(), site_ref))
+                            .entry((scope.0.clone(), scope.1.clone(), scope.2.clone(), site_ref))
                             .or_default()
                             .insert(canonical_id.clone());
                     }
@@ -549,64 +555,319 @@ fn check_utterance_interpellation_fk(data_dir: &Path) -> Result<Vec<CheckDetail>
                     meeting_kind.to_string(),
                     meeting_ids[i].clone(),
                 );
-                if canonical_ids.contains(&(scope.0.clone(), scope.1.clone(), actual_id.clone())) {
-                    continue;
-                }
-
-                let refs: Vec<String> = question_ids[i]
-                    .split(',')
-                    .map(normalize_site_ref)
-                    .filter(|site_ref| !site_ref.is_empty())
-                    .collect();
-                let mut candidates = HashSet::new();
-                for site_ref in &refs {
-                    if let Some(targets) =
-                        site_ref_targets.get(&(scope.0.clone(), scope.1.clone(), site_ref.clone()))
-                    {
-                        candidates.extend(targets.iter().cloned());
+                if let Some(detail) = diagnose_interpellation_item_id(
+                    &scope.0,
+                    &scope.1,
+                    &scope.2,
+                    &utterance_ids[i],
+                    &actual_id,
+                    &question_ids[i],
+                    &canonical_ids,
+                    &site_ref_targets,
+                    &source_urls[i],
+                    &cache_paths[i],
+                    &format!("{}:{}", block_starts[i], block_ends[i]),
+                ) {
+                    let key = (
+                        detail.check_id.clone(),
+                        scope.1.clone(),
+                        scope.2.clone(),
+                        actual_id.clone(),
+                        detail.expected.clone(),
+                        detail.actual.clone(),
+                    );
+                    if !seen.insert(key) {
+                        continue;
                     }
+                    details.push(detail);
                 }
-                let mut candidates: Vec<_> = candidates.into_iter().collect();
-                candidates.sort();
-                let canonical_id = (candidates.len() == 1).then(|| candidates[0].clone());
-                let status = if canonical_id.is_some() {
-                    "warn"
-                } else {
-                    "fail"
-                };
-                let key = (
-                    meeting_kind.to_string(),
-                    meeting_ids[i].clone(),
-                    actual_id.clone(),
-                    refs.join(","),
-                    canonical_id.clone().unwrap_or_default(),
-                    status.to_string(),
-                );
-                if !seen.insert(key) {
-                    continue;
-                }
-                let expected = canonical_id.as_deref().unwrap_or("exactly one target");
-                details.push(
-                    CheckDetail::new(
-                        "fk.utterance_interpellation",
-                        status,
-                        status,
-                        format!(
-                            "utterance {} interpellation item_id {} does not resolve canonically",
-                            utterance_ids[i], actual_id
-                        ),
-                    )
-                    .with_meeting(meeting_kind, &meeting_ids[i])
-                    .with_entity("utterance", &utterance_ids[i])
-                    .with_values(
-                        expected,
-                        format!("actual={actual_id}; site_refs={}", refs.join(",")),
-                    )
-                    .with_source(&source_urls[i], &cache_paths[i])
-                    .with_source_block(format!("{}:{}", block_starts[i], block_ends[i])),
-                );
             }
         }
     }
     Ok(details)
+}
+
+/// Diagnose one interpellation utterance FK. Returns None when `actual_id` is already canonical.
+fn diagnose_interpellation_item_id(
+    session_id: &str,
+    meeting_kind: &str,
+    meeting_id: &str,
+    utterance_id: &str,
+    actual_id: &str,
+    question_ids: &str,
+    canonical_ids: &HashSet<(String, String, String, String)>,
+    site_ref_targets: &HashMap<(String, String, String, String), HashSet<String>>,
+    source_url: &str,
+    cache_path: &str,
+    source_block: &str,
+) -> Option<CheckDetail> {
+    if canonical_ids.contains(&(
+        session_id.to_string(),
+        meeting_kind.to_string(),
+        meeting_id.to_string(),
+        actual_id.to_string(),
+    )) {
+        return None;
+    }
+
+    let refs: Vec<String> = question_ids
+        .split(',')
+        .map(normalize_site_ref)
+        .filter(|site_ref| !site_ref.is_empty())
+        .collect();
+    let mut candidates = HashSet::new();
+    for site_ref in &refs {
+        if let Some(targets) = site_ref_targets.get(&(
+            session_id.to_string(),
+            meeting_kind.to_string(),
+            meeting_id.to_string(),
+            site_ref.clone(),
+        )) {
+            candidates.extend(targets.iter().cloned());
+        }
+    }
+    let mut candidates: Vec<_> = candidates.into_iter().collect();
+    candidates.sort();
+    let canonical_id = (candidates.len() == 1).then(|| candidates[0].clone());
+    let (check_id, status) = if canonical_id.is_some() {
+        ("utterance.interpellation_item_id_canonical", "warn")
+    } else {
+        ("fk.utterance_interpellation", "fail")
+    };
+    let expected = canonical_id.unwrap_or_else(|| "exactly one target".to_string());
+    Some(
+        CheckDetail::new(
+            check_id,
+            status,
+            status,
+            format!(
+                "utterance {utterance_id} interpellation item_id {actual_id} does not resolve canonically"
+            ),
+        )
+        .with_meeting(meeting_kind, meeting_id)
+        .with_entity("utterance", utterance_id)
+        .with_values(
+            &expected,
+            format!("actual={actual_id}; site_refs={}", refs.join(",")),
+        )
+        .with_source(source_url, cache_path)
+        .with_source_block(source_block),
+    )
+}
+
+#[cfg(test)]
+mod interpellation_fk_tests {
+    use super::*;
+
+    fn empty_maps() -> (
+        HashSet<(String, String, String, String)>,
+        HashMap<(String, String, String, String), HashSet<String>>,
+    ) {
+        (HashSet::new(), HashMap::new())
+    }
+
+    #[test]
+    fn direct_canonical_id_passes() {
+        let (mut canonical, site_refs) = empty_maps();
+        canonical.insert((
+            "56".into(),
+            "plenary".into(),
+            "69".into(),
+            "56_plenary_69_2".into(),
+        ));
+        let detail = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_2",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        );
+        assert!(detail.is_none());
+    }
+
+    #[test]
+    fn wrong_id_with_unique_site_ref_emits_canonical_warn() {
+        // Plenary 69: utterance historically used 56_plenary_69_5 for site ref 56000158I;
+        // canonical entity is 56_plenary_69_2.
+        let (mut canonical, mut site_refs) = empty_maps();
+        canonical.insert((
+            "56".into(),
+            "plenary".into(),
+            "69".into(),
+            "56_plenary_69_2".into(),
+        ));
+        site_refs.insert(
+            (
+                "56".into(),
+                "plenary".into(),
+                "69".into(),
+                "56000158I".into(),
+            ),
+            HashSet::from(["56_plenary_69_2".into()]),
+        );
+        let detail = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        )
+        .expect("finding");
+        assert_eq!(
+            detail.check_id,
+            "utterance.interpellation_item_id_canonical"
+        );
+        assert_eq!(detail.status, "warn");
+        assert_eq!(detail.expected, "56_plenary_69_2");
+    }
+
+    #[test]
+    fn no_matching_site_ref_emits_fk_fail() {
+        let (canonical, site_refs) = empty_maps();
+        let detail = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        )
+        .expect("finding");
+        assert_eq!(detail.check_id, "fk.utterance_interpellation");
+        assert_eq!(detail.status, "fail");
+    }
+
+    #[test]
+    fn ambiguous_site_ref_emits_fk_fail() {
+        let (canonical, mut site_refs) = empty_maps();
+        site_refs.insert(
+            (
+                "56".into(),
+                "plenary".into(),
+                "69".into(),
+                "56000158I".into(),
+            ),
+            HashSet::from(["56_plenary_69_2".into(), "56_plenary_69_3".into()]),
+        );
+        let detail = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        )
+        .expect("finding");
+        assert_eq!(detail.check_id, "fk.utterance_interpellation");
+        assert_eq!(detail.status, "fail");
+    }
+
+    #[test]
+    fn candidate_in_other_meeting_does_not_satisfy() {
+        let (mut canonical, mut site_refs) = empty_maps();
+        canonical.insert((
+            "56".into(),
+            "plenary".into(),
+            "70".into(),
+            "56_plenary_70_2".into(),
+        ));
+        site_refs.insert(
+            (
+                "56".into(),
+                "plenary".into(),
+                "70".into(),
+                "56000158I".into(),
+            ),
+            HashSet::from(["56_plenary_70_2".into()]),
+        );
+        let detail = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        )
+        .expect("finding");
+        assert_eq!(detail.check_id, "fk.utterance_interpellation");
+        assert_eq!(detail.status, "fail");
+    }
+
+    #[test]
+    fn repeated_utterances_with_same_bad_ref_share_diagnosis_shape() {
+        let (mut canonical, mut site_refs) = empty_maps();
+        canonical.insert((
+            "56".into(),
+            "plenary".into(),
+            "69".into(),
+            "56_plenary_69_2".into(),
+        ));
+        site_refs.insert(
+            (
+                "56".into(),
+                "plenary".into(),
+                "69".into(),
+                "56000158I".into(),
+            ),
+            HashSet::from(["56_plenary_69_2".into()]),
+        );
+        let a = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u1",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "10:20",
+        )
+        .unwrap();
+        let b = diagnose_interpellation_item_id(
+            "56",
+            "plenary",
+            "69",
+            "u2",
+            "56_plenary_69_5",
+            "56000158I",
+            &canonical,
+            &site_refs,
+            "url",
+            "cache",
+            "21:30",
+        )
+        .unwrap();
+        assert_eq!(a.check_id, b.check_id);
+        assert_eq!(a.expected, b.expected);
+        assert_eq!(a.actual, b.actual);
+    }
 }

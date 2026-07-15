@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document turns the July 2026 source-to-Parquet review into implementation work for a follow-up agent. It is a handoff only: no production fix described below was applied while writing it.
+This document turns the July 2026 source-to-Parquet review into implementation work. Open items below were completed in follow-up work (2026-07-15); checkboxes and the snapshot reflect post-fix verification.
 
 The affected pipeline is:
 
@@ -29,20 +29,20 @@ just qa
 
 ## Snapshot
 
-The counts below were rechecked against the reparsed data on 2026-07-14. `data/qa/summary.md` was still generated before that reparse, on 2026-07-13 at 20:27 UTC, so direct Parquet queries are authoritative for this snapshot.
+The counts below were rechecked against regenerated staging/normalized/graph data on 2026-07-15 after completing the remaining open packages. Direct Parquet queries and `just qa` are authoritative.
 
 | Area | Current result | Disposition |
 |---|---:|---|
 | Commission question prefixes | 0 / 6,289 | Verified fixed by reparse |
 | Commission questions without resolved `ASKED` | 0 / 6,289 | Verified fixed by reparse |
 | Unresolved commission questioners | 0 | Verified fixed by reparse |
-| Published QRVA answers with no text | 622 rows / 579 questions | Fix parser and add QA |
-| Interpellation utterances with noncanonical `item_id` | 287 / 647 rows, 20 IDs | Fix IDs and add QA |
-| Remunerations above EUR 1,000,000 | 1,946 / 6,977 | Fix decimal parsing and add QA |
-| Remuneration logical duplicate groups | 176 | Preserve evidence; add QA |
-| Lobby interests containing URL fragments | 212 / 299 | Fix PDF parsing and add QA |
+| Published QRVA answers with no text | 0 | Verified fixed by reparse |
+| Interpellation utterances with noncanonical `item_id` | 0 / 647 | Verified fixed by reparse + normalize |
+| Remunerations above EUR 1,000,000 | 0 / 6,998 | Verified fixed by reparse |
+| Remuneration logical duplicate groups | 1 reviewed source anomaly | Period fields added; QA warns |
+| Lobby interests containing URL fragments | 0 | Verified fixed by reparse |
 | Chair/subchair overlaps | 0 / 35 commissions | Verified fixed by reparse |
-| Graph artifacts with blank `scraped_at` | 15,050 / 15,050 | Fix provenance |
+| Graph artifacts with blank `scraped_at` | remaining cache-meta gaps via QA | Provenance contract shipped; QA tracks |
 | Current commission source gaps | 8 | Plan source completeness work |
 
 ## Recommended order
@@ -130,8 +130,8 @@ The current fixture at `scrapers/qrva/src/xml.rs:102-128` covers `<br>` but no n
 - [x] Preserve existing whitespace normalization unless a fixture proves it loses meaningful separation.
 - [x] Add a regression fixture with an `<a>` inside `TEXTA1N` and `TEXTA1F`.
 - [x] Reference `56-B001-3-0001-0000202400004.xml` in the test comment as the originating document.
-- [ ] Reparse QRVA staging after the fix.
-- [ ] Rebuild normalized answers and the graph.
+- [x] Reparse QRVA staging after the fix.
+- [x] Rebuild normalized answers and the graph.
 
 ### QA TODO
 
@@ -247,14 +247,14 @@ The timeline assigns sequence-based IDs in `scrapers/crawl/src/agenda_timeline.r
 
 ### Parser/normalization TODO
 
-- [ ] Add a minimal fixture from plenary 69 containing the bilingual/grouped interpellation shape.
+- [x] Add a minimal fixture from plenary 69 containing the bilingual/grouped interpellation shape.
 - [x] Trace where the same logical interpellation receives different sequence positions between timeline utterances and proceeding entities.
 - [x] Pair bilingual headings by site-native `...I` reference before assigning sequence IDs.
 - [x] Assign one canonical interpellation ID per logical site reference.
 - [x] Ensure utterances and `interpellations.parquet` receive the same ID from the same `AgendaItem` instance.
 - [x] Do not repair this only in graph loading.
 - [x] Remove or narrow the graph’s single-candidate fallback after canonical data is regenerated.
-- [ ] Reparse plenary reports, normalize utterances, and rebuild the graph.
+- [x] Reparse plenary reports, normalize utterances, and rebuild the graph.
 
 ### QA TODO
 
@@ -262,19 +262,19 @@ The timeline assigns sequence-based IDs in `scrapers/crawl/src/agenda_timeline.r
 - [x] Require each interpellation utterance to resolve to exactly one interpellation in the same session, meeting kind, and meeting.
 - [x] Accept direct canonical ID as the normal path.
 - [x] Use site-native refs only to diagnose the expected target, not to silently pass a wrong `item_id`.
-- [ ] Add `utterance.interpellation_item_id_canonical` if a separate warning is useful during migration.
+- [x] Add `utterance.interpellation_item_id_canonical` if a separate warning is useful during migration.
 - [x] Group details by distinct bad reference rather than emitting 287 repetitive turn-level rows.
 - [x] Include sample utterance ID, actual ID, canonical ID, site ref, source block range, URL, and cache path.
 - [x] Use `status=fail` for missing/ambiguous targets and `status=warn` for uniquely resolvable but noncanonical IDs.
 
 ### Tests
 
-- [ ] Direct canonical ID passes.
-- [ ] Wrong ID plus one matching site ref produces the canonical-ID finding.
-- [ ] No matching site ref produces an FK failure.
-- [ ] Two candidates for one site ref produce an ambiguity failure.
-- [ ] Candidate in another meeting or meeting kind does not satisfy the FK.
-- [ ] Repeated utterances with one bad reference produce one grouped detail.
+- [x] Direct canonical ID passes.
+- [x] Wrong ID plus one matching site ref produces the canonical-ID finding.
+- [x] No matching site ref produces an FK failure.
+- [x] Two candidates for one site ref produce an ambiguity failure.
+- [x] Candidate in another meeting or meeting kind does not satisfy the FK.
+- [x] Repeated utterances with one bad reference produce one grouped detail.
 
 ### Acceptance criteria
 
@@ -302,7 +302,7 @@ The staging value is:
 
 The parser removes commas at `scrapers/remunerations/src/main.rs:252-256` before attempting decimal conversion. The value is therefore interpreted as cents while the staging contract says EUR.
 
-Current impact:
+Current impact (pre-fix):
 
 ```text
 rows                           6,977
@@ -312,37 +312,41 @@ logical duplicate groups         176
 extra rows in those groups        176
 ```
 
-`dedupe_remunerations` at `scrapers/remunerations/src/main.rs:232-244` includes amount values in the key, so two rows with the same person/year/mandate/institute but different amounts both survive.
+`dedupe_remunerations` previously keyed on amount as well as mandate, so period-segmented source rows with different amounts both survived but without Begin/Einde identity. Post-fix staging stores `period_start`/`period_end` and keys uniqueness on the full occurrence; amount scale is fixed.
 
 ### Parser TODO
 
-- [ ] Parse locale amounts without deleting the decimal separator.
-- [ ] Remove currency symbols and grouping whitespace/nonbreaking spaces.
-- [ ] Treat comma as the decimal separator for current source values.
-- [ ] Parse ranges only after normalizing each endpoint independently.
-- [ ] Keep `Niet bezoldigd` as exact zero.
-- [ ] Store canonical decimal EUR, not cents encoded as integer-looking strings.
-- [ ] Decide and document an Arrow numeric type. Prefer `DECIMAL` if supported consistently; otherwise use `FLOAT64` with explicit currency/unit documentation.
-- [ ] Add tests for `279 463,46 EUR`, `1,00 - 6 129,00 EUR`, unpaid values, malformed text, and ranges.
-- [ ] Reference `remunerations/Clarinval-David-2024.html` in the large-value fixture comment.
-- [ ] Reparse the full remuneration table.
+- [x] Parse locale amounts without deleting the decimal separator.
+- [x] Remove currency symbols and grouping whitespace/nonbreaking spaces.
+- [x] Treat comma as the decimal separator for current source values.
+- [x] Parse ranges only after normalizing each endpoint independently.
+- [x] Keep `Niet bezoldigd` as exact zero.
+- [x] Store canonical decimal EUR, not cents encoded as integer-looking strings.
+- [x] Decide and document an Arrow numeric type. Prefer `DECIMAL` if supported consistently; otherwise use `FLOAT64` with explicit currency/unit documentation.
+- [x] Add tests for `279 463,46 EUR`, `1,00 - 6 129,00 EUR`, unpaid values, malformed text, and ranges.
+- [x] Reference `remunerations/Clarinval-David-2024.html` in the large-value fixture comment.
+- [x] Reparse the full remuneration table.
 
 ### Duplicate TODO
 
-- [ ] Investigate the 176 groups against source rows before deleting anything.
-- [ ] Define the business key as normalized person, year, mandate, and institute.
-- [ ] Determine whether duplicate rows represent source corrections, date segments, or parser duplication.
-- [ ] If source records are semantically distinct, add a site-native occurrence/record identifier or period fields.
-- [ ] If they are duplicate renderings, deduplicate only after preserving enough evidence to prove equivalence.
-- [ ] Do not select an arbitrary minimum or maximum amount.
+### Duplicate resolution (2026-07-15)
+
+Source investigation showed the former 176 “duplicate” groups were almost entirely **date-segmented** Begin/Einde rows for the same mandate (e.g. Clarinval-David-2018 Burgemeester Bièvre). Staging now retains `period_start` / `period_end` and keys uniqueness on that occurrence. One remaining exact duplicate remains and is correctly warned by QA: Ridouane Chahid 2020 Parlementslid / Brussels Hoofdstedelijk Parlement with identical `Verlengd`/`Verlengd` periods but two different amounts (`129109` and `13349.1`) as published by regimand — preserved, not arbitrarily collapsed.
+
+- [x] Investigate the 176 groups against source rows before deleting anything.
+- [x] Define the business key as normalized person, year, mandate, institute, and period (Begin/Einde).
+- [x] Determine whether duplicate rows represent source corrections, date segments, or parser duplication.
+- [x] If source records are semantically distinct, add a site-native occurrence/record identifier or period fields.
+- [x] If they are duplicate renderings, deduplicate only after preserving enough evidence to prove equivalence.
+- [x] Do not select an arbitrary minimum or maximum amount.
 
 ### QA TODO
 
-- [ ] Add `remuneration.amount_valid`: numeric, finite, nonnegative, and `min <= max`.
-- [ ] Add `remuneration.amount_scale`: conservative warning when annual maximum exceeds EUR 1,000,000.
-- [ ] Add `remuneration.duplicate_mandate`: one warning per logical duplicate group, listing all amount ranges.
-- [ ] Add `remunerations.parquet` to schema/table-loaded QA.
-- [ ] Carry person name, year, mandate, institute, values, URL, and cache path in details.
+- [x] Add `remuneration.amount_valid`: numeric, finite, nonnegative, and `min <= max`.
+- [x] Add `remuneration.amount_scale`: conservative warning when annual maximum exceeds EUR 1,000,000.
+- [x] Add `remuneration.duplicate_mandate`: one warning per logical duplicate group, listing all amount ranges.
+- [x] Add `remunerations.parquet` to schema/table-loaded QA.
+- [x] Carry person name, year, mandate, institute, values, URL, and cache path in details.
 
 ### Acceptance criteria
 
@@ -631,7 +635,7 @@ Plenary currently has complete cached and parsed IDs 1-135, so its first gap fil
 - [x] Interior 404 is retained while discovery continues.
 - [x] Trailing 404 is not a gap.
 - [x] PDF response is `unsupported_format`.
-- [ ] 500, timeout, or malformed HTML aborts.
+- [x] 500, timeout, or malformed HTML aborts.
 - [x] Missing expected cache in cache-only mode leaves canonical output hashes unchanged.
 - [x] Commission IDs reconcile to 412 parsed plus eight gaps through ID 420.
 - [x] Plenary 1-135 produces an empty gap file.
@@ -767,14 +771,14 @@ Data-quality findings must be `CheckDetail` rows, not returned `Err` values. Thi
 
 ### QA implementation TODO
 
-- [ ] Add all IDs to `registered_check_ids()` so zero-finding checks produce explicit pass rows.
-- [ ] Add descriptions to `scrapers/qa/src/check_catalog.rs`.
-- [ ] Add triage descriptions and code pointers.
-- [ ] Preserve summary/detail count equality through `qa.summary_vs_detail`.
-- [ ] Include source URL/cache and source block range wherever available.
-- [ ] Add prerequisite table checks so an absent input cannot become an implicit pass.
-- [ ] Include commissions, remunerations, subdocuments, source manifests, and both meeting-gap tables in schema QA.
-- [ ] Update corpus coverage reporting to annotate expected procedural exclusions instead of deleting them from the overview.
+- [x] Add all IDs to `registered_check_ids()` so zero-finding checks produce explicit pass rows.
+- [x] Add descriptions to `scrapers/qa/src/check_catalog.rs`.
+- [x] Add triage descriptions and code pointers.
+- [x] Preserve summary/detail count equality through `qa.summary_vs_detail`.
+- [x] Include source URL/cache and source block range wherever available.
+- [x] Add prerequisite table checks so an absent input cannot become an implicit pass.
+- [x] Include commissions, remunerations, subdocuments, source manifests, and both meeting-gap tables in schema QA.
+- [x] Update corpus coverage reporting to annotate expected procedural exclusions instead of deleting them from the overview.
 
 ### Exit-code tests
 

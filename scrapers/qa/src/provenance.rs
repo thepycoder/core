@@ -41,7 +41,9 @@ fn provenance_tables() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-pub fn run_normalize_provenance_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+pub fn run_normalize_provenance_checks(
+    data_dir: &Path,
+) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
     let mut details = Vec::new();
     let graph_artifacts = load_graph_artifact_ids(data_dir)?;
 
@@ -127,9 +129,7 @@ pub fn run_normalize_provenance_checks(data_dir: &Path) -> Result<Vec<CheckDetai
                             "normalize.provenance_complete",
                             "error",
                             "fail",
-                            format!(
-                                "normalized/{table} row missing required provenance values"
-                            ),
+                            format!("normalized/{table} row missing required provenance values"),
                         )
                         .with_entity(table, entity_id)
                         .with_source(&source_urls[i], &cache_paths[i]),
@@ -143,9 +143,7 @@ pub fn run_normalize_provenance_checks(data_dir: &Path) -> Result<Vec<CheckDetai
                             "normalize.confidence_typed",
                             "error",
                             "fail",
-                            format!(
-                                "normalized/{table} confidence out of range [0,1]: {conf}"
-                            ),
+                            format!("normalized/{table} confidence out of range [0,1]: {conf}"),
                         )
                         .with_entity(table, entity_id)
                         .with_source(&source_urls[i], &cache_paths[i]),
@@ -159,9 +157,7 @@ pub fn run_normalize_provenance_checks(data_dir: &Path) -> Result<Vec<CheckDetai
                             "normalize.provenance_artifact_id",
                             "error",
                             "fail",
-                            format!(
-                                "normalized/{table} source_artifact_id mismatch"
-                            ),
+                            format!("normalized/{table} source_artifact_id mismatch"),
                         )
                         .with_entity(table, entity_id)
                         .with_values(&canonical, &artifact_ids[i])
@@ -236,7 +232,8 @@ mod tests {
     use identity::parquet_io::{utf8_field, write_parquet};
     use std::sync::Arc;
     fn test_root(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("qa_provenance_{name}_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("qa_provenance_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root

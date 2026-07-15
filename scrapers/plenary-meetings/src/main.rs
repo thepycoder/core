@@ -17,7 +17,6 @@ use crawl::{
     write_source_manifest, write_source_spans_parquet, write_utterances_parquet, write_vote_bundle,
 };
 use encoding_rs::WINDOWS_1252;
-use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
@@ -792,15 +791,12 @@ async fn download_meeting(
     let url = meeting_url(session_id, meeting_id);
     let response = client.get(&url).await?;
     *web_request_count += 1;
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(DownloadOutcome::NotFound);
-    }
-    if !response.status().is_success() {
-        return Err(format!(
-            "plenary meeting {meeting_id}: unexpected HTTP {} for {url}",
-            response.status()
-        )
-        .into());
+    match crawl::classify_meeting_http_status(response.status()) {
+        Ok(crawl::MeetingHttpOutcome::NotFound) => return Ok(DownloadOutcome::NotFound),
+        Ok(crawl::MeetingHttpOutcome::Success) => {}
+        Err(detail) => {
+            return Err(format!("plenary meeting {meeting_id}: {detail} for {url}").into());
+        }
     }
 
     let content_type = response
@@ -1498,5 +1494,15 @@ mod question_extract_tests {
         assert_eq!(statuses.value(0), "unresolved");
         assert_eq!(reasons.value(0), "invalid_half_open_range");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn malformed_html_without_meeting_date_fails_parser_invariants() {
+        // HTTP 200 with HTML that fails required header invariants must abort
+        // publication rather than becoming a source gap.
+        let document =
+            Html::parse_document("<html><body><p>not a meeting report</p></body></html>");
+        let err = extract_date_from_document(&document).unwrap_err();
+        assert!(!err.to_string().is_empty());
     }
 }

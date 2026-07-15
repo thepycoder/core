@@ -212,7 +212,11 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
         },
         "fk.utterance_interpellation" => CheckDoc {
             what: "An interpellation utterance does not resolve to exactly one canonical interpellation in its session, kind, and meeting.",
-            measures: "Checks direct canonical item_id first, then uses site-native question_ids only to diagnose a unique noncanonical target or missing/ambiguous target.",
+            measures: "Checks direct canonical item_id first; missing or ambiguous site-native targets fail. Unique noncanonical IDs are reported under `utterance.interpellation_item_id_canonical`.",
+        },
+        "utterance.interpellation_item_id_canonical" => CheckDoc {
+            what: "An interpellation utterance site ref resolves to exactly one same-meeting target, but the stored item_id is noncanonical.",
+            measures: "Warns when question_ids uniquely identify a canonical interpellation that differs from the utterance item_id.",
         },
         "written.published_answer_text_present" => CheckDoc {
             what: "A published QRVA answer has neither a Dutch nor French answer body.",
@@ -227,8 +231,8 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             measures: "Warns when `remuneration_max` is greater than 1,000,000 EUR.",
         },
         "remuneration.duplicate_mandate" => CheckDoc {
-            what: "The same person/year/mandate/institute appears on multiple remuneration rows.",
-            measures: "Groups `remunerations.parquet` by person, year, mandate, and institute; emits one warning per group listing all amount ranges.",
+            what: "The same person/year/mandate/institute/period occurrence appears on multiple remuneration rows.",
+            measures: "Groups `remunerations.parquet` by person, year, mandate, institute, period_start, and period_end; emits one warning per exact duplicate group listing all amount ranges. Distinct Begin/Einde date segments are not duplicates.",
         },
         "lobby.url_placement" => CheckDoc {
             what: "A lobby register URL or domain token appears outside the url column.",

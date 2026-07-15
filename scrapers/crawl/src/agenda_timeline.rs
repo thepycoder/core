@@ -836,6 +836,95 @@ mod tests {
     }
 
     #[test]
+    fn plenary_69_bilingual_grouped_interpellations_share_canonical_ids() {
+        // Minimal shape from cache/sessions/56/meetings/plenary/56-69.html —
+        // FR joint bullets then NL joint bullets for the same three site refs.
+        let blocks = vec![
+            block(0, BlockTag::H1, "Interpellaties"),
+            block(1, BlockTag::H1, "Interpellations"),
+            block(2, BlockTag::H2, "21 Interpellations jointes de"),
+            block(
+                3,
+                BlockTag::H2,
+                r#"- Christophe Lacroix à Theo Francken (Défense) sur "crise diplomatique" (56000155I)"#,
+            ),
+            block(
+                4,
+                BlockTag::H2,
+                r#"- Nabil Boukili à Theo Francken (Défense) sur "dépendance des États-Unis" (56000157I)"#,
+            ),
+            block(
+                5,
+                BlockTag::H2,
+                r#"- Kristien Verbelen à Theo Francken (Défense) sur "F-35 supplémentaires" (56000158I)"#,
+            ),
+            block(6, BlockTag::H2, "21 Samengevoegde interpellaties van"),
+            block(
+                7,
+                BlockTag::H2,
+                r#"- Christophe Lacroix aan Theo Francken (Defensie) over "diplomatieke crisis" (56000155I)"#,
+            ),
+            block(
+                8,
+                BlockTag::H2,
+                r#"- Nabil Boukili aan Theo Francken (Defensie) over "afhankelijkheid van de VS" (56000157I)"#,
+            ),
+            block(
+                9,
+                BlockTag::H2,
+                r#"- Kristien Verbelen aan Theo Francken (Defensie) over "bijkomende F-35's" (56000158I)"#,
+            ),
+            block(10, BlockTag::P, "21.01 Christophe Lacroix: speech"),
+        ];
+        let items = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 69);
+        let interpellations: Vec<_> = items
+            .iter()
+            .filter(|i| i.item_kind == ItemKind::Interpellation)
+            .collect();
+        // FR+NL bullets remain as separate agenda rows, but site-ref remapping
+        // assigns one canonical item_id per logical interpellation.
+        assert_eq!(interpellations.len(), 6);
+        let mut by_ref: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for item in &interpellations {
+            assert_eq!(item.internal_ids.len(), 1);
+            let site_ref = normalize_site_ref(&item.internal_ids[0]);
+            by_ref
+                .entry(site_ref)
+                .or_default()
+                .insert(item.item_id.clone());
+        }
+        assert_eq!(
+            by_ref.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "56000155I".to_string(),
+                "56000157I".to_string(),
+                "56000158I".to_string()
+            ]
+        );
+        for (site_ref, ids) in &by_ref {
+            assert_eq!(
+                ids.len(),
+                1,
+                "{site_ref} must share one canonical item_id across FR/NL"
+            );
+        }
+        // Canonical IDs are the first-seen sequence positions (FR bullets).
+        assert_eq!(
+            by_ref["56000155I"].iter().next().unwrap(),
+            "56_plenary_69_0"
+        );
+        assert_eq!(
+            by_ref["56000157I"].iter().next().unwrap(),
+            "56_plenary_69_1"
+        );
+        assert_eq!(
+            by_ref["56000158I"].iter().next().unwrap(),
+            "56_plenary_69_2"
+        );
+    }
+
+    #[test]
     fn bilingual_pairs_on_plenary_fixture_have_non_overlapping_ranges() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../cache/sessions/56/meetings/plenary/56-117.html");

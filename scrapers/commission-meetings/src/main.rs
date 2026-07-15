@@ -16,7 +16,6 @@ use crawl::{
     write_source_manifest, write_source_spans_parquet, write_utterances_parquet,
 };
 use encoding_rs::WINDOWS_1252;
-use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
@@ -689,15 +688,12 @@ async fn download_meeting(
     let url = meeting_url(session_id, meeting_id);
     let response = client.get(&url).await?;
     *web_request_count += 1;
-    if response.status() == StatusCode::NOT_FOUND {
-        return Ok(DownloadOutcome::NotFound);
-    }
-    if !response.status().is_success() {
-        return Err(format!(
-            "commission meeting {meeting_id}: unexpected HTTP {} for {url}",
-            response.status()
-        )
-        .into());
+    match crawl::classify_meeting_http_status(response.status()) {
+        Ok(crawl::MeetingHttpOutcome::NotFound) => return Ok(DownloadOutcome::NotFound),
+        Ok(crawl::MeetingHttpOutcome::Success) => {}
+        Err(detail) => {
+            return Err(format!("commission meeting {meeting_id}: {detail} for {url}").into());
+        }
     }
 
     let content_type = response
