@@ -83,6 +83,12 @@ fn staging_tables() -> Vec<TableSpec> {
             required_columns: vec!["session_id".into(), "title".into()],
         },
         TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/subdocuments.parquet"),
+            table_name: "subdocuments".into(),
+            id_columns: vec!["id".into()],
+            required_columns: vec!["dossier_id".into(), "type".into()],
+        },
+        TableSpec {
             rel_path: "lobby.parquet".into(),
             table_name: "lobby".into(),
             id_columns: vec!["name".into()],
@@ -116,6 +122,30 @@ fn staging_tables() -> Vec<TableSpec> {
                 "remuneration_min".into(),
                 "remuneration_max".into(),
             ],
+        },
+        TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/commission/meeting_gaps.parquet"),
+            table_name: "commission_meeting_gaps".into(),
+            id_columns: vec!["meeting_id".into()],
+            required_columns: vec!["reason".into(), "detail".into()],
+        },
+        TableSpec {
+            rel_path: format!("sessions/{SESSION_ID}/plenary/meeting_gaps.parquet"),
+            table_name: "plenary_meeting_gaps".into(),
+            id_columns: vec!["meeting_id".into()],
+            required_columns: vec!["reason".into(), "detail".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/commission_meetings.parquet".into(),
+            table_name: "manifest_commission_meetings".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/plenary_meetings.parquet".into(),
+            table_name: "manifest_plenary_meetings".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
         },
     ]
 }

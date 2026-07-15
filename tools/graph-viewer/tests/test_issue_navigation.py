@@ -133,12 +133,12 @@ def test_graph_voted_on_orphan_targets_prefers_vote(conn):
 
 def test_commission_meeting_gap_navigates_to_meeting(conn):
     data = {
-        "check_id": "commission.meeting_gaps",
+        "check_id": "meeting.gaps",
         "entity_type": "meeting",
         "entity_id": "67",
         "meeting_kind": "commission",
         "meeting_id": "67",
-        "message": "commission meeting 67 gap: parse_failed",
+        "message": "commission meeting 67 gap: not_found",
     }
     nav = resolve_issue_navigation(conn, data["check_id"], data)
     assert nav["action"] == "node"

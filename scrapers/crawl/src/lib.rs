@@ -4,9 +4,12 @@ pub mod paths;
 pub mod utils;
 
 pub mod agenda_timeline;
-pub mod corpus_policy;
 pub mod answer_io;
 pub mod artifact_id;
+pub mod atomic_io;
+pub mod cache_meta;
+pub mod corpus_policy;
+pub mod meeting_gaps;
 pub mod meeting_parse;
 pub mod meeting_report;
 pub mod oral_questions;
@@ -18,6 +21,7 @@ pub mod qrva_text;
 pub mod question_boundaries;
 pub mod report_blocks;
 pub mod report_blocks_io;
+pub mod source_manifest;
 pub mod source_spans;
 pub mod speaker_parse;
 pub mod speech_zones;
@@ -36,24 +40,35 @@ pub use agenda_timeline::{
     AgendaItem, ItemKind, MeetingKind, count_agenda_questions_from_cache, extract_agenda_number,
     looks_like_fr_heading,
 };
-pub use corpus_policy::{
-    CorpusClass, CorpusClassification, POLICY_DOC, classify_meeting,
-    is_procedural_credentials_heading, whole_report_constitutive_from_blocks,
-};
 pub use answer_io::{AnswerDraft, write_answers_parquet};
 pub use artifact_id::{
     BLOCK_PARSER_VERSION, REPORT_BLOCK_EXTRACTOR_VERSION, VOTE_EXTRACTOR_VERSION, artifact_id,
     content_hash, content_hash_bytes,
 };
+pub use atomic_io::{BundlePublisher, write_bytes_atomic, write_text_atomic};
+pub use cache_meta::{
+    CacheMetadata, looks_like_pdf, meta_path_for, now_rfc3339, read_cache_metadata,
+    require_cache_present, touch_checked_at, write_cache_artifact, write_cache_metadata,
+};
+pub use corpus_policy::{
+    CorpusClass, CorpusClassification, POLICY_DOC, classify_meeting,
+    is_procedural_credentials_heading, whole_report_constitutive_from_blocks,
+};
+pub use meeting_gaps::{
+    ACCEPTED_GAP_REASONS, DiscoveryResult, GAP_REASON_NO_RESULT, GAP_REASON_NOT_FOUND,
+    GAP_REASON_UNSUPPORTED_FORMAT, MeetingGapRow, discover_last_from_probes,
+    gap_reason_to_manifest_status, load_prior_gaps, manifest_status_for_parsed,
+    reconcile_meeting_coverage, record_gap, upsert_gap, write_meeting_gaps_parquet,
+};
 pub use meeting_parse::{
     MeetingParseOutput, materialize_commission_source_spans, parse_commission_meeting_report,
     parse_plenary_meeting_report,
 };
-pub use oral_questions::{
-    OralQuestionDraft, extract_questions_from_agenda, normalize_questioner_name,
-};
 pub use meeting_report::{
     extract_utterances_from_blocks, extract_utterances_from_cache, extract_utterances_from_document,
+};
+pub use oral_questions::{
+    OralQuestionDraft, extract_questions_from_agenda, normalize_questioner_name,
 };
 pub use proceeding_entities::{
     HearingDraft, InterpellationDraft, extract_proceedings_from_document,
@@ -78,6 +93,12 @@ pub use report_blocks::{
 };
 pub use report_blocks_io::{
     ReportBlockRow, materialize_report_blocks, write_report_blocks_parquet,
+};
+pub use source_manifest::{
+    MANIFEST_STATUS_NO_RESULT, MANIFEST_STATUS_NOT_FOUND, MANIFEST_STATUS_PARSED,
+    MANIFEST_STATUS_UNSUPPORTED_FORMAT, MANIFEST_STATUSES, SourceManifestRow,
+    is_known_manifest_status, manifest_path, stage_source_manifest, validate_manifest_rows,
+    write_source_manifest,
 };
 pub use source_spans::{
     SourceSpanDraft, SpanValidationOutput, make_artifact_id, span_id, validate_source_spans,

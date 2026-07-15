@@ -125,6 +125,8 @@ Site-native refs (e.g. oral question `Q56001442P`) live in `internal_ids` on que
 
 Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{meeting:03}x.html`
 
+**meeting_gaps.parquet:** `session_id`, `meeting_kind` (`plenary`), `meeting_id`, `reason` (`not_found` | `unsupported_format` | `no_result`), `detail`, `source_url`, `cache_path`, `content_hash`, `fetched_at`, `checked_at` — every id in `1..=last_meeting_id` is either a parsed meetings row or exactly one accepted gap. Trailing discovery 404s are not gaps. Parser failures abort and do not publish. Valid zero-row file when the range is complete.
+
 ### Commission (`data/sessions/56/commission/`)
 
 **meetings.parquet:** `session_id`, `meeting_id`, `date`, `time_of_day`, `start_time`, `end_time`, `commission`, `chair`, `source_url`, `cache_path`
@@ -137,7 +139,7 @@ Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{m
 
 **interpellations.parquet:** `interpellation_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `interpellators`, `respondents`, `topics_nl`, `topics_fr`, `internal_ids`, `dossier_id`, `source_url`, `cache_path`
 
-**meeting_gaps.parquet:** `meeting_id`, `reason` (`not_found` | `parse_failed`), `detail` — ids in `1..=last_meeting_id` with no scraped row; verify against dekamer.be
+**meeting_gaps.parquet:** `session_id`, `meeting_kind` (`commission`), `meeting_id`, `reason` (`not_found` | `unsupported_format` | `no_result`), `detail`, `source_url`, `cache_path`, `content_hash`, `fetched_at`, `checked_at` — ids in `1..=last_meeting_id` with no scraped row; verify against dekamer.be. Trailing discovery 404s are stop signals only. PDF responses are `unsupported_format` (retain cache bytes). `parse_failed` is not a published reason.
 
 Commission report URL pattern: `https://www.dekamer.be/doc/CCRI/html/{session}/ic{meeting:03}x.html`
 
@@ -300,3 +302,14 @@ Command: `just qa`.
 - `data/current_plenary_id.txt` — last known plenary meeting id (discovery only)
 - `data/current_commission_id.txt` — last known commission meeting id
 - `scrapers/cache/sessions/{session}/dossier_ids.txt` — tab-separated dossier ids discovered from plenary refs
+
+## Source manifests (`data/source_manifests/`)
+
+Per-source inventory established by a live scrape (no compatibility shim for pre-manifest caches). Meeting scrapers write:
+
+- `commission_meetings.parquet`
+- `plenary_meetings.parquet`
+
+**Columns:** `source`, `session_id`, `item_kind`, `native_item_id`, `source_url`, `cache_path`, `status` (`parsed` | `no_result` | `not_found` | `unsupported_format`), `row_count` (UINT32), `content_type`, `content_hash`, `fetched_at`, `checked_at`, `run_mode` (`live` | `cache_only`), `detail`
+
+Cache artifacts may also have a sibling `{file}.meta.json` with `source_url`, `content_type`, `content_hash`, `fetched_at`, `checked_at`. Cache-only mode must not mutate these sidecars.

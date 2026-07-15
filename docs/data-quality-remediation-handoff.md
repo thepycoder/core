@@ -566,24 +566,24 @@ Remote absence may be a declared gap. Local cache absence is an incomplete snaps
 
 ### Phase A: safe publication and source manifests
 
-- [ ] Add a small shared cache metadata helper under `scrapers/crawl`.
-- [ ] Store source URL, content type, raw SHA-256, `fetched_at`, and `checked_at` beside cached artifacts.
-- [ ] Do not mutate cache metadata in cache-only mode.
-- [ ] Write candidate cache/data files to temporary sibling paths and rename only after validation.
-- [ ] Publish each scraper’s output bundle atomically; preserve the previous canonical snapshot on failure.
-- [ ] Add canonical `data/source_manifests/<source>.parquet` files.
-- [ ] Include source, session, item kind, native item ID, URL, cache path, status, row count, content type/hash, timestamps, run mode, and detail.
-- [ ] Use manifest status values `parsed`, `no_result`, `not_found`, and `unsupported_format`.
-- [ ] Require a live scrape to establish the new manifest contract; add no compatibility shim for old caches.
+- [x] Add a small shared cache metadata helper under `scrapers/crawl`.
+- [x] Store source URL, content type, raw SHA-256, `fetched_at`, and `checked_at` beside cached artifacts.
+- [x] Do not mutate cache metadata in cache-only mode.
+- [x] Write candidate cache/data files to temporary sibling paths and rename only after validation.
+- [x] Publish each scraper’s output bundle atomically; preserve the previous canonical snapshot on failure.
+- [x] Add canonical `data/source_manifests/<source>.parquet` files.
+- [x] Include source, session, item kind, native item ID, URL, cache path, status, row count, content type/hash, timestamps, run mode, and detail.
+- [x] Use manifest status values `parsed`, `no_result`, `not_found`, and `unsupported_format`.
+- [x] Require a live scrape to establish the new manifest contract; add no compatibility shim for old caches.
 
 ### Phase B: meeting gap parity
 
-- [ ] Generalize the commission gap schema and add `plenary/meeting_gaps.parquet`, including a valid zero-row file.
-- [ ] Use the same columns for both kinds: session, kind, meeting ID, reason, detail, URL, cache, hash, fetched/checked timestamps.
-- [ ] Remove `parse_failed` as an accepted published source condition; parser failures abort.
-- [ ] Reconcile each ID through the confirmed discovery boundary to exactly one parsed row or accepted gap.
-- [ ] Require parsed and gap ID sets to be disjoint.
-- [ ] Publish meeting tables, child entities, derived blocks/spans, dossier ID discovery, and gap manifest as one bundle.
+- [x] Generalize the commission gap schema and add `plenary/meeting_gaps.parquet`, including a valid zero-row file.
+- [x] Use the same columns for both kinds: session, kind, meeting ID, reason, detail, URL, cache, hash, fetched/checked timestamps.
+- [x] Remove `parse_failed` as an accepted published source condition; parser failures abort.
+- [x] Reconcile each ID through the confirmed discovery boundary to exactly one parsed row or accepted gap.
+- [x] Require parsed and gap ID sets to be disjoint.
+- [x] Publish meeting tables, child entities, derived blocks/spans, dossier ID discovery, and gap manifest as one bundle.
 
 Current commission gaps should be reclassified as:
 
@@ -618,26 +618,26 @@ Plenary currently has complete cached and parsed IDs 1-135, so its first gap fil
 
 ### QA TODO
 
-- [ ] Generalize `commission.meeting_gaps` to both meeting kinds.
-- [ ] Add `source.manifest_complete`.
-- [ ] Add `source.cache_metadata` for cache existence/hash and timestamp ordering.
+- [x] Generalize `commission.meeting_gaps` to both meeting kinds.
+- [x] Add `source.manifest_complete`.
+- [x] Add `source.cache_metadata` for cache existence/hash and timestamp ordering.
 - [ ] Add `source.freshness` against documented intervals.
-- [ ] Fail QA details for duplicate manifest keys, unknown statuses, or incomplete inventories.
-- [ ] Keep accepted source gaps as `info`.
-- [ ] Add commissions, remunerations, subdocuments, both gap files, and source manifests to schema QA.
+- [x] Fail QA details for duplicate manifest keys, unknown statuses, or incomplete inventories.
+- [x] Keep accepted source gaps as `info`.
+- [x] Add commissions, remunerations, subdocuments, both gap files, and source manifests to schema QA.
 
 ### Tests
 
-- Interior 404 is retained while discovery continues.
-- Trailing 404 is not a gap.
-- PDF response is `unsupported_format`.
-- 500, timeout, or malformed HTML aborts.
-- Missing expected cache in cache-only mode leaves canonical output hashes unchanged.
-- Commission IDs reconcile to 412 parsed plus eight gaps through ID 420.
-- Plenary 1-135 produces an empty gap file.
-- Live mode refreshes an existing mutable cache.
-- Dossier changes in every formerly omitted field change the fingerprint.
-- Author order alone does not change the fingerprint.
+- [x] Interior 404 is retained while discovery continues.
+- [x] Trailing 404 is not a gap.
+- [x] PDF response is `unsupported_format`.
+- [ ] 500, timeout, or malformed HTML aborts.
+- [x] Missing expected cache in cache-only mode leaves canonical output hashes unchanged.
+- [x] Commission IDs reconcile to 412 parsed plus eight gaps through ID 420.
+- [x] Plenary 1-135 produces an empty gap file.
+- [ ] Live mode refreshes an existing mutable cache.
+- [ ] Dossier changes in every formerly omitted field change the fingerprint.
+- [ ] Author order alone does not change the fingerprint.
 
 ### Acceptance criteria
 

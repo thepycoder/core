@@ -3,13 +3,18 @@ use arrow::datatypes::{DataType, Field, Schema};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::report_blocks::read_report_html;
+use crawl::upsert_gap;
 use crawl::utils::{clean_text, composite_id, max_cached_meeting_id, relative_cache_path};
 use crawl::{
-    AnswerDraft, HearingDraft, InterpellationDraft, MeetingKind, OralQuestionDraft, ReportBlock,
-    ReportBlockRow, SourceSpanDraft, UtteranceDraft, VoteAssemblyOutput,
-    extract_questions_from_agenda, parse_plenary_meeting_report, write_answers_parquet,
-    write_hearings_parquet, write_interpellations_parquet, write_report_blocks_parquet,
-    write_source_spans_parquet, write_utterances_parquet, write_vote_bundle,
+    AnswerDraft, BundlePublisher, GAP_REASON_NOT_FOUND, GAP_REASON_UNSUPPORTED_FORMAT,
+    HearingDraft, InterpellationDraft, MANIFEST_STATUS_PARSED, MeetingGapRow, MeetingKind,
+    OralQuestionDraft, ReportBlock, ReportBlockRow, SourceManifestRow, SourceSpanDraft,
+    UtteranceDraft, VoteAssemblyOutput, content_hash_bytes, extract_questions_from_agenda,
+    gap_reason_to_manifest_status, load_prior_gaps, looks_like_pdf, manifest_path, now_rfc3339,
+    parse_plenary_meeting_report, read_cache_metadata, reconcile_meeting_coverage, record_gap,
+    validate_manifest_rows, write_answers_parquet, write_cache_artifact, write_hearings_parquet,
+    write_interpellations_parquet, write_meeting_gaps_parquet, write_report_blocks_parquet,
+    write_source_manifest, write_source_spans_parquet, write_utterances_parquet, write_vote_bundle,
 };
 use encoding_rs::WINDOWS_1252;
 use http::StatusCode;
@@ -17,7 +22,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{Html, Selector};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
@@ -263,6 +268,23 @@ fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Erro
     )
 }
 
+const MEETING_KIND: &str = "plenary";
+const SOURCE_NAME: &str = "plenary_meetings";
+
+fn meeting_url(session_id: u32, meeting_id: u32) -> String {
+    format!(
+        "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
+        session_id, meeting_id
+    )
+}
+
+fn meeting_cache_file(session_id: u32, meeting_id: u32) -> std::path::PathBuf {
+    cache_dir().join(format!(
+        "sessions/{}/meetings/plenary/{}-{}.html",
+        session_id, session_id, meeting_id
+    ))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
@@ -280,14 +302,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let current_meeting_id: u32 = std::fs::read_to_string(&meeting_id_path)?.trim().parse()?;
 
     let mut web_request_count = 0u32;
+    let gaps_path = session_dir.join("meeting_gaps.parquet");
+    let mut gaps = load_prior_gaps(&gaps_path, session_id, MEETING_KIND)?;
+
     let last_meeting_id = if cache_only() {
         max_cached_meeting_id(session_id, "plenary").unwrap_or(current_meeting_id)
     } else {
-        discover_last_meeting_id(
+        fetch_new_meetings(
             &client,
             session_id,
             current_meeting_id,
             &mut web_request_count,
+            &mut gaps,
         )
         .await?
     };
@@ -319,6 +345,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
     let mut all_answers = Vec::new();
+    let mut parsed_ids = BTreeSet::new();
+    let mut manifest_rows = Vec::new();
+    let run_mode = if cache_only() {
+        SourceManifestRow::run_mode_cache_only()
+    } else {
+        SourceManifestRow::run_mode_live()
+    };
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
@@ -331,27 +364,169 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     meetings_pb.set_message(web_request_count.to_string());
 
-    // Collect dossier ids mentioned within the meetings
     let mut encountered_dossier_ids: HashMap<String, String> = HashMap::new();
 
     for meeting_id in 1..=last_meeting_id {
         meetings_pb.set_message(format!("reqs={} meeting={}", web_request_count, meeting_id));
 
-        let result = if cache_only() {
-            parse_meeting_from_cache(session_id, meeting_id, &mut encountered_dossier_ids).await
-        } else {
-            scrape_meeting(
-                &client,
+        let filepath = meeting_cache_file(session_id, meeting_id);
+        let url = meeting_url(session_id, meeting_id);
+        let rel_cache = relative_cache_path(&filepath, &cache_dir());
+
+        if let Some(gap) = gaps.get(&meeting_id) {
+            if gap.reason == GAP_REASON_NOT_FOUND {
+                push_gap_manifest(&mut manifest_rows, session_id, meeting_id, gap, run_mode);
+                meetings_pb.inc(1);
+                continue;
+            }
+        }
+
+        if !cache_only() && !filepath.exists() && !gaps.contains_key(&meeting_id) {
+            match download_meeting(&client, session_id, meeting_id, &mut web_request_count).await? {
+                DownloadOutcome::NotFound => {
+                    let gap = MeetingGapRow::new(
+                        session_id,
+                        MEETING_KIND,
+                        meeting_id,
+                        GAP_REASON_NOT_FOUND,
+                        "HTTP 404",
+                        &url,
+                        "",
+                    )
+                    .with_timestamps(now_rfc3339(), now_rfc3339());
+                    record_gap(&mut gaps, gap.clone());
+                    push_gap_manifest(&mut manifest_rows, session_id, meeting_id, &gap, run_mode);
+                    meetings_pb.inc(1);
+                    continue;
+                }
+                DownloadOutcome::Saved { is_pdf } | DownloadOutcome::AlreadyCached { is_pdf } => {
+                    if is_pdf {
+                        let raw = std::fs::read(&filepath).unwrap_or_default();
+                        let meta = read_cache_metadata(&filepath)?;
+                        let gap = MeetingGapRow::new(
+                            session_id,
+                            MEETING_KIND,
+                            meeting_id,
+                            GAP_REASON_UNSUPPORTED_FORMAT,
+                            "PDF report (unsupported HTML meeting format)",
+                            &url,
+                            &rel_cache,
+                        )
+                        .with_hashes(content_hash_bytes(&raw))
+                        .with_timestamps(
+                            meta.as_ref()
+                                .map(|m| m.fetched_at.clone())
+                                .unwrap_or_else(now_rfc3339),
+                            meta.as_ref()
+                                .map(|m| m.checked_at.clone())
+                                .unwrap_or_else(now_rfc3339),
+                        );
+                        upsert_gap(&mut gaps, gap.clone());
+                        push_gap_manifest(
+                            &mut manifest_rows,
+                            session_id,
+                            meeting_id,
+                            &gap,
+                            run_mode,
+                        );
+                        meetings_pb.inc(1);
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if filepath.exists() {
+            let raw = std::fs::read(&filepath)?;
+            if looks_like_pdf(&raw) {
+                let meta = read_cache_metadata(&filepath)?;
+                let gap = MeetingGapRow::new(
+                    session_id,
+                    MEETING_KIND,
+                    meeting_id,
+                    GAP_REASON_UNSUPPORTED_FORMAT,
+                    "PDF report (unsupported HTML meeting format)",
+                    &url,
+                    &rel_cache,
+                )
+                .with_hashes(content_hash_bytes(&raw))
+                .with_timestamps(
+                    meta.as_ref()
+                        .map(|m| m.fetched_at.clone())
+                        .unwrap_or_else(now_rfc3339),
+                    meta.as_ref()
+                        .map(|m| m.checked_at.clone())
+                        .unwrap_or_else(now_rfc3339),
+                );
+                upsert_gap(&mut gaps, gap.clone());
+                push_gap_manifest(&mut manifest_rows, session_id, meeting_id, &gap, run_mode);
+                meetings_pb.inc(1);
+                continue;
+            }
+        } else if gaps
+            .get(&meeting_id)
+            .is_some_and(|g| g.reason == GAP_REASON_UNSUPPORTED_FORMAT)
+        {
+            push_gap_manifest(
+                &mut manifest_rows,
                 session_id,
                 meeting_id,
-                &mut web_request_count,
-                &mut encountered_dossier_ids,
+                gaps.get(&meeting_id).unwrap(),
+                run_mode,
+            );
+            meetings_pb.inc(1);
+            continue;
+        } else if !filepath.exists() {
+            return Err(format!(
+                "incomplete snapshot: plenary meeting {meeting_id} cache missing at {} — aborting to preserve prior outputs",
+                filepath.display()
             )
-            .await
-        };
+            .into());
+        }
 
-        match result {
+        match parse_meeting_from_cache(session_id, meeting_id, &mut encountered_dossier_ids).await {
             Ok(output) => {
+                let meta = read_cache_metadata(&filepath)?;
+                let content_hash = meta
+                    .as_ref()
+                    .map(|m| m.content_hash.clone())
+                    .unwrap_or_else(|| {
+                        std::fs::read(&filepath)
+                            .map(|b| content_hash_bytes(&b))
+                            .unwrap_or_default()
+                    });
+                let fetched_at = meta
+                    .as_ref()
+                    .map(|m| m.fetched_at.clone())
+                    .unwrap_or_default();
+                let checked_at = meta
+                    .as_ref()
+                    .map(|m| m.checked_at.clone())
+                    .unwrap_or_default();
+                let content_type = meta
+                    .as_ref()
+                    .map(|m| m.content_type.clone())
+                    .unwrap_or_else(|| "text/html".to_string());
+
+                manifest_rows.push(SourceManifestRow {
+                    source: SOURCE_NAME.into(),
+                    session_id: session_id.to_string(),
+                    item_kind: "meeting".into(),
+                    native_item_id: meeting_id.to_string(),
+                    source_url: url,
+                    cache_path: rel_cache,
+                    status: MANIFEST_STATUS_PARSED.into(),
+                    row_count: 1,
+                    content_type,
+                    content_hash,
+                    fetched_at,
+                    checked_at,
+                    run_mode: run_mode.into(),
+                    detail: String::new(),
+                });
+
+                parsed_ids.insert(meeting_id);
+                gaps.remove(&meeting_id);
                 all_meetings.push(output.meeting);
                 all_questions.extend(output.questions);
                 all_propositions.extend(output.propositions);
@@ -370,31 +545,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 all_answers.extend(output.answers);
             }
             Err(err) => {
-                eprintln!("[meetings-plenary] failed meeting {}: {}", meeting_id, err);
+                return Err(format!(
+                    "plenary meeting {meeting_id} failed parser invariants ({err}) — aborting; not publishing a partial snapshot"
+                )
+                .into());
             }
-        };
+        }
 
         meetings_pb.set_message(web_request_count.to_string());
         meetings_pb.inc(1);
     }
 
-    // Write collected dossier ids
+    meetings_pb.finish_with_message("done");
+
+    gaps.retain(|id, _| *id <= last_meeting_id);
+    reconcile_meeting_coverage(last_meeting_id, &parsed_ids, &gaps)?;
+    let gap_rows: Vec<MeetingGapRow> = gaps.values().cloned().collect();
+    validate_manifest_rows(&manifest_rows)?;
+
     let ids_path = cache_dir().join(format!("sessions/{}/dossier_ids.txt", session_id));
     let mut lines: Vec<String> = encountered_dossier_ids
         .iter()
         .map(|(id, date)| format!("{}\t{}", id, date))
         .collect();
     lines.sort();
-    std::fs::write(&ids_path, lines.join("\n"))?;
 
-    meetings_pb.finish_with_message("done");
+    let derived_dir = data_dir().join(format!("derived/sessions/{session_id}/plenary"));
+    std::fs::create_dir_all(&derived_dir)?;
+    let manifest_final = manifest_path(SOURCE_NAME);
 
-    std::fs::write(&meeting_id_path, last_meeting_id.to_string())?;
-
-    write_meetings(&session_dir.join("meetings.parquet"), &all_meetings)?;
-    write_questions(&session_dir.join("questions.parquet"), &all_questions)?;
-    write_propositions(&session_dir.join("propositions.parquet"), &all_propositions)?;
-    write_notices(&session_dir.join("notices.parquet"), &all_notices)?;
     let vote_bundle = VoteAssemblyOutput {
         decisions: all_vote_decisions,
         results: all_vote_results,
@@ -403,29 +582,104 @@ async fn main() -> Result<(), Box<dyn Error>> {
         span_evidence: all_vote_span_evidence,
         unresolved_events: all_vote_unresolved,
     };
-    write_vote_bundle(&session_dir, &vote_bundle)?;
 
-    let derived_dir = data_dir().join(format!("derived/sessions/{session_id}/plenary"));
-    std::fs::create_dir_all(&derived_dir)?;
-    write_report_blocks_parquet(
-        &derived_dir.join("report_blocks.parquet"),
-        &all_report_blocks,
+    let mut bundle = BundlePublisher::new("plenary-meetings", &data_dir())?;
+    let stage_meetings = bundle.stage_path(&session_dir.join("meetings.parquet"))?;
+    let stage_questions = bundle.stage_path(&session_dir.join("questions.parquet"))?;
+    let stage_propositions = bundle.stage_path(&session_dir.join("propositions.parquet"))?;
+    let stage_notices = bundle.stage_path(&session_dir.join("notices.parquet"))?;
+    let stage_votes = bundle.stage_path(&session_dir.join("votes.parquet"))?;
+    let stage_vote_results = bundle.stage_path(&session_dir.join("vote_results.parquet"))?;
+    let stage_vote_tallies = bundle.stage_path(&session_dir.join("vote_tallies.parquet"))?;
+    let stage_vote_members = bundle.stage_path(&session_dir.join("vote_result_members.parquet"))?;
+    let stage_vote_unresolved =
+        bundle.stage_path(&session_dir.join("vote_unresolved_events.parquet"))?;
+    let stage_hearings = bundle.stage_path(&session_dir.join("hearings.parquet"))?;
+    let stage_interpellations = bundle.stage_path(&session_dir.join("interpellations.parquet"))?;
+    let stage_utterances = bundle.stage_path(&session_dir.join("utterances.parquet"))?;
+    let stage_answers = bundle.stage_path(&session_dir.join("answers.parquet"))?;
+    let stage_gaps = bundle.stage_path(&gaps_path)?;
+    let stage_blocks = bundle.stage_path(&derived_dir.join("report_blocks.parquet"))?;
+    let stage_spans = bundle.stage_path(&derived_dir.join("source_spans.parquet"))?;
+    let stage_manifest = bundle.stage_path(&manifest_final)?;
+    let stage_checkpoint = bundle.stage_path(&meeting_id_path)?;
+    let stage_dossier_ids = bundle.stage_path(&ids_path)?;
+
+    write_meetings(&stage_meetings, &all_meetings)?;
+    write_questions(&stage_questions, &all_questions)?;
+    write_propositions(&stage_propositions, &all_propositions)?;
+    write_notices(&stage_notices, &all_notices)?;
+    // write_vote_bundle writes multiple files into a directory; stage into a temp dir then
+    // map each file.
+    let vote_stage_dir = bundle.staging_root().join("votes");
+    std::fs::create_dir_all(&vote_stage_dir)?;
+    write_vote_bundle(&vote_stage_dir, &vote_bundle)?;
+    std::fs::rename(vote_stage_dir.join("votes.parquet"), &stage_votes)?;
+    std::fs::rename(
+        vote_stage_dir.join("vote_results.parquet"),
+        &stage_vote_results,
     )?;
-    write_source_spans_parquet(&derived_dir.join("source_spans.parquet"), &all_source_spans)?;
-    write_hearings_parquet(&session_dir.join("hearings.parquet"), &all_hearings)?;
-    write_interpellations_parquet(
-        &session_dir.join("interpellations.parquet"),
-        &all_interpellations,
+    std::fs::rename(
+        vote_stage_dir.join("vote_tallies.parquet"),
+        &stage_vote_tallies,
     )?;
-    write_utterances_parquet(&session_dir.join("utterances.parquet"), &all_utterances)?;
-    write_answers_parquet(&session_dir.join("answers.parquet"), &all_answers)?;
+    std::fs::rename(
+        vote_stage_dir.join("vote_result_members.parquet"),
+        &stage_vote_members,
+    )?;
+    std::fs::rename(
+        vote_stage_dir.join("vote_unresolved_events.parquet"),
+        &stage_vote_unresolved,
+    )?;
+    write_hearings_parquet(&stage_hearings, &all_hearings)?;
+    write_interpellations_parquet(&stage_interpellations, &all_interpellations)?;
+    write_utterances_parquet(&stage_utterances, &all_utterances)?;
+    write_answers_parquet(&stage_answers, &all_answers)?;
+    write_meeting_gaps_parquet(&stage_gaps, &gap_rows)?;
+    write_report_blocks_parquet(&stage_blocks, &all_report_blocks)?;
+    write_source_spans_parquet(&stage_spans, &all_source_spans)?;
+    write_source_manifest(&stage_manifest, &manifest_rows)?;
+    std::fs::write(&stage_checkpoint, last_meeting_id.to_string())?;
+    std::fs::write(&stage_dossier_ids, lines.join("\n"))?;
+
+    bundle.commit()?;
 
     println!(
-        "[meetings-plenary] scraped {} meetings using {} web requests",
+        "[meetings-plenary] scraped {} meetings using {} web requests ({} gaps)",
         all_meetings.len(),
-        web_request_count
+        web_request_count,
+        gap_rows.len()
     );
     Ok(())
+}
+
+fn push_gap_manifest(
+    rows: &mut Vec<SourceManifestRow>,
+    session_id: u32,
+    meeting_id: u32,
+    gap: &MeetingGapRow,
+    run_mode: &str,
+) {
+    rows.push(SourceManifestRow {
+        source: SOURCE_NAME.into(),
+        session_id: session_id.to_string(),
+        item_kind: "meeting".into(),
+        native_item_id: meeting_id.to_string(),
+        source_url: gap.source_url.clone(),
+        cache_path: gap.cache_path.clone(),
+        status: gap_reason_to_manifest_status(&gap.reason).into(),
+        row_count: 0,
+        content_type: if gap.reason == GAP_REASON_UNSUPPORTED_FORMAT {
+            "application/pdf".into()
+        } else {
+            String::new()
+        },
+        content_hash: gap.content_hash.clone(),
+        fetched_at: gap.fetched_at.clone(),
+        checked_at: gap.checked_at.clone(),
+        run_mode: run_mode.into(),
+        detail: gap.detail.clone(),
+    });
 }
 
 fn append_source_spans(target: &mut Vec<SourceSpanDraft>, rows: Vec<SourceSpanDraft>) {
@@ -441,57 +695,139 @@ fn record_dossier(map: &mut HashMap<String, String>, id: &str, date: &str) {
     }
 }
 
-async fn discover_last_meeting_id(
+async fn fetch_new_meetings(
     client: &ScrapingClient,
     session_id: u32,
     current_id: u32,
     web_request_count: &mut u32,
+    gaps: &mut BTreeMap<u32, MeetingGapRow>,
 ) -> Result<u32, Box<dyn Error>> {
     let mut last = current_id;
-    loop {
-        let probe = last + 1;
-        let url = format!(
-            "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
-            session_id, probe
-        );
-        let resp = client.get(&url).await?;
-        *web_request_count += 1;
-        if resp.status() == StatusCode::NOT_FOUND {
-            break;
+    let mut consecutive_misses = 0u32;
+    let mut probe = current_id + 1;
+    let mut missing_streak: Vec<u32> = Vec::new();
+
+    while consecutive_misses < 2 {
+        match download_meeting(client, session_id, probe, web_request_count).await? {
+            DownloadOutcome::Saved { is_pdf } | DownloadOutcome::AlreadyCached { is_pdf } => {
+                for miss in missing_streak.drain(..) {
+                    record_gap(
+                        gaps,
+                        MeetingGapRow::new(
+                            session_id,
+                            MEETING_KIND,
+                            miss,
+                            GAP_REASON_NOT_FOUND,
+                            "HTTP 404",
+                            meeting_url(session_id, miss),
+                            "",
+                        )
+                        .with_timestamps(now_rfc3339(), now_rfc3339()),
+                    );
+                }
+                last = probe;
+                consecutive_misses = 0;
+                if is_pdf {
+                    let filepath = meeting_cache_file(session_id, probe);
+                    let rel = relative_cache_path(&filepath, &cache_dir());
+                    let raw = std::fs::read(&filepath).unwrap_or_default();
+                    let meta = read_cache_metadata(&filepath)?;
+                    record_gap(
+                        gaps,
+                        MeetingGapRow::new(
+                            session_id,
+                            MEETING_KIND,
+                            probe,
+                            GAP_REASON_UNSUPPORTED_FORMAT,
+                            "PDF report (unsupported HTML meeting format)",
+                            meeting_url(session_id, probe),
+                            rel,
+                        )
+                        .with_hashes(content_hash_bytes(&raw))
+                        .with_timestamps(
+                            meta.as_ref()
+                                .map(|m| m.fetched_at.clone())
+                                .unwrap_or_else(now_rfc3339),
+                            meta.as_ref()
+                                .map(|m| m.checked_at.clone())
+                                .unwrap_or_else(now_rfc3339),
+                        ),
+                    );
+                }
+                eprintln!("[meetings-plenary] ip{probe:03} → ok (last={last}, pdf={is_pdf})");
+            }
+            DownloadOutcome::NotFound => {
+                missing_streak.push(probe);
+                consecutive_misses += 1;
+                eprintln!(
+                    "[meetings-plenary] ip{probe:03} → 404 ({consecutive_misses}/2 consecutive misses)"
+                );
+            }
         }
-        last = probe;
+        probe += 1;
     }
     Ok(last)
 }
 
-async fn scrape_meeting(
+enum DownloadOutcome {
+    Saved { is_pdf: bool },
+    AlreadyCached { is_pdf: bool },
+    NotFound,
+}
+
+async fn download_meeting(
     client: &ScrapingClient,
     session_id: u32,
     meeting_id: u32,
     web_request_count: &mut u32,
-    encountered_dossier_ids: &mut HashMap<String, String>,
-) -> Result<MeetingOutput, Box<dyn Error>> {
-    let filepath = cache_dir().join(format!(
-        "sessions/{}/meetings/plenary/{}-{}.html",
-        session_id, session_id, meeting_id
-    ));
-    let url = format!(
-        "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
-        session_id, meeting_id
-    );
-
-    if !filepath.exists() {
-        let response = client.get(&url).await?;
-        *web_request_count += 1;
-        let raw_bytes = response.bytes().await?;
-        let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
-        if let Some(parent) = filepath.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&filepath, decoded_str.as_ref())?;
+) -> Result<DownloadOutcome, Box<dyn Error>> {
+    let filepath = meeting_cache_file(session_id, meeting_id);
+    if filepath.exists() {
+        let raw = std::fs::read(&filepath)?;
+        return Ok(DownloadOutcome::AlreadyCached {
+            is_pdf: looks_like_pdf(&raw),
+        });
     }
 
-    parse_meeting_from_cache(session_id, meeting_id, encountered_dossier_ids).await
+    let url = meeting_url(session_id, meeting_id);
+    let response = client.get(&url).await?;
+    *web_request_count += 1;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(DownloadOutcome::NotFound);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "plenary meeting {meeting_id}: unexpected HTTP {} for {url}",
+            response.status()
+        )
+        .into());
+    }
+
+    let content_type = response
+        .headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let raw_bytes = response.bytes().await?;
+    let is_pdf = looks_like_pdf(&raw_bytes)
+        || content_type
+            .to_ascii_lowercase()
+            .contains("application/pdf");
+
+    if is_pdf {
+        write_cache_artifact(&filepath, &raw_bytes, &url, "application/pdf")?;
+        return Ok(DownloadOutcome::Saved { is_pdf: true });
+    }
+
+    let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
+    write_cache_artifact(
+        &filepath,
+        decoded_str.as_ref().as_bytes(),
+        &url,
+        "text/html; charset=windows-1252",
+    )?;
+    Ok(DownloadOutcome::Saved { is_pdf: false })
 }
 
 async fn parse_meeting_from_cache(
@@ -500,10 +836,7 @@ async fn parse_meeting_from_cache(
     encountered_dossier_ids: &mut HashMap<String, String>,
 ) -> Result<MeetingOutput, Box<dyn Error>> {
     let root = cache_dir();
-    let filepath = root.join(format!(
-        "sessions/{}/meetings/plenary/{}-{}.html",
-        session_id, session_id, meeting_id
-    ));
+    let filepath = meeting_cache_file(session_id, meeting_id);
     if !filepath.exists() {
         return Err(format!(
             "meeting {meeting_id} cache missing at {}",
@@ -512,10 +845,7 @@ async fn parse_meeting_from_cache(
         .into());
     }
 
-    let url = format!(
-        "https://www.dekamer.be/doc/PCRI/html/{}/ip{:03}x.html",
-        session_id, meeting_id
-    );
+    let url = meeting_url(session_id, meeting_id);
 
     let cache_path = relative_cache_path(&filepath, &root);
     let content = read_report_html(&filepath)?;
@@ -855,7 +1185,6 @@ async fn extract_notices(
 
     Ok(notices)
 }
-
 
 fn extract_proposition_data(proposition_text: String) -> Result<PropositionData, Box<dyn Error>> {
     if let Some(captures) = proposition_regex().captures(&proposition_text) {

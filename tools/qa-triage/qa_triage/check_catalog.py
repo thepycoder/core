@@ -180,6 +180,18 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="An entity-level warning points at a missing graph node, source-local id, or missing source artifact.",
         measures="Validates nonempty graph_node targets and entity-warning source_artifact_id joins.",
     ),
+    "meeting.gaps": CheckDoc(
+        what="A plenary or commission meeting ID in the discovery range is an accepted remote gap rather than a parsed row.",
+        measures="Surfaces rows from both meeting_gaps.parquet files; fails on disallowed reasons such as legacy parse_failed.",
+    ),
+    "source.manifest_complete": CheckDoc(
+        what="A source inventory manifest is missing, has duplicate keys, or uses an unknown status.",
+        measures="Validates data/source_manifests meeting manifests for status vocabulary and uniqueness.",
+    ),
+    "source.cache_metadata": CheckDoc(
+        what="A parsed or unsupported-format manifest row has inconsistent cache existence, hash, or timestamp ordering.",
+        measures="Joins manifest cache_path/content_hash/timestamps to on-disk files and optional .meta.json sidecars.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

@@ -146,9 +146,17 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A source artifact row in the graph layer has an empty `scraped_at` timestamp.",
             measures: "Scans `graph/source_artifacts.parquet` for blank `scraped_at` values.",
         },
-        "commission.meeting_gaps" => CheckDoc {
-            what: "A commission meeting was discovered in the index but could not be fully scraped or parsed.",
-            measures: "Surfaces rows from `sessions/56/commission/meeting_gaps.parquet` (reason + detail from crawl).",
+        "meeting.gaps" => CheckDoc {
+            what: "A plenary or commission meeting ID in the discovery range is an accepted remote gap rather than a parsed row.",
+            measures: "Surfaces rows from both `meeting_gaps.parquet` files; fails on disallowed reasons such as legacy `parse_failed`.",
+        },
+        "source.manifest_complete" => CheckDoc {
+            what: "A source inventory manifest is missing, has duplicate keys, or uses an unknown status.",
+            measures: "Validates `data/source_manifests/{commission_meetings,plenary_meetings}.parquet` status vocabulary and uniqueness.",
+        },
+        "source.cache_metadata" => CheckDoc {
+            what: "A parsed or unsupported-format manifest row has inconsistent cache existence, hash, or timestamp ordering.",
+            measures: "Joins manifest cache_path/content_hash/timestamps to on-disk files and optional `.meta.json` sidecars.",
         },
         "normalize.unresolved_persons_by_bucket" => CheckDoc {
             what: "Unresolved person names remain after identity resolution, grouped by source bucket and reason.",

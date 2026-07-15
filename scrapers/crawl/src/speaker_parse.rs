@@ -397,15 +397,9 @@ mod tests {
 
     #[test]
     fn base_turn_parts_strips_intervention_digit() {
-        assert_eq!(
-            base_turn_parts("02.150"),
-            Some(("02".to_string(), 15))
-        );
+        assert_eq!(base_turn_parts("02.150"), Some(("02".to_string(), 15)));
         assert_eq!(base_turn_parts("02.15"), Some(("02".to_string(), 15)));
-        assert_eq!(
-            base_turn_parts("02.110"),
-            Some(("02".to_string(), 11))
-        );
+        assert_eq!(base_turn_parts("02.110"), Some(("02".to_string(), 11)));
     }
 
     #[test]

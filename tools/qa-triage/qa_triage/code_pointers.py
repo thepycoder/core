@@ -424,6 +424,42 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Deterministic warning_id and crawl::artifact_id provenance.",
         },
     ],
+    "meeting.gaps": [
+        {
+            "path": "scrapers/crawl/src/meeting_gaps.rs",
+            "symbol": "reconcile_meeting_coverage / discover_last_from_probes",
+            "note": "Shared gap schema; trailing discovery 404s are not gaps; parse_failed is not publishable.",
+        },
+        {
+            "path": "scrapers/qa/src/infrastructure.rs",
+            "symbol": "check_meeting_gaps",
+            "note": "Surfaces plenary and commission gap rows; fails disallowed reasons.",
+        },
+    ],
+    "source.manifest_complete": [
+        {
+            "path": "scrapers/crawl/src/source_manifest.rs",
+            "symbol": "validate_manifest_rows / write_source_manifest",
+            "note": "Closed status vocabulary and unique native item keys.",
+        },
+        {
+            "path": "scrapers/qa/src/infrastructure.rs",
+            "symbol": "check_source_manifest_complete",
+            "note": "QA over data/source_manifests/*.parquet.",
+        },
+    ],
+    "source.cache_metadata": [
+        {
+            "path": "scrapers/crawl/src/cache_meta.rs",
+            "symbol": "write_cache_artifact / CacheMetadata",
+            "note": "Sibling .meta.json with hash and fetched/checked timestamps.",
+        },
+        {
+            "path": "scrapers/qa/src/infrastructure.rs",
+            "symbol": "check_source_cache_metadata",
+            "note": "Joins manifest rows to cache files and sidecars.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

@@ -37,10 +37,7 @@ impl CorpusClass {
 
     /// Whole-report classes where low speech-coverage is expected by policy.
     pub fn suppresses_coverage_warning(self) -> bool {
-        matches!(
-            self,
-            Self::Constitutive | Self::ConstitutiveAdministrative
-        )
+        matches!(self, Self::Constitutive | Self::ConstitutiveAdministrative)
     }
 }
 
@@ -171,7 +168,9 @@ pub fn classify_meeting(
     CATALOG
         .iter()
         .find(|e| {
-            e.session_id == session_id && e.meeting_kind == meeting_kind && e.meeting_id == meeting_id
+            e.session_id == session_id
+                && e.meeting_kind == meeting_kind
+                && e.meeting_id == meeting_id
         })
         .map(|e| CorpusClassification {
             class: e.class,

@@ -456,7 +456,10 @@ mod tests {
         use std::collections::BTreeSet;
 
         let numbers = BTreeSet::from([1, 2, 4, 10]);
-        assert_eq!(numeric_sequence_gaps_from_one(&numbers), vec![3, 5, 6, 7, 8, 9]);
+        assert_eq!(
+            numeric_sequence_gaps_from_one(&numbers),
+            vec![3, 5, 6, 7, 8, 9]
+        );
     }
 
     #[test]
