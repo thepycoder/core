@@ -5,17 +5,23 @@ use chrono::NaiveDate;
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::{dutch_language_to_language_code, dutch_month_to_number, relative_cache_path};
+use crawl::{
+    BundlePublisher, MANIFEST_STATUS_PARSED, SourceManifestRow, content_hash_bytes, manifest_path,
+    now_rfc3339, read_cache_metadata, require_cache_present, touch_checked_at,
+    validate_manifest_rows, write_cache_artifact, write_source_manifest,
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
-use std::fs::{File, read_to_string};
+use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, LazyLock, OnceLock};
-use tokio::fs;
+
+const SOURCE_NAME: &str = "members";
 
 /// REGEXES
 static REGEX_FRACTION: LazyLock<Regex> =
@@ -109,11 +115,29 @@ struct MemberKey {
     last_name: String,
 }
 
+/// One unique index row after dedup (inventory key for reconciliation).
+struct IndexEntry {
+    /// Stable inventory key: cvview key from index href when present, else reordered name.
+    expected_key: String,
+    session_id: i32,
+    active: bool,
+    name: String,
+    first_name: String,
+    last_name: String,
+    detail_href: String,
+    fraction: String,
+    email: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
-    let client = ScrapingClient::new();
+    let run_mode = if cache_only() {
+        SourceManifestRow::run_mode_cache_only()
+    } else {
+        SourceManifestRow::run_mode_live()
+    };
 
     // NOTE: Page 56 here is not the same as 'today', so for session 56 we also add today.
     // This is needed to determine the active/inactive state of the members.
@@ -136,50 +160,112 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let members_path = data_dir().join("sessions/56/members.parquet");
-    fs::create_dir_all(members_path.parent().unwrap()).await?;
+    std::fs::create_dir_all(members_path.parent().unwrap())?;
+
+    let client = if cache_only() {
+        None
+    } else {
+        Some(ScrapingClient::new())
+    };
 
     let mut seen: HashSet<(i32, u64)> = HashSet::new();
+    let mut expected_keys: BTreeSet<String> = BTreeSet::new();
+    let mut output_keys: BTreeSet<String> = BTreeSet::new();
     let mut all_members: Vec<ScrapedMember> = Vec::new();
+    let mut manifest_rows: Vec<SourceManifestRow> = Vec::new();
     let mut web_request_count = 0u32;
 
     for ((session_id, active), url) in &sessions {
+        let index_label = if *active { "active" } else { "all" };
         let index_path = cache_dir().join(format!(
             "sessions/{}/members/{}.html",
-            session_id,
-            if *active { "active" } else { "all" }
+            session_id, index_label
         ));
 
-        if !index_path.exists() {
-            if cache_only() {
-                return Err(format!(
-                    "members list cache missing at {} (SCRAPER_CACHE_ONLY)",
-                    index_path.display()
-                )
-                .into());
-            }
-            let content = client.get(url).await?.text().await?;
-            web_request_count += 1;
-            fs::create_dir_all(index_path.parent().unwrap()).await?;
-            fs::write(&index_path, &content).await?;
-        }
-
-        let content = read_to_string(&index_path)?;
-        let document = Html::parse_document(&content);
-
-        let mut members = extract_members(
-            &client,
-            document,
-            (*session_id, *active),
-            &mut seen,
+        fetch_or_verify_html(
+            client.as_ref(),
+            &index_path,
+            url,
+            &format!("members {index_label} index"),
             &mut web_request_count,
         )
         .await?;
 
+        let content = std::fs::read_to_string(&index_path)?;
+        let document = Html::parse_document(&content);
+        let rel_index = relative_cache_path(&index_path, &cache_dir());
+
+        let index_meta = read_cache_metadata(&index_path)?;
+        let index_hash = index_meta
+            .as_ref()
+            .map(|m| m.content_hash.clone())
+            .unwrap_or_else(|| content_hash_bytes(content.as_bytes()));
+        let index_fetched = index_meta
+            .as_ref()
+            .map(|m| m.fetched_at.clone())
+            .unwrap_or_else(now_rfc3339);
+        let index_checked = index_meta
+            .as_ref()
+            .map(|m| m.checked_at.clone())
+            .unwrap_or_else(now_rfc3339);
+
+        let entries = collect_index_entries(&document, *session_id, *active, &mut seen);
+        for entry in &entries {
+            expected_keys.insert(entry.expected_key.clone());
+        }
+
+        manifest_rows.push(SourceManifestRow {
+            source: SOURCE_NAME.into(),
+            session_id: session_id.to_string(),
+            item_kind: "index".into(),
+            native_item_id: index_label.into(),
+            source_url: url.clone(),
+            cache_path: rel_index,
+            status: MANIFEST_STATUS_PARSED.into(),
+            row_count: entries.len() as u32,
+            content_type: "text/html".into(),
+            content_hash: index_hash,
+            fetched_at: index_fetched,
+            checked_at: index_checked,
+            run_mode: run_mode.into(),
+            detail: String::new(),
+        });
+
+        let mut members = scrape_member_details(
+            client.as_ref(),
+            &entries,
+            &mut web_request_count,
+            &mut manifest_rows,
+            &mut output_keys,
+            run_mode,
+        )
+        .await?;
         all_members.append(&mut members);
     }
 
+    if output_keys != expected_keys {
+        let missing: Vec<_> = expected_keys.difference(&output_keys).cloned().collect();
+        let extra: Vec<_> = output_keys.difference(&expected_keys).cloned().collect();
+        return Err(format!(
+            "members inventory mismatch: expected {} keys, got {}; missing={:?} extra={:?}",
+            expected_keys.len(),
+            output_keys.len(),
+            missing,
+            extra
+        )
+        .into());
+    }
+
     // append_hardcoded_members(&mut all_members, &mut seen);
-    write_parquet(&members_path, &all_members)?;
+    validate_manifest_rows(&manifest_rows)?;
+
+    let manifest_final = manifest_path(SOURCE_NAME);
+    let mut bundle = BundlePublisher::new("members", &data_dir())?;
+    let stage_parquet = bundle.stage_path(&members_path)?;
+    let stage_manifest = bundle.stage_path(&manifest_final)?;
+    write_parquet(&stage_parquet, &all_members)?;
+    write_source_manifest(&stage_manifest, &manifest_rows)?;
+    bundle.commit()?;
 
     println!(
         "[members] scraped {} members using {} web requests",
@@ -187,6 +273,226 @@ async fn main() -> Result<(), Box<dyn Error>> {
         web_request_count
     );
     Ok(())
+}
+
+async fn fetch_or_verify_html(
+    client: Option<&ScrapingClient>,
+    cache_path: &Path,
+    url: &str,
+    label: &str,
+    web_request_count: &mut u32,
+) -> Result<(), Box<dyn Error>> {
+    if cache_only() {
+        require_cache_present(cache_path, label)?;
+        return Ok(());
+    }
+    let client = client.ok_or("ScrapingClient required in live mode")?;
+    let html = client.get(url).await?.text().await?;
+    *web_request_count += 1;
+    let bytes = html.as_bytes();
+    if cache_path.exists() {
+        let existing = std::fs::read(cache_path)?;
+        if existing.as_slice() == bytes {
+            touch_checked_at(cache_path)?;
+        } else {
+            write_cache_artifact(cache_path, bytes, url, "text/html")?;
+        }
+    } else {
+        write_cache_artifact(cache_path, bytes, url, "text/html")?;
+    }
+    Ok(())
+}
+
+fn collect_index_entries(
+    index_document: &Html,
+    session_id: i32,
+    active: bool,
+    seen: &mut HashSet<(i32, u64)>,
+) -> Vec<IndexEntry> {
+    let mut entries = Vec::new();
+
+    for row in index_document.select(&selector_tr()) {
+        let raw_name = match extract_from_row(&row, &selector_name(), None) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let name = reorder_name(raw_name);
+        let (first_name, last_name) = split_name(&name);
+
+        let dedup_id = calculate_hash(&MemberKey {
+            session_id,
+            first_name: first_name.clone(),
+            last_name: last_name.clone(),
+        });
+        if !seen.insert((session_id, dedup_id)) {
+            continue;
+        }
+
+        let detail_href = extract_from_row(&row, &selector_detail_page_link(), Some("href"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let fraction = extract_from_row(&row, &selector_fraction(), None)
+            .unwrap_or_default()
+            .to_lowercase();
+        let email = extract_from_row(&row, &selector_email(), None)
+            .map(|e| e.chars().rev().collect::<String>())
+            .unwrap_or_default();
+
+        let expected_key = native_key_from_href(&detail_href).unwrap_or_else(|| name.clone());
+
+        entries.push(IndexEntry {
+            expected_key,
+            session_id,
+            active,
+            name,
+            first_name,
+            last_name,
+            detail_href,
+            fraction,
+            email,
+        });
+    }
+
+    entries
+}
+
+async fn scrape_member_details(
+    client: Option<&ScrapingClient>,
+    entries: &[IndexEntry],
+    web_request_count: &mut u32,
+    manifest_rows: &mut Vec<SourceManifestRow>,
+    output_keys: &mut BTreeSet<String>,
+    run_mode: &str,
+) -> Result<Vec<ScrapedMember>, Box<dyn Error>> {
+    let mut members = Vec::new();
+
+    let pb = ProgressBar::new(entries.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "[members] [{elapsed_precise}] {spinner:.blue} {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}",
+        )?
+        .tick_chars("⠋⠙⠹⠼⠴⠦⠧⠇⠏"),
+    );
+
+    for entry in entries {
+        pb.set_message(format!(
+            "reqs={} session={} member={}",
+            web_request_count, entry.session_id, entry.name
+        ));
+
+        let detail_path = cache_dir().join(format!(
+            "sessions/{}/members/{}/details.html",
+            entry.session_id, entry.name
+        ));
+        let detail_url = format!("https://www.dekamer.be/kvvcr/{}", entry.detail_href);
+
+        fetch_or_verify_html(
+            client,
+            &detail_path,
+            &detail_url,
+            &format!("member detail {}", entry.name),
+            web_request_count,
+        )
+        .await?;
+
+        let detail_cache_path = relative_cache_path(&detail_path, &cache_dir());
+        let content = std::fs::read_to_string(&detail_path)?;
+        let detail = Html::parse_document(&content);
+
+        let member_id = extract_member_key(&detail).unwrap_or_default();
+        let native_item_id = if !member_id.is_empty() {
+            member_id.clone()
+        } else {
+            entry.name.clone()
+        };
+        output_keys.insert(entry.expected_key.clone());
+
+        // Extract the representative paragraph
+        let paragraph: Option<String> = detail
+            .select(&selector_p())
+            .find(|el| {
+                el.text().any(|t| {
+                    t.contains("olksvertegenwoordiger")
+                        && (t.contains("arrondissement") || t.contains("kieskring"))
+                })
+            })
+            .map(|el| el.text().collect());
+
+        let language = extract_sibling_text(&detail, "Taal")
+            .and_then(|l| dutch_language_to_language_code(l.as_str()).map(str::to_string))
+            .map(|c| c.to_ascii_lowercase())
+            .unwrap_or_default();
+
+        let fraction = if entry.fraction.is_empty() {
+            extract_fraction(paragraph.as_deref())
+        } else {
+            entry.fraction.clone()
+        };
+
+        let meta = read_cache_metadata(&detail_path)?;
+        let content_hash = meta
+            .as_ref()
+            .map(|m| m.content_hash.clone())
+            .unwrap_or_else(|| content_hash_bytes(content.as_bytes()));
+        let fetched_at = meta
+            .as_ref()
+            .map(|m| m.fetched_at.clone())
+            .unwrap_or_else(now_rfc3339);
+        let checked_at = meta
+            .as_ref()
+            .map(|m| m.checked_at.clone())
+            .unwrap_or_else(now_rfc3339);
+        let content_type = meta
+            .as_ref()
+            .map(|m| m.content_type.clone())
+            .unwrap_or_else(|| "text/html".to_string());
+
+        manifest_rows.push(SourceManifestRow {
+            source: SOURCE_NAME.into(),
+            session_id: entry.session_id.to_string(),
+            item_kind: "member".into(),
+            native_item_id,
+            source_url: detail_url.clone(),
+            cache_path: detail_cache_path.clone(),
+            status: MANIFEST_STATUS_PARSED.into(),
+            row_count: 1,
+            content_type,
+            content_hash,
+            fetched_at,
+            checked_at,
+            run_mode: run_mode.into(),
+            detail: String::new(),
+        });
+
+        members.push(ScrapedMember {
+            member_id,
+            session_id: entry.session_id,
+            first_name: entry.first_name.clone(),
+            last_name: entry.last_name.clone(),
+            date_of_birth: extract_birth_date(&detail),
+            place_of_birth: extract_birth_place(&detail),
+            language,
+            constituency: extract_constituency(paragraph.as_deref()),
+            fraction,
+            email: entry.email.clone(),
+            active: entry.active,
+            start: extract_start_date(&detail),
+            source_url: detail_url,
+            cache_path: detail_cache_path,
+        });
+
+        pb.inc(1);
+    }
+
+    pb.finish_with_message("done");
+    Ok(members)
+}
+
+fn native_key_from_href(href: &str) -> Option<String> {
+    REGEX_MEMBER_KEY
+        .captures(href)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 fn write_parquet(path: &Path, members: &[ScrapedMember]) -> Result<(), Box<dyn Error>> {
@@ -247,148 +553,6 @@ fn write_parquet(path: &Path, members: &[ScrapedMember]) -> Result<(), Box<dyn E
     writer.write(&batch)?;
     writer.close()?;
     Ok(())
-}
-
-async fn extract_members(
-    client: &ScrapingClient,
-    index_document: Html,
-    session_info: (i32, bool),
-    seen: &mut HashSet<(i32, u64)>,
-    web_request_count: &mut u32,
-) -> Result<Vec<ScrapedMember>, Box<dyn Error>> {
-    let (session_id, active) = session_info;
-
-    let total_rows = index_document.select(&selector_tr()).count();
-    let mut members = Vec::new();
-
-    let pb = ProgressBar::new(total_rows as u64);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "[members] [{elapsed_precise}] {spinner:.blue} {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}",
-        )?
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
-    );
-
-    pb.set_message(format!(
-        "reqs={} session {} ({})",
-        web_request_count,
-        session_id,
-        if active { "active" } else { "all" }
-    ));
-
-    // Extract data from rows of members
-    for row in index_document.select(&selector_tr()) {
-        // Skip rows that don't have a member link.
-        let raw_name = match extract_from_row(&row, &selector_name(), None) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        let name = reorder_name(raw_name);
-        pb.set_message(format!(
-            "reqs={} session={} member={}",
-            web_request_count, session_id, name
-        ));
-        let (first_name, last_name) = split_name(&name);
-
-        // Dedup check before any I/O.
-        let member_id = calculate_hash(&MemberKey {
-            session_id,
-            first_name: first_name.clone(),
-            last_name: last_name.clone(),
-        });
-        if !seen.insert((session_id, member_id)) {
-            continue;
-        }
-
-        let member_detail_page_link =
-            extract_from_row(&row, &selector_detail_page_link(), Some("href"))
-                .unwrap_or_else(|| "unknown".to_string());
-        let fraction = extract_from_row(&row, &selector_fraction(), None)
-            .unwrap_or_default()
-            .to_lowercase();
-        let email = extract_from_row(&row, &selector_email(), None)
-            .map(|e| e.chars().rev().collect::<String>())
-            .unwrap_or_default();
-
-        // Load / cache the member detail page.
-        let detail_path = cache_dir().join(format!(
-            "sessions/{}/members/{}/details.html",
-            session_id, name
-        ));
-        if !detail_path.exists() {
-            if cache_only() {
-                eprintln!(
-                    "[members] skipping {} — detail cache missing (SCRAPER_CACHE_ONLY)",
-                    name
-                );
-                continue;
-            }
-            let url = format!("https://www.dekamer.be/kvvcr/{}", member_detail_page_link);
-            let content = client.get(&url).await?.text().await?;
-            *web_request_count += 1;
-            fs::create_dir_all(detail_path.parent().unwrap()).await?;
-            fs::write(&detail_path, &content).await?;
-        }
-
-        let detail_url = format!("https://www.dekamer.be/kvvcr/{}", member_detail_page_link);
-        let detail_cache_path = relative_cache_path(&detail_path, &cache_dir());
-
-        // Read detail page
-        let content = read_to_string(&detail_path)?;
-        let detail = Html::parse_document(&content);
-
-        let member_id = extract_member_key(&detail).unwrap_or_default();
-
-        // Extract the representative paragraph
-        let paragraph: Option<String> = detail
-            .select(&selector_p())
-            .find(|el| {
-                el.text().any(|t| {
-                    t.contains("olksvertegenwoordiger")
-                        && (t.contains("arrondissement") || t.contains("kieskring"))
-                })
-            })
-            .map(|el| el.text().collect());
-
-        let language = extract_sibling_text(&detail, "Taal")
-            .and_then(|l| dutch_language_to_language_code(l.as_str()).map(str::to_string))
-            .map(|c| c.to_ascii_lowercase())
-            .unwrap_or_default();
-
-        let fraction = if fraction.is_empty() {
-            extract_fraction(paragraph.as_deref())
-        } else {
-            fraction
-        };
-
-        members.push(ScrapedMember {
-            member_id,
-            session_id,
-            first_name,
-            last_name,
-            date_of_birth: extract_birth_date(&detail),
-            place_of_birth: extract_birth_place(&detail),
-            language,
-            constituency: extract_constituency(paragraph.as_deref()),
-            fraction,
-            email,
-            active,
-            start: extract_start_date(&detail),
-            source_url: detail_url,
-            cache_path: detail_cache_path,
-        });
-
-        pb.inc(1);
-    }
-
-    pb.finish_with_message(format!(
-        "session {} ({}) done",
-        session_id,
-        if active { "active" } else { "all" }
-    ));
-
-    Ok(members)
 }
 
 fn extract_fraction(paragraph: Option<&str>) -> String {

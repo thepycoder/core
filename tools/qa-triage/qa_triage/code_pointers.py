@@ -460,6 +460,18 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Joins manifest rows to cache files and sidecars.",
         },
     ],
+    "source.freshness": [
+        {
+            "path": "scrapers/crawl/src/freshness.rs",
+            "symbol": "FRESHNESS_POLICIES",
+            "note": "Documented max_age_days per mutable source.",
+        },
+        {
+            "path": "scrapers/qa/src/infrastructure.rs",
+            "symbol": "check_source_freshness",
+            "note": "Warns when oldest checked_at exceeds policy.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

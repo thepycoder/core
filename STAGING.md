@@ -305,11 +305,16 @@ Command: `just qa`.
 
 ## Source manifests (`data/source_manifests/`)
 
-Per-source inventory established by a live scrape (no compatibility shim for pre-manifest caches). Meeting scrapers write:
+Per-source inventory established by a live scrape (no compatibility shim for pre-manifest caches). Produced by:
 
-- `commission_meetings.parquet`
-- `plenary_meetings.parquet`
+- `commission_meetings.parquet` / `plenary_meetings.parquet`
+- `sessions.parquet` / `members.parquet` / `commissions.parquet`
+- `lobby.parquet` / `remunerations.parquet` / `dossiers.parquet`
 
 **Columns:** `source`, `session_id`, `item_kind`, `native_item_id`, `source_url`, `cache_path`, `status` (`parsed` | `no_result` | `not_found` | `unsupported_format`), `row_count` (UINT32), `content_type`, `content_hash`, `fetched_at`, `checked_at`, `run_mode` (`live` | `cache_only`), `detail`
 
 Cache artifacts may also have a sibling `{file}.meta.json` with `source_url`, `content_type`, `content_hash`, `fetched_at`, `checked_at`. Cache-only mode must not mutate these sidecars.
+
+**Freshness policies** (`scrapers/crawl/src/freshness.rs`): sessions/members/commissions/dossiers ≤ 7 days; lobby/remunerations ≤ 30 days (oldest `checked_at` in the manifest). Terminal dossiers are rechecked every 90 days.
+
+**Dossier cache versions:** `{session}_{id}_{YYYYMMDDTHHMMSSZ}_{hash8}.html` under `cache/sessions/{session}/dossiers/`; old versions retained; newest selected deterministically. Authoritative inventory: `cache/sessions/{session}/dossier_inventory.tsv`.

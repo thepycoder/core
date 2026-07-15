@@ -1,8 +1,8 @@
 use crate::types::CheckDetail;
 use crawl::paths::cache_dir;
 use crawl::{
-    ACCEPTED_GAP_REASONS, MANIFEST_STATUSES, is_known_manifest_status, meta_path_for,
-    read_cache_metadata,
+    ACCEPTED_GAP_REASONS, FRESHNESS_POLICIES, MANIFEST_STATUSES, days_between_rfc3339,
+    is_known_manifest_status, meta_path_for, now_rfc3339, read_cache_metadata,
 };
 use identity::parquet_io::{read_all_rows, read_string_column};
 use normalize::SESSION_ID;
@@ -16,6 +16,7 @@ pub fn run_infrastructure_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Bo
     details.extend(check_meeting_gaps(data_dir)?);
     details.extend(check_source_manifest_complete(data_dir)?);
     details.extend(check_source_cache_metadata(data_dir)?);
+    details.extend(check_source_freshness(data_dir)?);
     details.extend(check_unresolved_rollup(data_dir)?);
     details.extend(check_cache_exists(data_dir)?);
     Ok(details)
@@ -131,7 +132,16 @@ fn check_meeting_gaps(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
 fn check_source_manifest_complete(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
     let mut details = Vec::new();
     let manifest_dir = data_dir.join("source_manifests");
-    let expected = ["commission_meetings", "plenary_meetings"];
+    let expected = [
+        "commission_meetings",
+        "plenary_meetings",
+        "sessions",
+        "members",
+        "commissions",
+        "lobby",
+        "remunerations",
+        "dossiers",
+    ];
 
     for source in expected {
         let path = manifest_dir.join(format!("{source}.parquet"));
@@ -195,6 +205,67 @@ fn check_source_manifest_complete(data_dir: &Path) -> Result<Vec<CheckDetail>, B
                         .with_entity("manifest_row", &format!("{}:{}", sources[i], ids[i])),
                     );
                 }
+            }
+        }
+    }
+    Ok(details)
+}
+
+fn check_source_freshness(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
+    let mut details = Vec::new();
+    let manifest_dir = data_dir.join("source_manifests");
+    let now = now_rfc3339();
+
+    for policy in FRESHNESS_POLICIES {
+        let path = manifest_dir.join(format!("{}.parquet", policy.source));
+        if !path.exists() {
+            continue;
+        }
+
+        let mut oldest_checked = String::new();
+        for batch in read_all_rows(&path)? {
+            let checked = read_string_column(&batch, "checked_at")?;
+            for ts in checked {
+                if ts.trim().is_empty() {
+                    continue;
+                }
+                if oldest_checked.is_empty() || ts.as_str() < oldest_checked.as_str() {
+                    oldest_checked = ts;
+                }
+            }
+        }
+
+        if oldest_checked.is_empty() {
+            details.push(
+                CheckDetail::new(
+                    "source.freshness",
+                    "warn",
+                    "warn",
+                    format!(
+                        "source {} manifest has no checked_at timestamps",
+                        policy.source
+                    ),
+                )
+                .with_entity("source", policy.source),
+            );
+            continue;
+        }
+
+        if let Some(age) = days_between_rfc3339(&oldest_checked, &now) {
+            if age > policy.max_age_days {
+                details.push(
+                    CheckDetail::new(
+                        "source.freshness",
+                        "warn",
+                        "warn",
+                        format!(
+                            "source {} oldest checked_at is {age} days ago (policy max {})",
+                            policy.source, policy.max_age_days
+                        ),
+                    )
+                    .with_entity("source", policy.source)
+                    .with_values(policy.max_age_days.to_string(), age.to_string()),
+                );
             }
         }
     }

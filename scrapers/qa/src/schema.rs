@@ -147,6 +147,42 @@ fn staging_tables() -> Vec<TableSpec> {
             id_columns: vec!["native_item_id".into()],
             required_columns: vec!["source".into(), "status".into()],
         },
+        TableSpec {
+            rel_path: "source_manifests/sessions.parquet".into(),
+            table_name: "manifest_sessions".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/members.parquet".into(),
+            table_name: "manifest_members".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/commissions.parquet".into(),
+            table_name: "manifest_commissions".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/lobby.parquet".into(),
+            table_name: "manifest_lobby".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/remunerations.parquet".into(),
+            table_name: "manifest_remunerations".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
+        TableSpec {
+            rel_path: "source_manifests/dossiers.parquet".into(),
+            table_name: "manifest_dossiers".into(),
+            id_columns: vec!["native_item_id".into()],
+            required_columns: vec!["source".into(), "status".into()],
+        },
     ]
 }
 

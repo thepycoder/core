@@ -175,10 +175,7 @@ fn slice_byte_range(line: &str, start: usize, end: Option<usize>) -> String {
     if start >= end || start >= line.len() {
         return String::new();
     }
-    line.get(start..end)
-        .unwrap_or("")
-        .trim()
-        .to_string()
+    line.get(start..end).unwrap_or("").trim().to_string()
 }
 
 fn byte_index_at_or_before(text: &str, byte_index: usize) -> usize {
@@ -389,7 +386,10 @@ AB InBev                        Aron Wils                brouwen, verkoop en mar
         let entries = extract_lobby_from_layout(&text, LOBBY_PDF_URL, "lobby/lobbyregister.pdf")
             .expect("parse lobby pdf");
 
-        let agoria = entries.iter().find(|row| row.name == "Agoria").expect("Agoria");
+        let agoria = entries
+            .iter()
+            .find(|row| row.name == "Agoria")
+            .expect("Agoria");
         assert!(!agoria.interests.contains("www."));
         assert!(agoria.contacts.contains("Beatrice Vanden Abeele"));
 
@@ -400,7 +400,10 @@ AB InBev                        Aron Wils                brouwen, verkoop en mar
         assert!(at.contacts.contains("André Roelandt"));
         assert!(at.interests.contains("bureau d’études"));
 
-        let bleed = entries.iter().filter(|row| row.interests.contains("www.")).count();
+        let bleed = entries
+            .iter()
+            .filter(|row| row.interests.contains("www."))
+            .count();
         assert_eq!(bleed, 0, "expected zero interests column URL bleed");
     }
 }

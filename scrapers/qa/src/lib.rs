@@ -294,6 +294,7 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "meeting.gaps",
         "source.manifest_complete",
         "source.cache_metadata",
+        "source.freshness",
         "normalize.unresolved_persons_by_bucket",
         "source.cache_exists",
         "agenda.entity_count_vs_parquet",

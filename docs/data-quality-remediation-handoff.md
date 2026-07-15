@@ -596,32 +596,32 @@ Plenary currently has complete cached and parsed IDs 1-135, so its first gap fil
 
 ### Phase C: refresh mutable sources
 
-- [ ] In live mode, refresh/verify session, member, commission, lobby, and remuneration sources even when cache files exist.
-- [ ] Reserve no-network behavior for `SCRAPER_CACHE_ONLY=1`.
-- [ ] Members: build expected native keys from active/all indexes and require one detail/result per key.
-- [ ] Commissions: require output keys to equal index keys.
-- [ ] Lobby: validate HTTP success and PDF signature before replacing the previous cache; parse candidate before promotion.
-- [ ] Remunerations: separate browser fetching from cache parsing, require the complete member/year query matrix, and distinguish explicit no-result from missing cache.
-- [ ] Include the latest completed year rather than ending permanently at 2024.
+- [x] In live mode, refresh/verify session, member, commission, lobby, and remuneration sources even when cache files exist.
+- [x] Reserve no-network behavior for `SCRAPER_CACHE_ONLY=1`.
+- [x] Members: build expected native keys from active/all indexes and require one detail/result per key.
+- [x] Commissions: require output keys to equal index keys.
+- [x] Lobby: validate HTTP success and PDF signature before replacing the previous cache; parse candidate before promotion.
+- [x] Remunerations: separate browser fetching from cache parsing, require the complete member/year query matrix, and distinguish explicit no-result from missing cache.
+- [x] Include the latest completed year rather than ending permanently at 2024.
 
 ### Phase D: dossier freshness
 
-- [ ] Use the authoritative discovered dossier ID set, not directory scanning, as cache-only inventory.
-- [ ] Remove permanent exemption for terminal dossiers; use a finite slower refresh interval.
-- [ ] Separate `checked_at` from raw-file mtime.
-- [ ] Include every output-relevant field in the fingerprint: title, authors, dates, type, status, Eurovoc, and all subdocument IDs/dates/types/authors/file URLs.
-- [ ] Sort multi-value fields before hashing so source-order-only changes are stable.
-- [ ] Retain old raw versions instead of deleting them.
-- [ ] Select the newest cached version deterministically.
-- [ ] Use timestamp/content-hash suffixes to avoid same-day collisions.
-- [ ] Require discovered IDs, manifest IDs, dossier rows, and subdocument FKs to reconcile before publication.
+- [x] Use the authoritative discovered dossier ID set, not directory scanning, as cache-only inventory.
+- [x] Remove permanent exemption for terminal dossiers; use a finite slower refresh interval.
+- [x] Separate `checked_at` from raw-file mtime.
+- [x] Include every output-relevant field in the fingerprint: title, authors, dates, type, status, Eurovoc, and all subdocument IDs/dates/types/authors/file URLs.
+- [x] Sort multi-value fields before hashing so source-order-only changes are stable.
+- [x] Retain old raw versions instead of deleting them.
+- [x] Select the newest cached version deterministically.
+- [x] Use timestamp/content-hash suffixes to avoid same-day collisions.
+- [x] Require discovered IDs, manifest IDs, dossier rows, and subdocument FKs to reconcile before publication.
 
 ### QA TODO
 
 - [x] Generalize `commission.meeting_gaps` to both meeting kinds.
 - [x] Add `source.manifest_complete`.
 - [x] Add `source.cache_metadata` for cache existence/hash and timestamp ordering.
-- [ ] Add `source.freshness` against documented intervals.
+- [x] Add `source.freshness` against documented intervals.
 - [x] Fail QA details for duplicate manifest keys, unknown statuses, or incomplete inventories.
 - [x] Keep accepted source gaps as `info`.
 - [x] Add commissions, remunerations, subdocuments, both gap files, and source manifests to schema QA.
@@ -635,9 +635,9 @@ Plenary currently has complete cached and parsed IDs 1-135, so its first gap fil
 - [x] Missing expected cache in cache-only mode leaves canonical output hashes unchanged.
 - [x] Commission IDs reconcile to 412 parsed plus eight gaps through ID 420.
 - [x] Plenary 1-135 produces an empty gap file.
-- [ ] Live mode refreshes an existing mutable cache.
-- [ ] Dossier changes in every formerly omitted field change the fingerprint.
-- [ ] Author order alone does not change the fingerprint.
+- [x] Live mode refreshes an existing mutable cache.
+- [x] Dossier changes in every formerly omitted field change the fingerprint.
+- [x] Author order alone does not change the fingerprint.
 
 ### Acceptance criteria
 

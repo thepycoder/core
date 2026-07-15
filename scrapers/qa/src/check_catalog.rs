@@ -158,6 +158,10 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A parsed or unsupported-format manifest row has inconsistent cache existence, hash, or timestamp ordering.",
             measures: "Joins manifest cache_path/content_hash/timestamps to on-disk files and optional `.meta.json` sidecars.",
         },
+        "source.freshness" => CheckDoc {
+            what: "A mutable source manifest has not been checked within its documented refresh interval.",
+            measures: "Compares oldest checked_at in each source_manifests/*.parquet against crawl::FRESHNESS_POLICIES max_age_days.",
+        },
         "normalize.unresolved_persons_by_bucket" => CheckDoc {
             what: "Unresolved person names remain after identity resolution, grouped by source bucket and reason.",
             measures: "Rolls up `normalized/unresolved_persons.parquet` counts per (`source_bucket`, `reason`).",

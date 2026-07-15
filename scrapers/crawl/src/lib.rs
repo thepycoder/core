@@ -9,6 +9,7 @@ pub mod artifact_id;
 pub mod atomic_io;
 pub mod cache_meta;
 pub mod corpus_policy;
+pub mod freshness;
 pub mod meeting_gaps;
 pub mod meeting_parse;
 pub mod meeting_report;
@@ -53,6 +54,10 @@ pub use cache_meta::{
 pub use corpus_policy::{
     CorpusClass, CorpusClassification, POLICY_DOC, classify_meeting,
     is_procedural_credentials_heading, whole_report_constitutive_from_blocks,
+};
+pub use freshness::{
+    FRESHNESS_POLICIES, FreshnessPolicy, days_between_rfc3339, freshness_policy,
+    rfc3339_to_unix_days,
 };
 pub use meeting_gaps::{
     ACCEPTED_GAP_REASONS, DiscoveryResult, GAP_REASON_NO_RESULT, GAP_REASON_NOT_FOUND,

@@ -4,29 +4,37 @@ use chrono::{Local, NaiveDate};
 use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::utils::relative_cache_path;
+use crawl::{
+    BundlePublisher, MANIFEST_STATUS_NOT_FOUND, MANIFEST_STATUS_PARSED, SourceManifestRow,
+    content_hash_bytes, days_between_rfc3339, manifest_path, now_rfc3339, read_cache_metadata,
+    require_cache_present, touch_checked_at, validate_manifest_rows, write_cache_artifact,
+    write_source_manifest, write_text_atomic,
+};
 use encoding_rs::WINDOWS_1252;
+use http::StatusCode;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use parquet::arrow::ArrowWriter;
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs::{File, read_to_string};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::SystemTime;
-use tokio::fs::read_dir;
-use tokio::fs::{self, remove_file};
+use tokio::fs;
 
 const DEKAMER_BASE: &str = "https://www.dekamer.be";
 const SESSION_ID: u32 = 56;
+const SOURCE_NAME: &str = "dossiers";
 /// Re-check open dossiers at most once per week unless linked to a recent plenary meeting.
 const DEFAULT_RECHECK_DAYS: i64 = 7;
 /// Dossiers tied to a plenary meeting in the last week are re-checked daily.
 const ACTIVE_RECHECK_DAYS: i64 = 1;
+/// Terminal (settled) dossiers are re-checked on a slower cadence, not permanently skipped.
+const SETTLED_RECHECK_DAYS: i64 = 90;
 
 static SELECTOR_TR: OnceLock<Selector> = OnceLock::new();
 static SELECTOR_TD: OnceLock<Selector> = OnceLock::new();
@@ -77,6 +85,7 @@ fn flwb_document_id_regex() -> &'static Regex {
 struct DossierScrapeOutput {
     dossiers: Vec<ScrapedDossier>,
     subdocuments: Vec<ScrapedSubdocument>,
+    manifest_rows: Vec<SourceManifestRow>,
 }
 
 /// A scraped dossier.
@@ -221,67 +230,102 @@ fn write_parquet(
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
-    let client = ScrapingClient::new();
     let session_id = SESSION_ID;
-
     let session_dir = data_dir().join("sessions").join(session_id.to_string());
     fs::create_dir_all(&session_dir).await?;
 
     let mp = MultiProgress::new();
     let mut web_request_count = 0u32;
-
-    if cache_only() {
-        println!("[dossiers] cache-only: skipping downloads, parsing cached HTML only");
+    let run_mode = if cache_only() {
+        SourceManifestRow::run_mode_cache_only()
     } else {
-        download_dossiers(session_id, &client, &mut web_request_count, &mp).await?;
-    }
+        SourceManifestRow::run_mode_live()
+    };
+
+    let (id_dates, not_found) = if cache_only() {
+        println!("[dossiers] cache-only: loading inventory, parsing cached HTML only");
+        let id_dates = load_dossier_inventory(session_id)?;
+        ensure_cache_only_inventory_present(session_id, &id_dates)?;
+        (id_dates, HashSet::new())
+    } else {
+        let client = ScrapingClient::new();
+        let mut id_dates = load_plenary_dossier_ids(session_id);
+        let flwb_ids =
+            discover_all_dossier_ids(session_id, &client, &mut web_request_count).await?;
+        let plenary_only = id_dates.len();
+        for id in flwb_ids {
+            id_dates.entry(id).or_insert_with(String::new);
+        }
+        let flwb_only = id_dates.len().saturating_sub(plenary_only);
+        println!(
+            "[dossiers] {} dossier ids to download ({} plenary, {} FLWB-only)",
+            id_dates.len(),
+            plenary_only,
+            flwb_only
+        );
+        persist_dossier_inventory(session_id, &id_dates)?;
+        let not_found =
+            download_dossiers(session_id, &id_dates, &client, &mut web_request_count, &mp).await?;
+        (id_dates, not_found)
+    };
 
     let DossierScrapeOutput {
         dossiers,
         subdocuments,
-    } = scrape_all_dossiers(session_id, &mp).await?;
+        manifest_rows,
+    } = scrape_expected_dossiers(session_id, &id_dates, &not_found, run_mode, &mp)?;
 
-    write_dossiers(&session_dir.join("dossiers.parquet"), &dossiers)?;
-    write_subdocuments(&session_dir.join("subdocuments.parquet"), &subdocuments)?;
+    reconcile_dossier_outputs(&id_dates, &dossiers, &subdocuments, &manifest_rows)?;
+    publish_dossier_bundle(&session_dir, &dossiers, &subdocuments, &manifest_rows)?;
 
     println!(
-        "[dossiers] scraped {} dossiers using {} web requests",
+        "[dossiers] scraped {} dossiers ({} not_found) using {} web requests",
         dossiers.len(),
+        not_found.len(),
         web_request_count
     );
     Ok(())
 }
 
+fn publish_dossier_bundle(
+    session_dir: &Path,
+    dossiers: &[ScrapedDossier],
+    subdocuments: &[ScrapedSubdocument],
+    manifest_rows: &[SourceManifestRow],
+) -> Result<(), Box<dyn Error>> {
+    validate_manifest_rows(manifest_rows)?;
+
+    let manifest_final = manifest_path(SOURCE_NAME);
+    let mut bundle = BundlePublisher::new("dossiers", &data_dir())?;
+    let stage_dossiers = bundle.stage_path(&session_dir.join("dossiers.parquet"))?;
+    let stage_subdocuments = bundle.stage_path(&session_dir.join("subdocuments.parquet"))?;
+    let stage_manifest = bundle.stage_path(&manifest_final)?;
+
+    write_dossiers(&stage_dossiers, dossiers)?;
+    write_subdocuments(&stage_subdocuments, subdocuments)?;
+    write_source_manifest(&stage_manifest, manifest_rows)?;
+    bundle.commit()?;
+    Ok(())
+}
+
 async fn download_dossiers(
     session_id: u32,
+    id_dates: &HashMap<String, String>,
     client: &ScrapingClient,
     web_request_count: &mut u32,
     mp: &MultiProgress,
-) -> Result<(), Box<dyn Error>> {
-    let mut id_dates = load_plenary_dossier_ids(session_id);
-    let flwb_ids = discover_all_dossier_ids(session_id, client, web_request_count).await?;
-    let plenary_only = id_dates.len();
-    for id in flwb_ids {
-        id_dates.entry(id).or_insert_with(String::new);
-    }
-    let flwb_only = id_dates.len().saturating_sub(plenary_only);
-    println!(
-        "[dossiers] {} dossier ids to download ({} plenary, {} FLWB-only)",
-        id_dates.len(),
-        plenary_only,
-        flwb_only
-    );
-
+) -> Result<HashSet<String>, Box<dyn Error>> {
     let pb = mp.add(ProgressBar::new(id_dates.len() as u64));
     pb.set_style(
         ProgressStyle::with_template(
             "[dossiers-download] [{elapsed_precise}] {spinner:.blue} {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}",
         )?
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        .tick_chars("⠋⠙⠹⠼⠼⠴⠦⠧⠇⠏"),
     );
 
     let mut stats = DownloadStats::default();
-    for (id, latest_meeting_date) in &id_dates {
+    let mut not_found = HashSet::new();
+    for (id, latest_meeting_date) in id_dates {
         pb.set_message(format!(
             "reqs={} id={} skip={}",
             web_request_count,
@@ -296,20 +340,24 @@ async fn download_dossiers(
             web_request_count,
         )
         .await?;
+        if action == DownloadAction::NotFound {
+            not_found.insert(id.clone());
+        }
         stats.record(action);
         pb.inc(1);
     }
 
     pb.finish_with_message("done");
     println!(
-        "[dossiers] download cache: {} settled, {} fresh, {} unchanged, {} updated ({} web requests)",
+        "[dossiers] download cache: {} settled, {} fresh, {} unchanged, {} updated, {} not_found ({} web requests)",
         stats.skipped_settled,
         stats.skipped_fresh,
         stats.skipped_unchanged,
         stats.downloaded,
+        stats.not_found,
         web_request_count
     );
-    Ok(())
+    Ok(not_found)
 }
 
 fn load_plenary_dossier_ids(session_id: u32) -> HashMap<String, String> {
@@ -323,7 +371,14 @@ fn load_plenary_dossier_ids(session_id: u32) -> HashMap<String, String> {
             return HashMap::new();
         }
     };
+    parse_dossier_id_tsv(&content)
+}
 
+fn dossier_inventory_path(session_id: u32) -> PathBuf {
+    cache_dir().join(format!("sessions/{}/dossier_inventory.tsv", session_id))
+}
+
+fn parse_dossier_id_tsv(content: &str) -> HashMap<String, String> {
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -336,6 +391,96 @@ fn load_plenary_dossier_ids(session_id: u32) -> HashMap<String, String> {
         .collect()
 }
 
+fn persist_dossier_inventory(
+    session_id: u32,
+    id_dates: &HashMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let path = dossier_inventory_path(session_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut lines: Vec<String> = id_dates
+        .iter()
+        .map(|(id, date)| format!("{id}\t{date}"))
+        .collect();
+    lines.sort();
+    write_text_atomic(&path, &(lines.join("\n") + "\n"))?;
+    Ok(())
+}
+
+fn load_dossier_inventory(session_id: u32) -> Result<HashMap<String, String>, Box<dyn Error>> {
+    let path = dossier_inventory_path(session_id);
+    if path.exists() {
+        return Ok(parse_dossier_id_tsv(&std::fs::read_to_string(&path)?));
+    }
+
+    // One-time bootstrap so cache-only reparse works before the first live inventory write.
+    // Prefer plenary discovery sidecar; union dossier ids already present in the HTML cache.
+    let mut id_dates = load_plenary_dossier_ids(session_id);
+    for id in dossier_ids_from_cache_filenames(session_id) {
+        id_dates.entry(id).or_insert_with(String::new);
+    }
+    if id_dates.is_empty() {
+        return Err(format!(
+            "cache-only incomplete snapshot: expected dossier inventory at {} is missing and no prior plenary/cache ids found — aborting",
+            path.display()
+        )
+        .into());
+    }
+    eprintln!(
+        "[dossiers] bootstrapped dossier_inventory.tsv from plenary ids + cache filenames ({} ids)",
+        id_dates.len()
+    );
+    persist_dossier_inventory(session_id, &id_dates)?;
+    Ok(id_dates)
+}
+
+fn dossier_ids_from_cache_filenames(session_id: u32) -> Vec<String> {
+    let dir = cache_dir().join(format!("sessions/{}/dossiers", session_id));
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let prefix = format!("{session_id}_");
+    let mut ids = HashSet::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".html") else {
+            continue;
+        };
+        let Some(rest) = stem.strip_prefix(&prefix) else {
+            continue;
+        };
+        // `{id}_{version…}` — dossier id is the first underscore-separated segment.
+        if let Some(id) = rest.split('_').next() {
+            if !id.is_empty() {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids.into_iter().collect()
+}
+
+fn ensure_cache_only_inventory_present(
+    session_id: u32,
+    id_dates: &HashMap<String, String>,
+) -> Result<(), Box<dyn Error>> {
+    let dossier_dir = cache_dir().join(format!("sessions/{}/dossiers", session_id));
+    for id in id_dates.keys() {
+        let path = find_cached_dossier_path(&dossier_dir, session_id, id);
+        match path {
+            Some(p) => require_cache_present(&p, &format!("dossier {id}"))?,
+            None => {
+                return Err(format!(
+                    "cache-only incomplete snapshot: expected dossier {id} cache under {} is missing — aborting to preserve prior outputs",
+                    dossier_dir.display()
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn discover_all_dossier_ids(
     session_id: u32,
     client: &ScrapingClient,
@@ -345,7 +490,12 @@ async fn discover_all_dossier_ids(
         "{}/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/ListDocument.cfm?legislat={}",
         DEKAMER_BASE, session_id
     );
-    let list_html = fetch_html(client, &list_url, web_request_count).await?;
+    let list_html = match fetch_html(client, &list_url, web_request_count).await? {
+        FetchHtml::Html(html) => html,
+        FetchHtml::NotFound => {
+            return Err(format!("FLWB list page 404 for session {session_id}").into());
+        }
+    };
     let range_urls = extract_list_from_to_urls(&list_html, session_id);
 
     if range_urls.is_empty() {
@@ -359,7 +509,12 @@ async fn discover_all_dossier_ids(
     let mut seen = std::collections::HashSet::new();
 
     for range_url in range_urls {
-        let range_html = fetch_html(client, &range_url, web_request_count).await?;
+        let range_html = match fetch_html(client, &range_url, web_request_count).await? {
+            FetchHtml::Html(html) => html,
+            FetchHtml::NotFound => {
+                return Err(format!("FLWB range page 404: {range_url}").into());
+            }
+        };
         for id in extract_flwb_dossier_ids(&range_html) {
             if seen.insert(id.clone()) {
                 ids.push(id);
@@ -381,16 +536,27 @@ async fn discover_all_dossier_ids(
     Ok(ids)
 }
 
+enum FetchHtml {
+    Html(String),
+    NotFound,
+}
+
 async fn fetch_html(
     client: &ScrapingClient,
     url: &str,
     web_request_count: &mut u32,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<FetchHtml, Box<dyn Error>> {
     let response = client.get(url).await?;
     *web_request_count += 1;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(FetchHtml::NotFound);
+    }
+    if !response.status().is_success() {
+        return Err(format!("unexpected HTTP {} for {url}", response.status()).into());
+    }
     let raw_bytes = response.bytes().await?;
     let (decoded_str, _, _) = WINDOWS_1252.decode(&raw_bytes);
-    Ok(decoded_str.into_owned())
+    Ok(FetchHtml::Html(decoded_str.into_owned()))
 }
 
 fn decode_html_entities(raw: &str) -> String {
@@ -451,6 +617,7 @@ enum DownloadAction {
     SkippedFresh,
     SkippedUnchanged,
     Downloaded,
+    NotFound,
 }
 
 #[derive(Debug, Default)]
@@ -459,6 +626,7 @@ struct DownloadStats {
     skipped_fresh: u32,
     skipped_unchanged: u32,
     downloaded: u32,
+    not_found: u32,
 }
 
 impl DownloadStats {
@@ -468,6 +636,7 @@ impl DownloadStats {
             DownloadAction::SkippedFresh => self.skipped_fresh += 1,
             DownloadAction::SkippedUnchanged => self.skipped_unchanged += 1,
             DownloadAction::Downloaded => self.downloaded += 1,
+            DownloadAction::NotFound => self.not_found += 1,
         }
     }
 
@@ -481,38 +650,73 @@ struct SubdocumentFingerprint {
     id: String,
     date: String,
     document_type: String,
+    authors: String,
+    file_url: String,
 }
 
 #[derive(Serialize)]
 struct DossierContentFingerprint {
+    title: String,
+    authors: String,
     status: String,
     submission_date: String,
     end_date: String,
     vote_date: String,
+    document_type: String,
+    eurovoc_main_descriptor: String,
+    eurovoc_descriptors: String,
     subdocuments: Vec<SubdocumentFingerprint>,
 }
 
-/// Fingerprint of the dossier metadata table (status, dates, subdocuments).
-/// Changes when dekamer.be adds or updates parliamentary documents on the dossier page.
+fn sorted_csv(values: &[String]) -> String {
+    let mut sorted = values.to_vec();
+    sorted.sort();
+    sorted.join(",")
+}
+
+fn sorted_comma_separated(raw: &str) -> String {
+    let mut parts: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    parts.sort();
+    parts.join(",")
+}
+
+/// Fingerprint of dossier output-relevant fields (title, authors, dates, type, status,
+/// Eurovoc, and subdocument ids/dates/types/authors/file URLs). Multi-value fields are
+/// sorted so source-order-only changes stay stable.
 fn dossier_content_fingerprint(html: &str, dossier_id: &str) -> Result<String, Box<dyn Error>> {
     let document = Html::parse_document(html);
     let dossier = scrape_dossier(dossier_id, &document)?;
     let mut subdocuments = dossier
         .subdocuments
         .iter()
-        .map(|subdocument| SubdocumentFingerprint {
-            id: subdocument.id.clone(),
-            date: subdocument.date.clone(),
-            document_type: subdocument.document_type.to_string(),
+        .map(|subdocument| {
+            let mut authors = subdocument.authors.clone();
+            authors.sort();
+            SubdocumentFingerprint {
+                id: subdocument.id.clone(),
+                date: subdocument.date.clone(),
+                document_type: subdocument.document_type.to_string(),
+                authors: authors.join(","),
+                file_url: subdocument.file_url.clone().unwrap_or_default(),
+            }
         })
         .collect::<Vec<_>>();
     subdocuments.sort_by(|left, right| left.id.cmp(&right.id));
 
     let fingerprint = DossierContentFingerprint {
+        title: dossier.title,
+        authors: sorted_csv(&dossier.authors),
         status: dossier.status.to_string(),
         submission_date: dossier.submission_date,
         end_date: dossier.end_date,
         vote_date: dossier.vote_date,
+        document_type: dossier.document_type.to_string(),
+        eurovoc_main_descriptor: dossier.eurovoc_main_descriptor,
+        eurovoc_descriptors: sorted_comma_separated(&dossier.eurovoc_descriptors),
         subdocuments,
     };
     Ok(serde_json::to_string(&fingerprint)?)
@@ -530,7 +734,7 @@ fn dossier_reference_date(dossier: &Dossier) -> Option<NaiveDate> {
     None
 }
 
-/// Terminal dossiers with an end/vote date more than a week ago are unlikely to change.
+/// Terminal dossiers with an end/vote date more than a week ago use the slower recheck cadence.
 fn is_settled_dossier(dossier: &Dossier) -> bool {
     let terminal = matches!(
         dossier.status,
@@ -546,7 +750,10 @@ fn is_settled_dossier(dossier: &Dossier) -> bool {
     (today - reference_date).num_days() >= DEFAULT_RECHECK_DAYS
 }
 
-fn recheck_max_age_days(latest_meeting_date: &str) -> i64 {
+fn recheck_max_age_days(latest_meeting_date: &str, settled: bool) -> i64 {
+    if settled {
+        return SETTLED_RECHECK_DAYS;
+    }
     if latest_meeting_date.is_empty() {
         return DEFAULT_RECHECK_DAYS;
     }
@@ -561,34 +768,63 @@ fn recheck_max_age_days(latest_meeting_date: &str) -> i64 {
     }
 }
 
-fn cache_age_days(path: &Path) -> Option<i64> {
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    let modified = modified.duration_since(SystemTime::UNIX_EPOCH).ok()?;
-    let modified = chrono::DateTime::<chrono::Utc>::from_timestamp(modified.as_secs() as i64, 0)?;
-    let today = Local::now().date_naive();
-    Some((today - modified.date_naive()).num_days())
+/// Days since `.meta.json` `checked_at` (not file mtime).
+fn days_since_checked_at(path: &Path) -> Option<i64> {
+    let meta = read_cache_metadata(path).ok()??;
+    days_between_rfc3339(&meta.checked_at, &now_rfc3339())
 }
 
-fn touch_cache_file(path: &Path) -> Result<(), Box<dyn Error>> {
-    let file = std::fs::OpenOptions::new().write(true).open(path)?;
-    file.set_modified(SystemTime::now())?;
-    Ok(())
+fn compact_utc_stamp(rfc3339: &str) -> String {
+    // 2026-07-15T19:21:00Z -> 20260715T192100Z
+    rfc3339.chars().filter(|c| *c != '-' && *c != ':').collect()
 }
 
-async fn find_cached_dossier_path(
+fn dossier_versioned_cache_name(session_id: u32, dossier_id: &str, bytes: &[u8]) -> String {
+    let stamp = compact_utc_stamp(&now_rfc3339());
+    let hash8 = &content_hash_bytes(bytes)[..8];
+    format!("{session_id}_{dossier_id}_{stamp}_{hash8}.html")
+}
+
+fn list_dossier_cache_candidates(
+    dossier_dir: &Path,
+    session_id: u32,
+    dossier_id: &str,
+) -> Vec<PathBuf> {
+    let filename_prefix = format!("{session_id}_{dossier_id}_");
+    let Ok(entries) = std::fs::read_dir(dossier_dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.starts_with(&filename_prefix) && name.ends_with(".html")
+        })
+        .collect()
+}
+
+/// Deterministically pick the newest retained dossier HTML version.
+fn select_newest_dossier_cache(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .max_by(|left, right| dossier_cache_sort_key(left).cmp(&dossier_cache_sort_key(right)))
+        .cloned()
+}
+
+fn dossier_cache_sort_key(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn find_cached_dossier_path(
     dossier_dir: &Path,
     session_id: u32,
     dossier_id: &str,
 ) -> Option<PathBuf> {
-    let filename_prefix = format!("{}_{}_", session_id, dossier_id);
-    let mut entries = read_dir(dossier_dir).await.ok()?;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let file_name = entry.file_name().to_string_lossy().to_string();
-        if file_name.starts_with(&filename_prefix) && file_name.ends_with(".html") {
-            return Some(entry.path());
-        }
-    }
-    None
+    let candidates = list_dossier_cache_candidates(dossier_dir, session_id, dossier_id);
+    select_newest_dossier_cache(&candidates)
 }
 
 fn dossier_url(session_id: u32, dossier_id: &str) -> String {
@@ -600,9 +836,10 @@ fn dossier_url(session_id: u32, dossier_id: &str) -> String {
 
 /// Checks whether a cached dossier HTML is still current.
 ///
-/// Uses the metadata table fingerprint (status, dates, subdocuments). Settled dossiers
-/// skip network entirely; open dossiers are re-checked weekly (daily when linked to a
-/// recent plenary meeting).
+/// Uses the content fingerprint. Terminal dossiers use a 90-day recheck interval;
+/// open dossiers are re-checked weekly (daily when linked to a recent plenary meeting).
+/// Freshness uses `.meta.json` `checked_at`, not file mtime. Content changes retain the
+/// previous cache file and write a new versioned artifact.
 async fn check_and_download_dossier_file(
     dossier_id: &str,
     latest_meeting_date: &str,
@@ -614,109 +851,138 @@ async fn check_and_download_dossier_file(
     fs::create_dir_all(&dossier_dir).await?;
 
     let url = dossier_url(session_id, dossier_id);
-    let existing_file = find_cached_dossier_path(&dossier_dir, session_id, dossier_id).await;
+    let existing_file = find_cached_dossier_path(&dossier_dir, session_id, dossier_id);
 
     if let Some(cache_path) = &existing_file {
         let cached_html = read_to_string(cache_path)?;
         let cached_dossier = scrape_dossier(dossier_id, &Html::parse_document(&cached_html))?;
+        let settled = is_settled_dossier(&cached_dossier);
+        let max_age = recheck_max_age_days(latest_meeting_date, settled);
 
-        if is_settled_dossier(&cached_dossier) {
-            return Ok(DownloadAction::SkippedSettled);
-        }
-
-        if cache_age_days(cache_path)
-            .is_some_and(|age| age < recheck_max_age_days(latest_meeting_date))
-        {
-            return Ok(DownloadAction::SkippedFresh);
+        if days_since_checked_at(cache_path).is_some_and(|age| age < max_age) {
+            return Ok(if settled {
+                DownloadAction::SkippedSettled
+            } else {
+                DownloadAction::SkippedFresh
+            });
         }
 
         let cached_fingerprint = dossier_content_fingerprint(&cached_html, dossier_id)?;
-        let live_html = fetch_html(client, &url, web_request_count).await?;
-        let live_fingerprint = dossier_content_fingerprint(&live_html, dossier_id)?;
-        if cached_fingerprint == live_fingerprint {
-            touch_cache_file(cache_path)?;
-            return Ok(DownloadAction::SkippedUnchanged);
-        }
+        match fetch_html(client, &url, web_request_count).await? {
+            FetchHtml::NotFound => {
+                // Keep the prior version; treat as unchanged for this run.
+                touch_checked_at(cache_path)?;
+                return Ok(DownloadAction::SkippedUnchanged);
+            }
+            FetchHtml::Html(live_html) => {
+                let live_fingerprint = dossier_content_fingerprint(&live_html, dossier_id)?;
+                if cached_fingerprint == live_fingerprint {
+                    touch_checked_at(cache_path)?;
+                    return Ok(DownloadAction::SkippedUnchanged);
+                }
 
-        let _ = remove_file(cache_path).await;
-        let today = Local::now().naive_local().date();
-        let new_path = dossier_dir.join(format!("{}_{}_{}.html", session_id, dossier_id, today));
-        fs::write(&new_path, live_html).await?;
-        return Ok(DownloadAction::Downloaded);
+                let bytes = live_html.as_bytes();
+                let new_path =
+                    dossier_dir.join(dossier_versioned_cache_name(session_id, dossier_id, bytes));
+                write_cache_artifact(&new_path, bytes, &url, "text/html; charset=windows-1252")?;
+                return Ok(DownloadAction::Downloaded);
+            }
+        }
     }
 
-    let live_html = fetch_html(client, &url, web_request_count).await?;
-    let today = Local::now().naive_local().date();
-    let new_path = dossier_dir.join(format!("{}_{}_{}.html", session_id, dossier_id, today));
-    fs::write(&new_path, live_html).await?;
-    Ok(DownloadAction::Downloaded)
+    match fetch_html(client, &url, web_request_count).await? {
+        FetchHtml::NotFound => Ok(DownloadAction::NotFound),
+        FetchHtml::Html(live_html) => {
+            let bytes = live_html.as_bytes();
+            let new_path =
+                dossier_dir.join(dossier_versioned_cache_name(session_id, dossier_id, bytes));
+            write_cache_artifact(&new_path, bytes, &url, "text/html; charset=windows-1252")?;
+            Ok(DownloadAction::Downloaded)
+        }
+    }
 }
 
-/// Scrape all cached HTML dossier files.
-async fn scrape_all_dossiers(
+/// Scrape expected dossier IDs from inventory (newest cache file each).
+fn scrape_expected_dossiers(
     session_id: u32,
+    id_dates: &HashMap<String, String>,
+    not_found: &HashSet<String>,
+    run_mode: &str,
     mp: &MultiProgress,
 ) -> Result<DossierScrapeOutput, Box<dyn Error>> {
     let dossier_dir = cache_dir().join(format!("sessions/{}/dossiers", session_id));
+    let mut expected_ids: Vec<String> = id_dates.keys().cloned().collect();
+    expected_ids.sort_by(|a, b| {
+        a.parse::<u32>()
+            .unwrap_or(0)
+            .cmp(&b.parse::<u32>().unwrap_or(0))
+    });
 
-    // Collect HTML paths up front so we know the total for the progress bar.
-    let mut paths: Vec<PathBuf> = Vec::new();
-    let mut entries = read_dir(&dossier_dir).await?;
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("html") {
-            paths.push(path);
-        }
-    }
-
-    let pb = mp.add(ProgressBar::new(paths.len() as u64));
+    let pb = mp.add(ProgressBar::new(expected_ids.len() as u64));
     pb.set_style(
         ProgressStyle::with_template(
             "[dossiers-scrape] [{elapsed_precise}] {spinner:.blue} {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}",
         )?
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+        .tick_chars("⠋⠙⠹⠼⠼⠴⠦⠧⠇⠏"),
     );
 
     let mut dossiers = Vec::new();
     let mut subdocuments = Vec::new();
+    let mut manifest_rows = Vec::new();
 
-    for path in paths {
+    for dossier_id in &expected_ids {
+        pb.set_message(format!("id={}", dossier_id));
+        let source_url = dossier_url(session_id, dossier_id);
+
+        if not_found.contains(dossier_id) {
+            manifest_rows.push(SourceManifestRow {
+                source: SOURCE_NAME.into(),
+                session_id: session_id.to_string(),
+                item_kind: "dossier".into(),
+                native_item_id: dossier_id.clone(),
+                source_url,
+                cache_path: String::new(),
+                status: MANIFEST_STATUS_NOT_FOUND.into(),
+                row_count: 0,
+                content_type: String::new(),
+                content_hash: String::new(),
+                fetched_at: String::new(),
+                checked_at: now_rfc3339(),
+                run_mode: run_mode.into(),
+                detail: "HTTP 404".into(),
+            });
+            pb.inc(1);
+            continue;
+        }
+
+        let path =
+            find_cached_dossier_path(&dossier_dir, session_id, dossier_id).ok_or_else(|| {
+                format!(
+                    "missing cache for expected dossier {dossier_id} under {}",
+                    dossier_dir.display()
+                )
+            })?;
+        if cache_only() {
+            require_cache_present(&path, &format!("dossier {dossier_id}"))?;
+        }
+
+        let content = read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        let document = Html::parse_document(&content);
+        let dossier = scrape_dossier(dossier_id, &document)
+            .map_err(|e| format!("Failed to scrape dossier {dossier_id}: {e}"))?;
+
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        let mut parts = stem.splitn(3, '_');
-        let _sid = parts.next().unwrap_or("");
-        let dossier_id = parts.next().unwrap_or("").to_string();
+        let prefix = format!("{session_id}_{dossier_id}_");
+        let last_updated = stem
+            .strip_prefix(&prefix)
+            .unwrap_or(stem.as_str())
+            .to_string();
 
-        let last_updated = parts.next().unwrap_or("").to_string();
-
-        pb.set_message(format!("id={}", dossier_id));
-
-        let content = match read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to read {}: {}", path.display(), e);
-                pb.inc(1);
-                continue;
-            }
-        };
-
-        let document = Html::parse_document(&content);
-        let dossier = match scrape_dossier(&dossier_id, &document) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Failed to scrape {}: {}", dossier_id, e);
-                pb.inc(1);
-                continue;
-            }
-        };
-
-        // Get latest adopted text URL.
-        // Preference order:
-        // 1. Most recent "ARTIKELEN AANGENOMEN IN PLENUM"
-        // 2. Most recent "AANGENOMEN TEKST"
         let latest_adopted_text_url = dossier
             .subdocuments
             .iter()
@@ -735,9 +1001,6 @@ async fn scrape_all_dossiers(
             })
             .and_then(|s| s.file_url.clone());
 
-        // Get latest report URL.
-        // Preference order:
-        // 1. Most recent "VERSLAG"
         let latest_report_url = dossier
             .subdocuments
             .iter()
@@ -746,11 +1009,21 @@ async fn scrape_all_dossiers(
             .and_then(|s| s.file_url.clone());
 
         let cache_path_rel = relative_cache_path(&path, &cache_dir());
-        let source_url = format!(
-            "https://www.dekamer.be/kvvcr/showpage.cfm?section=/flwb&language=nl&cfm=/site/wwwcfm/flwb/flwbn.cfm?lang=N&legislat={}&dossierID={}",
-            session_id, dossier_id
-        );
+        let meta = read_cache_metadata(&path)?;
+        let content_hash = meta
+            .as_ref()
+            .map(|m| m.content_hash.clone())
+            .unwrap_or_else(|| content_hash_bytes(content.as_bytes()));
+        let fetched_at = meta
+            .as_ref()
+            .map(|m| m.fetched_at.clone())
+            .unwrap_or_else(now_rfc3339);
+        let checked_at = meta
+            .as_ref()
+            .map(|m| m.checked_at.clone())
+            .unwrap_or_else(now_rfc3339);
 
+        let subdoc_count = dossier.subdocuments.len() as u32;
         for subdocument in dossier.subdocuments {
             subdocuments.push(ScrapedSubdocument {
                 dossier_id: subdocument.dossier_id,
@@ -766,7 +1039,7 @@ async fn scrape_all_dossiers(
 
         dossiers.push(ScrapedDossier {
             session_id,
-            dossier_id,
+            dossier_id: dossier_id.clone(),
             last_updated,
             title: dossier.title,
             authors: dossier.authors.join(","),
@@ -779,8 +1052,25 @@ async fn scrape_all_dossiers(
             latest_report_url,
             eurovoc_main_descriptor: dossier.eurovoc_main_descriptor,
             eurovoc_descriptors: dossier.eurovoc_descriptors,
+            source_url: source_url.clone(),
+            cache_path: cache_path_rel.clone(),
+        });
+
+        manifest_rows.push(SourceManifestRow {
+            source: SOURCE_NAME.into(),
+            session_id: session_id.to_string(),
+            item_kind: "dossier".into(),
+            native_item_id: dossier_id.clone(),
             source_url,
             cache_path: cache_path_rel,
+            status: MANIFEST_STATUS_PARSED.into(),
+            row_count: 1 + subdoc_count,
+            content_type: "text/html".into(),
+            content_hash,
+            fetched_at,
+            checked_at,
+            run_mode: run_mode.into(),
+            detail: String::new(),
         });
         pb.inc(1);
     }
@@ -789,7 +1079,65 @@ async fn scrape_all_dossiers(
     Ok(DossierScrapeOutput {
         dossiers,
         subdocuments,
+        manifest_rows,
     })
+}
+
+fn reconcile_dossier_outputs(
+    id_dates: &HashMap<String, String>,
+    dossiers: &[ScrapedDossier],
+    subdocuments: &[ScrapedSubdocument],
+    manifest_rows: &[SourceManifestRow],
+) -> Result<(), Box<dyn Error>> {
+    let expected: HashSet<String> = id_dates.keys().cloned().collect();
+    let manifest_keys: HashSet<String> = manifest_rows
+        .iter()
+        .filter(|r| r.item_kind == "dossier")
+        .map(|r| r.native_item_id.clone())
+        .collect();
+    if expected != manifest_keys {
+        let missing: Vec<_> = expected.difference(&manifest_keys).cloned().collect();
+        let extra: Vec<_> = manifest_keys.difference(&expected).cloned().collect();
+        return Err(format!(
+            "dossier inventory/manifest mismatch: missing={missing:?} extra={extra:?}"
+        )
+        .into());
+    }
+
+    let parsed: HashSet<String> = manifest_rows
+        .iter()
+        .filter(|r| r.status == MANIFEST_STATUS_PARSED)
+        .map(|r| r.native_item_id.clone())
+        .collect();
+    let not_found: HashSet<String> = manifest_rows
+        .iter()
+        .filter(|r| r.status == MANIFEST_STATUS_NOT_FOUND)
+        .map(|r| r.native_item_id.clone())
+        .collect();
+    if !parsed.is_disjoint(&not_found) {
+        return Err("dossier manifest has overlapping parsed and not_found ids".into());
+    }
+
+    let dossier_ids: HashSet<String> = dossiers.iter().map(|d| d.dossier_id.clone()).collect();
+    if dossier_ids != parsed {
+        let missing: Vec<_> = parsed.difference(&dossier_ids).cloned().collect();
+        let extra: Vec<_> = dossier_ids.difference(&parsed).cloned().collect();
+        return Err(format!(
+            "parsed dossiers mismatch manifest: missing={missing:?} extra={extra:?}"
+        )
+        .into());
+    }
+
+    for sub in subdocuments {
+        if !parsed.contains(&sub.dossier_id) {
+            return Err(format!(
+                "subdocument {} references dossier {} outside parsed set",
+                sub.id, sub.dossier_id
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn Error>> {
@@ -1311,6 +1659,38 @@ fn normalize_date(date: &str) -> String {
 mod tests {
     use super::*;
 
+    fn sample_dossier_html(
+        title: &str,
+        authors_html: &str,
+        eurovoc_main: &str,
+        eurovoc_descriptors: &str,
+        file_url: &str,
+        status: &str,
+        end_date: &str,
+    ) -> String {
+        format!(
+            r#"
+            <div id="story"><h4><center>{title}</center></h4></div>
+            <table><tbody>
+                <tr>
+                    <td>Document Kamer</td>
+                    <td>
+                        <a href="{file_url}">56K0999001</a>
+                        <br>WETSVOORSTEL - KAMER
+                    </td>
+                </tr>
+                <tr><td>Indieningsdatum</td><td>22/07/2024</td></tr>
+                <tr><td>Einddatum</td><td>{end_date}</td></tr>
+                <tr><td>Document type</td><td>05 WETSVOORSTEL</td></tr>
+                <tr><td>Status</td><td>{status}</td></tr>
+                <tr><td>Auteur(s)</td><td>{authors_html}</td></tr>
+                <tr><td>Eurovoc-hoofddescriptor</td><td>{eurovoc_main}</td></tr>
+                <tr><td>Eurovoc descriptoren</td><td>{eurovoc_descriptors}</td></tr>
+            </tbody></table>
+            "#
+        )
+    }
+
     #[test]
     fn normalize_dossier_id_strips_leading_zeros() {
         assert_eq!(normalize_dossier_id("0099"), "99");
@@ -1427,32 +1807,149 @@ mod tests {
         let old = (today - chrono::Duration::days(30))
             .format("%Y-%m-%d")
             .to_string();
-        assert_eq!(recheck_max_age_days(&recent), ACTIVE_RECHECK_DAYS);
-        assert_eq!(recheck_max_age_days(&old), DEFAULT_RECHECK_DAYS);
-        assert_eq!(recheck_max_age_days(""), DEFAULT_RECHECK_DAYS);
-    }
-
-    #[test]
-    fn dossier_fingerprint_is_stable_for_cached_html() {
-        let path = Path::new("cache/sessions/56/dossiers/56_1000_2026-07-01.html");
-        if !path.exists() {
-            return;
-        }
-        let html = std::fs::read_to_string(path).expect("read cached dossier html");
-        let first = dossier_content_fingerprint(&html, "1000").expect("fingerprint");
-        let second = dossier_content_fingerprint(&html, "1000").expect("fingerprint");
-        assert_eq!(first, second);
-        assert!(first.contains("Aangenomen"));
+        assert_eq!(recheck_max_age_days(&recent, false), ACTIVE_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days(&old, false), DEFAULT_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days("", false), DEFAULT_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days(&recent, true), SETTLED_RECHECK_DAYS);
+        assert_eq!(recheck_max_age_days("", true), SETTLED_RECHECK_DAYS);
     }
 
     #[test]
     fn adopted_dossier_with_old_end_date_is_settled() {
-        let path = Path::new("cache/sessions/56/dossiers/56_1000_2026-07-01.html");
-        if !path.exists() {
-            return;
-        }
-        let html = std::fs::read_to_string(path).expect("read cached dossier html");
-        let dossier = scrape_dossier("1000", &Html::parse_document(&html)).expect("scrape dossier");
+        let today = Local::now().naive_local().date();
+        let end = (today - chrono::Duration::days(30))
+            .format("%d/%m/%Y")
+            .to_string();
+        let html = sample_dossier_html(
+            "Settled dossier",
+            "<a>Alice, A</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Aangenomen",
+            &end,
+        );
+        let dossier = scrape_dossier("999", &Html::parse_document(&html)).expect("scrape");
         assert!(is_settled_dossier(&dossier));
+    }
+
+    #[test]
+    fn open_dossier_is_not_settled() {
+        let html = sample_dossier_html(
+            "Open dossier",
+            "<a>Alice, A</a>",
+            "LAW",
+            "JUSTICE",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        let dossier = scrape_dossier("999", &Html::parse_document(&html)).expect("scrape");
+        assert!(!is_settled_dossier(&dossier));
+    }
+
+    #[test]
+    fn fingerprint_changes_when_title_authors_eurovoc_or_file_url_change() {
+        let base = sample_dossier_html(
+            "Title A",
+            "<a>Bob, B</a><a>Alice, A</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        let base_fp = dossier_content_fingerprint(&base, "999").expect("fp");
+
+        let title_changed = sample_dossier_html(
+            "Title B",
+            "<a>Bob, B</a><a>Alice, A</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        assert_ne!(
+            base_fp,
+            dossier_content_fingerprint(&title_changed, "999").unwrap()
+        );
+
+        let authors_changed = sample_dossier_html(
+            "Title A",
+            "<a>Bob, B</a><a>Carol, C</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        assert_ne!(
+            base_fp,
+            dossier_content_fingerprint(&authors_changed, "999").unwrap()
+        );
+
+        let eurovoc_changed = sample_dossier_html(
+            "Title A",
+            "<a>Bob, B</a><a>Alice, A</a>",
+            "LAW",
+            "JUSTICE | HEALTH",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        assert_ne!(
+            base_fp,
+            dossier_content_fingerprint(&eurovoc_changed, "999").unwrap()
+        );
+
+        let file_url_changed = sample_dossier_html(
+            "Title A",
+            "<a>Bob, B</a><a>Alice, A</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999002.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        assert_ne!(
+            base_fp,
+            dossier_content_fingerprint(&file_url_changed, "999").unwrap()
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_when_only_author_order_changes() {
+        let order_a = sample_dossier_html(
+            "Title A",
+            "<a>Bob, B</a><a>Alice, A</a>",
+            "LAW",
+            "RIGHTS | JUSTICE",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        let order_b = sample_dossier_html(
+            "Title A",
+            "<a>Alice, A</a><a>Bob, B</a>",
+            "LAW",
+            "JUSTICE | RIGHTS",
+            "/FLWB/PDF/56/0999/56K0999001.pdf",
+            "Hangend Kamer",
+            "",
+        );
+        assert_eq!(
+            dossier_content_fingerprint(&order_a, "999").unwrap(),
+            dossier_content_fingerprint(&order_b, "999").unwrap()
+        );
+    }
+
+    #[test]
+    fn select_newest_dossier_cache_picks_lexicographically_latest() {
+        let older = PathBuf::from("56_1000_20260701T120000Z_aaaaaaaa.html");
+        let newer = PathBuf::from("56_1000_20260715T120000Z_bbbbbbbb.html");
+        let legacy = PathBuf::from("56_1000_2026-07-01.html");
+        let selected = select_newest_dossier_cache(&[older.clone(), newer.clone(), legacy]);
+        assert_eq!(selected, Some(newer));
     }
 }
