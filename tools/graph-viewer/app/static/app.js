@@ -837,6 +837,10 @@ function renderNodeDetail(detail) {
   `;
   el.appendChild(header);
 
+  if (detail.data_quality_warnings?.length) {
+    el.appendChild(renderDataQualityWarnings(detail.data_quality_warnings));
+  }
+
   if (detail.preview) {
     el.appendChild(renderEntityPreview(detail.preview));
   }
@@ -846,7 +850,10 @@ function renderNodeDetail(detail) {
   }
 
   if (detail.vote_reconciliation) {
-    el.appendChild(renderVoteReconciliation(detail.vote_reconciliation));
+    const hasVoteWarning = (detail.data_quality_warnings || []).some(
+      (w) => w.warning_kind === "source_conflict" || w.check_id?.startsWith("vote.")
+    );
+    el.appendChild(renderVoteReconciliation(detail.vote_reconciliation, { preferSharedWarning: hasVoteWarning }));
   }
 
   if (detail.utterance_groups?.length) {
@@ -1057,12 +1064,89 @@ function renderVoteBreakdown(breakdown) {
   return section;
 }
 
-function renderVoteReconciliation(v) {
+function renderDataQualityWarnings(warnings) {
+  const section = document.createElement("div");
+  section.className = "detail-section data-quality-warnings";
+  const heading = document.createElement("h3");
+  heading.textContent = "Data quality";
+  section.appendChild(heading);
+
+  for (const w of warnings) {
+    const card = document.createElement("div");
+    const severityClass =
+      w.severity === "error" || w.status === "fail"
+        ? "severity-error"
+        : w.severity === "warn" || w.status === "warn"
+          ? "severity-warning"
+          : "severity-info";
+    card.className = `dq-warning ${severityClass}`;
+
+    const kindLabel =
+      w.warning_kind === "source_conflict"
+        ? "Conflicting source claims"
+        : w.warning_kind === "source_anomaly"
+          ? "Source anomaly"
+          : w.warning_kind || "Warning";
+
+    card.innerHTML = `
+      <div class="dq-warning-title">
+        <strong>${escapeHtml(kindLabel)}</strong>
+        <span class="dq-warning-meta">${escapeHtml(w.severity || w.status)} · ${escapeHtml(w.check_id)}</span>
+      </div>
+      <p class="dq-warning-message">${escapeHtml(w.message)}</p>
+    `;
+
+    if (w.expected || w.actual) {
+      const claims = document.createElement("div");
+      claims.className = "dq-warning-claims";
+      if (w.warning_kind === "source_conflict") {
+        claims.innerHTML = `
+          <div><span>Claim A</span>${escapeHtml(w.expected)}</div>
+          <div><span>Claim B</span>${escapeHtml(w.actual)}</div>
+        `;
+      } else {
+        claims.innerHTML = `
+          <div><span>Expected</span>${escapeHtml(w.expected)}</div>
+          <div><span>Actual</span>${escapeHtml(w.actual)}</div>
+        `;
+      }
+      card.appendChild(claims);
+    }
+
+    if (w.source_url || w.cache_path || w.source_block) {
+      const links = document.createElement("div");
+      links.className = "dq-warning-source";
+      const parts = [];
+      if (w.source_url) {
+        parts.push(
+          `<a href="${escapeHtml(w.source_url)}" target="_blank" rel="noopener">Source page</a>`
+        );
+      }
+      if (w.cache_path) {
+        parts.push(
+          `<a href="${cacheUrl(w.cache_path)}" target="_blank" rel="noopener">Cache</a>`
+        );
+      }
+      if (w.source_block) {
+        parts.push(`<span>blocks ${escapeHtml(w.source_block)}</span>`);
+      }
+      links.innerHTML = parts.join(" · ");
+      card.appendChild(links);
+    }
+
+    section.appendChild(card);
+  }
+
+  return section;
+}
+
+function renderVoteReconciliation(v, opts = {}) {
   const section = document.createElement("div");
   section.className = "detail-section";
   const ok = v.reconciled === "true";
+  const showMismatchBadge = !ok && !opts.preferSharedWarning;
   section.innerHTML = `
-    <h3>Vote totals ${ok ? "" : "⚠ mismatch"}</h3>
+    <h3>Vote totals ${showMismatchBadge ? "⚠ mismatch" : ""}</h3>
     <div class="stats-grid">
       <div><span>Yes (headline)</span>${escapeHtml(v.yes)} / parsed ${escapeHtml(v.members_yes_count)}</div>
       <div><span>No</span>${escapeHtml(v.no)} / ${escapeHtml(v.members_no_count)}</div>

@@ -464,9 +464,9 @@ Current integration points:
 
 ### Warning schema TODO
 
-- [ ] Extend `CheckDetail` and QA Parquet with `warning_id`.
-- [ ] Make `warning_id` deterministic over check, subject, values, artifact, and source block; exclude `created_at`.
-- [ ] Add `warning_kind` with a closed initial vocabulary:
+- [x] Extend `CheckDetail` and QA Parquet with `warning_id`.
+- [x] Make `warning_id` deterministic over check, subject, values, artifact, and source block; exclude `created_at`.
+- [x] Add `warning_kind` with a closed initial vocabulary:
 
 ```text
 source_conflict
@@ -477,40 +477,40 @@ integrity
 coverage
 ```
 
-- [ ] Add exact `graph_node_type` and `graph_node_id` fields.
-- [ ] Add canonical `source_artifact_id`.
-- [ ] Keep existing `entity_type`/`entity_id` as the check subject, which may be a source-local occurrence rather than a graph node.
-- [ ] Add builders such as `with_graph_node()` and `with_warning_kind()`.
-- [ ] Compute artifact IDs through `crawl::artifact_id`; do not duplicate hashing logic.
-- [ ] Validate every nonempty graph target against `graph/nodes.parquet`.
-- [ ] Validate every nonempty source artifact against `graph/source_artifacts.parquet`.
-- [ ] Update `STAGING.md` with the warning contract.
+- [x] Add exact `graph_node_type` and `graph_node_id` fields.
+- [x] Add canonical `source_artifact_id`.
+- [x] Keep existing `entity_type`/`entity_id` as the check subject, which may be a source-local occurrence rather than a graph node.
+- [x] Add builders such as `with_graph_node()` and `with_warning_kind()`.
+- [x] Compute artifact IDs through `crawl::artifact_id`; do not duplicate hashing logic.
+- [x] Validate every nonempty graph target against `graph/nodes.parquet`.
+- [x] Validate every nonempty source artifact against `graph/source_artifacts.parquet`.
+- [x] Update `STAGING.md` with the warning contract.
 
 ### Warning production TODO
 
-- [ ] Target vote reconciliation/source contradictions to `VoteResult`, not a source-local appendix number.
-- [ ] Let a `Vote` inherit warnings from its `HAS_RESULT` target in the viewer.
-- [ ] Preserve reused-result semantics: all Votes using one result see the same warning once.
-- [ ] Add `dossier.date_chronology` and target canonical `Dossier:{session}/{id}`.
-- [ ] Classify source-backed impossible chronology as `source_anomaly`, not extraction failure, unless parser field scoping is proven wrong.
-- [ ] Include both independently observed vote claims in `expected`/`actual` or structured warning properties.
-- [ ] Add source block ranges to unresolved vote events; current QA drops available `block_start`/`block_end` in `scrapers/qa/src/vote_source.rs:778-800`.
-- [ ] Fix numeric dossier-reference QA while touching this area; current normal bare dossier IDs must be normalized to `{session}/{id}` rather than skipped.
+- [x] Target vote reconciliation/source contradictions to `VoteResult`, not a source-local appendix number.
+- [x] Let a `Vote` inherit warnings from its `HAS_RESULT` target in the viewer.
+- [x] Preserve reused-result semantics: all Votes using one result see the same warning once.
+- [x] Add `dossier.date_chronology` and target canonical `Dossier:{session}/{id}`.
+- [x] Classify source-backed impossible chronology as `source_anomaly`, not extraction failure, unless parser field scoping is proven wrong.
+- [x] Include both independently observed vote claims in `expected`/`actual` or structured warning properties.
+- [x] Add source block ranges to unresolved vote events; current QA drops available `block_start`/`block_end` in `scrapers/qa/src/vote_source.rs:778-800`.
+- [x] Fix numeric dossier-reference QA while touching this area; current normal bare dossier IDs must be normalized to `{session}/{id}` rather than skipped.
 
 ### Viewer TODO
 
-- [ ] Extend the typed `qa_details` view in `tools/graph-viewer/app/db.py`.
-- [ ] Add a `DataQualityWarning` API model.
-- [ ] Add `data_quality_warnings` to node detail responses.
-- [ ] Query actionable rows by exact graph type and ID; do not parse messages to infer navigation.
-- [ ] For Vote nodes, include warnings attached to linked VoteResult nodes.
-- [ ] Deduplicate by `warning_id`.
-- [ ] Render warning cards immediately below the node header and above previews/vote details.
-- [ ] Display severity, warning kind, check ID, message, both claims, and source navigation.
-- [ ] Label `source_conflict` as conflicting source claims rather than declaring one correct.
-- [ ] Keep missing QA safe: node detail should return an empty warning list.
-- [ ] Prefer this shared warning payload over the vote view’s current one-off mismatch label.
-- [ ] Do not add warning aggregation to every search result in the first implementation.
+- [x] Extend the typed `qa_details` view in `tools/graph-viewer/app/db.py`.
+- [x] Add a `DataQualityWarning` API model.
+- [x] Add `data_quality_warnings` to node detail responses.
+- [x] Query actionable rows by exact graph type and ID; do not parse messages to infer navigation.
+- [x] For Vote nodes, include warnings attached to linked VoteResult nodes.
+- [x] Deduplicate by `warning_id`.
+- [x] Render warning cards immediately below the node header and above previews/vote details.
+- [x] Display severity, warning kind, check ID, message, both claims, and source navigation.
+- [x] Label `source_conflict` as conflicting source claims rather than declaring one correct.
+- [x] Keep missing QA safe: node detail should return an empty warning list.
+- [x] Prefer this shared warning payload over the vote view’s current one-off mismatch label.
+- [x] Do not add warning aggregation to every search result in the first implementation.
 
 ### Tests
 

@@ -405,6 +405,25 @@ CODE_POINTERS: dict[str, list[dict[str, str]]] = {
             "note": "Fails when the same person appears in both chairs and subchairs.",
         },
     ],
+    "dossier.date_chronology": [
+        {
+            "path": "scrapers/qa/src/dossiers.rs",
+            "symbol": "run_dossier_chronology_checks",
+            "note": "Submission-after-vote/end and future subdocument dates.",
+        },
+    ],
+    "qa.warning_graph_target": [
+        {
+            "path": "scrapers/qa/src/warnings.rs",
+            "symbol": "run_warning_target_checks",
+            "note": "Validates graph_node and source_artifact targets on entity warnings.",
+        },
+        {
+            "path": "scrapers/qa/src/types.rs",
+            "symbol": "CheckDetail::finalize",
+            "note": "Deterministic warning_id and crawl::artifact_id provenance.",
+        },
+    ],
     "schema.unique_keys": [
         {
             "path": "scrapers/lobby/src/main.rs",

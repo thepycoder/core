@@ -172,6 +172,14 @@ CHECK_DOCS: dict[str, CheckDoc] = {
         what="A person appears in both the chair and subchair lists for the same commission.",
         measures="Reads commissions.parquet, splits/trims/case-folds chairs and subchairs, and fails once per overlapping person.",
     ),
+    "dossier.date_chronology": CheckDoc(
+        what="A dossier or subdocument source date is chronologically impossible.",
+        measures="Compares ISO dates on dossiers/subdocuments; targets canonical Dossier nodes without correcting source values.",
+    ),
+    "qa.warning_graph_target": CheckDoc(
+        what="An entity-level warning points at a missing graph node, source-local id, or missing source artifact.",
+        measures="Validates nonempty graph_node targets and entity-warning source_artifact_id joins.",
+    ),
     "schema.unique_keys": CheckDoc(
         what="Duplicate natural keys exist within a staging table.",
         measures="Tracks composite keys from configured id columns per table batch.",

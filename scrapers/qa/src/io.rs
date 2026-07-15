@@ -23,6 +23,11 @@ pub fn write_check_details(path: &Path, rows: &[CheckDetail]) -> Result<(), Box<
         utf8_field("cache_path", false),
         utf8_field("source_block", false),
         utf8_field("created_at", false),
+        utf8_field("warning_id", false),
+        utf8_field("warning_kind", false),
+        utf8_field("graph_node_type", false),
+        utf8_field("graph_node_id", false),
+        utf8_field("source_artifact_id", false),
     ]);
 
     macro_rules! col {
@@ -50,6 +55,11 @@ pub fn write_check_details(path: &Path, rows: &[CheckDetail]) -> Result<(), Box<
             col!(|r| r.cache_path.clone()),
             col!(|r| r.source_block.clone()),
             col!(|r| r.created_at.clone()),
+            col!(|r| r.warning_id.clone()),
+            col!(|r| r.warning_kind.clone()),
+            col!(|r| r.graph_node_type.clone()),
+            col!(|r| r.graph_node_id.clone()),
+            col!(|r| r.source_artifact_id.clone()),
         ],
     )
 }

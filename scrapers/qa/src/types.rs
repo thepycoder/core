@@ -1,4 +1,15 @@
 use chrono::Utc;
+use sha2::{Digest, Sha256};
+
+/// Closed vocabulary for entity-level warning kinds (Issue 8).
+pub const WARNING_KINDS: &[&str] = &[
+    "source_conflict",
+    "source_anomaly",
+    "source_gap",
+    "extraction",
+    "integrity",
+    "coverage",
+];
 
 #[derive(Debug, Clone)]
 pub struct CheckDetail {
@@ -17,6 +28,16 @@ pub struct CheckDetail {
     pub cache_path: String,
     pub source_block: String,
     pub created_at: String,
+    /// Deterministic id over check subject/values/artifact/block (excludes `created_at`).
+    pub warning_id: String,
+    /// Closed vocabulary: source_conflict, source_anomaly, source_gap, extraction, integrity, coverage.
+    pub warning_kind: String,
+    /// Exact graph node type when this detail targets a graph entity (e.g. `VoteResult`).
+    pub graph_node_type: String,
+    /// Exact graph node id (e.g. `56-135-r16`). Never a source-local id like `1#1`.
+    pub graph_node_id: String,
+    /// Canonical `crawl::artifact_id(source_url, cache_path)` when provenance is known.
+    pub source_artifact_id: String,
 }
 
 impl CheckDetail {
@@ -42,6 +63,11 @@ impl CheckDetail {
             cache_path: String::new(),
             source_block: String::new(),
             created_at: Utc::now().to_rfc3339(),
+            warning_id: String::new(),
+            warning_kind: String::new(),
+            graph_node_type: String::new(),
+            graph_node_id: String::new(),
+            source_artifact_id: String::new(),
         }
     }
 
@@ -90,6 +116,70 @@ impl CheckDetail {
         self.source_block = source_block.into();
         self
     }
+
+    pub fn with_warning_kind(mut self, warning_kind: impl Into<String>) -> Self {
+        self.warning_kind = warning_kind.into();
+        self
+    }
+
+    pub fn with_graph_node(
+        mut self,
+        graph_node_type: impl Into<String>,
+        graph_node_id: impl Into<String>,
+    ) -> Self {
+        self.graph_node_type = graph_node_type.into();
+        self.graph_node_id = graph_node_id.into();
+        self
+    }
+
+    pub fn with_source_artifact_id(mut self, source_artifact_id: impl Into<String>) -> Self {
+        self.source_artifact_id = source_artifact_id.into();
+        self
+    }
+
+    /// Fill `source_artifact_id` (when URL/cache present) and deterministic `warning_id`.
+    pub fn finalize(mut self) -> Self {
+        if self.source_artifact_id.is_empty()
+            && (!self.source_url.is_empty() || !self.cache_path.is_empty())
+        {
+            self.source_artifact_id = crawl::artifact_id(&self.source_url, &self.cache_path);
+        }
+        self.warning_id = compute_warning_id(&self);
+        self
+    }
+}
+
+/// Deterministic warning id excluding `created_at`.
+pub fn compute_warning_id(detail: &CheckDetail) -> String {
+    let mut hasher = Sha256::new();
+    for part in [
+        detail.check_id.as_str(),
+        detail.severity.as_str(),
+        detail.status.as_str(),
+        detail.session_id.as_str(),
+        detail.meeting_kind.as_str(),
+        detail.meeting_id.as_str(),
+        detail.entity_type.as_str(),
+        detail.entity_id.as_str(),
+        detail.expected.as_str(),
+        detail.actual.as_str(),
+        detail.message.as_str(),
+        detail.source_url.as_str(),
+        detail.cache_path.as_str(),
+        detail.source_block.as_str(),
+        detail.warning_kind.as_str(),
+        detail.graph_node_type.as_str(),
+        detail.graph_node_id.as_str(),
+        detail.source_artifact_id.as_str(),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"|");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+pub fn finalize_details(details: Vec<CheckDetail>) -> Vec<CheckDetail> {
+    details.into_iter().map(CheckDetail::finalize).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -153,4 +243,34 @@ pub fn worst_status<'a>(statuses: impl Iterator<Item = &'a str>) -> &'static str
         }
     }
     worst
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warning_id_stable_and_ignores_created_at() {
+        let a = CheckDetail::new("vote.compact_total_vs_member_names", "warn", "warn", "msg")
+            .with_entity("vote_result", "56-135-r16")
+            .with_graph_node("VoteResult", "56-135-r16")
+            .with_warning_kind("source_conflict")
+            .with_values("a", "b")
+            .with_source("https://example.com", "cache/x.html")
+            .finalize();
+        let mut b = a.clone();
+        b.created_at = "different".into();
+        assert_eq!(a.warning_id, compute_warning_id(&b));
+        assert!(!a.warning_id.is_empty());
+        assert!(!a.source_artifact_id.is_empty());
+    }
+
+    #[test]
+    fn source_local_ids_are_not_graph_ids() {
+        let d = CheckDetail::new("vote.appendix_bucket_counts", "warn", "warn", "msg")
+            .with_entity("vote_result", "16#1")
+            .finalize();
+        assert!(d.graph_node_id.is_empty());
+        assert_eq!(d.entity_id, "16#1");
+    }
 }

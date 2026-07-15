@@ -214,6 +214,14 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             what: "A person appears in both the chair and subchair lists for the same commission.",
             measures: "Reads `commissions.parquet`, splits/trims/case-folds `chairs` and `subchairs`, and fails once per overlapping person name.",
         },
+        "dossier.date_chronology" => CheckDoc {
+            what: "A dossier or subdocument source date is chronologically impossible (submission after vote/end, or future subdocument date).",
+            measures: "Compares ISO dates on `dossiers.parquet` and `subdocuments.parquet`; targets canonical `Dossier:{session}/{id}` without correcting source values.",
+        },
+        "qa.warning_graph_target" => CheckDoc {
+            what: "An entity-level warning points at a missing graph node, a source-local id, or a missing source artifact.",
+            measures: "Validates nonempty `graph_node_type`/`graph_node_id` against `graph/nodes.parquet` and entity-warning `source_artifact_id` against `graph/source_artifacts.parquet`.",
+        },
         "written.duplicate_docname" => CheckDoc {
             what: "The same QRVA DOCNAME appears more than once in written questions staging.",
             measures: "Counts rows per `docname` in `sessions/56/written/questions.parquet`.",

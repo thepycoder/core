@@ -164,6 +164,23 @@ class VoteBreakdown(BaseModel):
     groups: list[VotePositionGroup] = Field(default_factory=list)
 
 
+class DataQualityWarning(BaseModel):
+    warning_id: str
+    warning_kind: str = ""
+    check_id: str
+    severity: str
+    status: str
+    message: str
+    expected: str = ""
+    actual: str = ""
+    graph_node_type: str = ""
+    graph_node_id: str = ""
+    source_url: str = ""
+    cache_path: str = ""
+    source_block: str = ""
+    source_artifact_id: str = ""
+
+
 class UtteranceGroup(BaseModel):
     agenda_id: str = ""
     title: str
@@ -186,6 +203,7 @@ class NodeDetailResponse(BaseModel):
     vote_reconciliation: dict[str, Any] | None = None
     vote_breakdown: VoteBreakdown | None = None
     source_evidence: list[SourceEvidence] = Field(default_factory=list)
+    data_quality_warnings: list[DataQualityWarning] = Field(default_factory=list)
 
 
 class NodeLink(BaseModel):

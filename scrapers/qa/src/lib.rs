@@ -4,6 +4,7 @@ pub mod baseline;
 pub mod check_catalog;
 pub mod commissions;
 pub mod coverage_baseline;
+pub mod dossiers;
 pub mod graph;
 pub mod infrastructure;
 pub mod io;
@@ -18,6 +19,7 @@ pub mod stats;
 pub mod types;
 pub mod vote_source;
 pub mod votes;
+pub mod warnings;
 pub mod written;
 
 use aggregate::{aggregate_details, write_summary_md};
@@ -84,8 +86,14 @@ pub fn run_qa(opts: &QaRunOptions) -> Result<QaRunResult, Box<dyn Error>> {
     details.extend(remunerations::run_remuneration_checks(&data_root)?);
     details.extend(lobby::run_lobby_checks(&data_root)?);
     details.extend(commissions::run_commission_checks(&data_root)?);
+    details.extend(dossiers::run_dossier_chronology_checks(&data_root)?);
     details.extend(remaining::run_remaining_checks(&data_root)?);
     details.extend(schema::run_schema_checks(&data_root, &qa_dir)?);
+
+    let mut details = types::finalize_details(details);
+    details.extend(warnings::run_warning_target_checks(&data_root, &details)?);
+    // Meta-validation rows also need finalized ids.
+    details = types::finalize_details(details);
 
     let summaries = aggregate_details(&details)?;
 
@@ -301,6 +309,8 @@ pub fn registered_check_ids() -> Vec<&'static str> {
         "lobby.column_bleed",
         "commission.chair_subchair_overlap",
         "dossier.ref_exists",
+        "dossier.date_chronology",
+        "qa.warning_graph_target",
         "meeting.chair_source_vs_parquet",
         "meeting.date_source_vs_parquet",
         "meeting.times_source_vs_parquet",

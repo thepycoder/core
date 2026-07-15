@@ -50,6 +50,8 @@ pub fn run_vote_reconciliation_checks(data_dir: &Path) -> Result<Vec<CheckDetail
                 .with_session(&session_ids[i])
                 .with_meeting("plenary", &meeting_ids[i])
                 .with_entity("vote_result", &vote_ids[i])
+                .with_graph_node("VoteResult", &vote_ids[i])
+                .with_warning_kind("source_conflict")
                 .with_values(
                     format!("yes={} no={} abstain={}", yes[i], no[i], abstain[i]),
                     format!(

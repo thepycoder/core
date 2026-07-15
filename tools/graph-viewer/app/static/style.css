@@ -238,6 +238,51 @@ ul {
 .severity-warning { color: var(--warning); }
 .severity-info { color: var(--info); }
 
+.data-quality-warnings { margin-bottom: 1rem; }
+.dq-warning {
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  padding: 0.65rem 0.75rem;
+  margin: 0.5rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.dq-warning.severity-error {
+  border-left-color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+}
+.dq-warning-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-bottom: 0.25rem;
+}
+.dq-warning-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.dq-warning-message {
+  margin: 0.25rem 0 0.4rem;
+  font-size: 0.9rem;
+}
+.dq-warning-claims {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.dq-warning-claims span {
+  display: inline-block;
+  min-width: 5.5rem;
+  color: var(--text);
+  font-weight: 600;
+}
+.dq-warning-source {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+}
+
 .sample {
   font-size: 0.75rem;
   color: var(--muted);

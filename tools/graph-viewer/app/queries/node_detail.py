@@ -22,6 +22,7 @@ from app.queries.discussion_threads import (
     group_utterances_by_agenda,
 )
 from app.queries.entity_preview import fetch_entity_preview
+from app.queries.data_quality_warnings import fetch_data_quality_warnings
 from app.queries.vote_helpers import (
     fetch_headline_tallies,
     fetch_result_member_names,
@@ -72,6 +73,7 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
     vote_breakdown = _fetch_vote_breakdown(conn, node_type, node_id)
     source_evidence = _fetch_source_evidence(conn, node_type, node_id)
     preview = fetch_entity_preview(conn, node_type, node_id)
+    data_quality_warnings = fetch_data_quality_warnings(conn, node_type, node_id)
 
     return NodeDetailResponse(
         id=node_id,
@@ -88,6 +90,7 @@ def fetch_node_detail(conn, node_type: str, node_id: str) -> NodeDetailResponse:
         vote_reconciliation=vote_reconciliation,
         vote_breakdown=vote_breakdown,
         source_evidence=source_evidence,
+        data_quality_warnings=data_quality_warnings,
     )
 
 

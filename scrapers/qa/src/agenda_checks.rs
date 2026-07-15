@@ -181,11 +181,16 @@ fn check_dossier_refs(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
             let source_urls = read_string_column(&batch, "source_url")?;
             let cache_paths = read_string_column(&batch, "cache_path")?;
             for i in 0..batch.num_rows() {
-                let did = dossier_ids_col[i].trim();
-                if did.is_empty() || !did.contains('/') {
+                let raw = dossier_ids_col[i].trim();
+                if raw.is_empty() {
                     continue;
                 }
-                if !dossier_ids.contains_key(did) {
+                let did = if raw.contains('/') {
+                    raw.to_string()
+                } else {
+                    format!("{SESSION_ID}/{raw}")
+                };
+                if !dossier_ids.contains_key(&did) {
                     details.push(
                         CheckDetail::new(
                             "dossier.ref_exists",
@@ -196,7 +201,8 @@ fn check_dossier_refs(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
                                 vote_ids[i]
                             ),
                         )
-                        .with_entity("dossier", did)
+                        .with_entity("dossier", &did)
+                        .with_warning_kind("integrity")
                         .with_source(&source_urls[i], &cache_paths[i]),
                     );
                 }

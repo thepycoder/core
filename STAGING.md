@@ -275,7 +275,15 @@ Oral `questions.parquet` (plenary + commission) gains trailing columns:
 
 Produced by `just qa` (`scrapers/qa`). Detail-first: summary artifacts are always derived from detail rows.
 
-**meeting_report_check_details.parquet:** `check_id`, `severity`, `status`, `session_id`, `meeting_kind`, `meeting_id`, `entity_type`, `entity_id`, `expected`, `actual`, `message`, `source_url`, `cache_path`, `source_block`, `created_at`
+**meeting_report_check_details.parquet:** `check_id`, `severity`, `status`, `session_id`, `meeting_kind`, `meeting_id`, `entity_type`, `entity_id`, `expected`, `actual`, `message`, `source_url`, `cache_path`, `source_block`, `created_at`, `warning_id`, `warning_kind`, `graph_node_type`, `graph_node_id`, `source_artifact_id`
+
+Entity-level warnings for the graph viewer use the same detail store:
+
+- `warning_id` — deterministic SHA-256 over check subject/values/artifact/block fields (excludes `created_at`)
+- `warning_kind` — closed vocabulary: `source_conflict`, `source_anomaly`, `source_gap`, `extraction`, `integrity`, `coverage`
+- `graph_node_type` / `graph_node_id` — exact graph node target (e.g. `VoteResult` / `56-135-r16`); empty when the check subject is source-local only
+- `source_artifact_id` — `crawl::artifact_id(source_url, cache_path)` when provenance URL/cache are present
+- `entity_type` / `entity_id` — check subject, which may remain source-local (e.g. appendix `16#1`) even when a graph target is also set
 
 **checks.parquet:** `table`, `check`, `status`, `count`, `detail`, `examples` — aggregated per `check_id`; includes `qa.summary_vs_detail` meta-check.
 

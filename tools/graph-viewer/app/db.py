@@ -331,6 +331,11 @@ PARQUET_SOURCES: list[tuple[str, str | list[str], list[tuple[str, str]]]] = [
             ("cache_path", "VARCHAR"),
             ("source_block", "VARCHAR"),
             ("created_at", "VARCHAR"),
+            ("warning_id", "VARCHAR"),
+            ("warning_kind", "VARCHAR"),
+            ("graph_node_type", "VARCHAR"),
+            ("graph_node_id", "VARCHAR"),
+            ("source_artifact_id", "VARCHAR"),
         ],
     ),
     (

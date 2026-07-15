@@ -4,7 +4,7 @@ use crawl::vote_inventory::{
     FormalVoteOccurrence, VoteInventory, inventory_vote_numbers, parse_vote_inventory,
     vote_number_gaps,
 };
-use identity::parquet_io::{read_all_rows, read_string_column};
+use identity::parquet_io::{read_all_rows, read_string_column, read_u32_column};
 use normalize::SESSION_ID;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -161,6 +161,8 @@ pub fn run_vote_source_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<d
                                     )
                                     .with_meeting("plenary", meeting_id)
                                     .with_entity("vote_result", result_id)
+                                    .with_graph_node("VoteResult", result_id)
+                                    .with_warning_kind("source_conflict")
                                     .with_source(source_url, cache_path),
                                 );
                             }
@@ -188,6 +190,12 @@ pub fn run_vote_source_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<d
                             )
                             .with_meeting("plenary", meeting_id)
                             .with_entity("vote_result", result_id)
+                            .with_graph_node("VoteResult", result_id)
+                            .with_warning_kind("source_conflict")
+                            .with_values(
+                                format!("headline yes={yes_h} no={no_h} abstain={abstain_h}"),
+                                format!("casts yes={yes_casts} no={no_casts} abstain={abstain_casts}"),
+                            )
                             .with_source(source_url, cache_path),
                         );
                     }
@@ -562,6 +570,8 @@ fn method_detail(
     CheckDetail::new(check_id, "warn", "warn", message)
         .with_meeting("plenary", meeting_id)
         .with_entity("vote_result", result_id)
+        .with_graph_node("VoteResult", result_id)
+        .with_warning_kind("source_conflict")
         .with_source(source_url, cache_path)
 }
 
@@ -783,6 +793,8 @@ fn check_unresolved_vote_events(data_dir: &Path) -> Result<Vec<CheckDetail>, Box
         let evidence = read_string_column(&batch, "evidence_text")?;
         let source_urls = read_string_column(&batch, "source_url")?;
         let cache_paths = read_string_column(&batch, "cache_path")?;
+        let block_starts = read_u32_column(&batch, "block_start")?;
+        let block_ends = read_u32_column(&batch, "block_end")?;
         for i in 0..batch.num_rows() {
             details.push(
                 CheckDetail::new(
@@ -796,7 +808,9 @@ fn check_unresolved_vote_events(data_dir: &Path) -> Result<Vec<CheckDetail>, Box
                 )
                 .with_meeting("plenary", &meeting_ids[i])
                 .with_entity("vote_event", format!("{}:{}", kinds[i], numbers[i]))
-                .with_source(&source_urls[i], &cache_paths[i]),
+                .with_source(&source_urls[i], &cache_paths[i])
+                .with_source_block(format!("{}:{}", block_starts[i], block_ends[i]))
+                .with_warning_kind("extraction"),
             );
         }
     }
@@ -854,10 +868,13 @@ fn check_appendix_bucket_counts(
                 ),
             )
             .with_meeting("plenary", &inv.meeting_id)
+            // Keep source-local occurrence as check subject; do not set graph_node_*
+            // (IDs like `16#1` are not VoteResult graph ids).
             .with_entity(
                 "vote_result",
                 format!("{}#{}", bucket.vote_number, bucket.occurrence),
             )
+            .with_warning_kind("source_conflict")
             .with_values(
                 bucket.declared_count.to_string(),
                 bucket.collected_name_count.to_string(),
