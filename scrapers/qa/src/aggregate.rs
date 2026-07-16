@@ -29,16 +29,19 @@ pub fn aggregate_details(details: &[CheckDetail]) -> Result<Vec<CheckSummary>, B
                 .take(MAX_EXAMPLES)
                 .map(|r| format!("{} | {} | {}", r.entity_id, r.expected, r.actual))
                 .collect();
+            let detail = if count == 0 {
+                "no issues".to_string()
+            } else if check_id == "graph.utterance_spoke_resolved" {
+                spoke_resolved_detail(rows)
+            } else {
+                format!("{count} issue(s)")
+            };
             CheckSummary {
                 table: table_for_check_id(check_id),
                 check: check_id.clone(),
                 status: status.to_string(),
                 count,
-                detail: if count == 0 {
-                    "no issues".to_string()
-                } else {
-                    format!("{count} issue(s)")
-                },
+                detail,
                 examples: examples.join("; "),
             }
         })
@@ -98,6 +101,22 @@ pub fn aggregate_details(details: &[CheckDetail]) -> Result<Vec<CheckSummary>, B
     }
 
     Ok(summaries)
+}
+
+fn spoke_resolved_detail(rows: &[&CheckDetail]) -> String {
+    let mut designed = 0usize;
+    let mut other = 0usize;
+    for row in rows {
+        if row.expected.starts_with("designed:") {
+            designed += 1;
+        } else {
+            other += 1;
+        }
+    }
+    format!(
+        "{total} missing SPOKE (designed={designed}, other={other})",
+        total = rows.len()
+    )
 }
 
 pub fn write_summary_md(
@@ -229,5 +248,22 @@ mod tests {
         assert_eq!(vote.count, 2);
         let meta = summaries.iter().find(|s| s.check == META_CHECK_ID).unwrap();
         assert_eq!(meta.status, "pass");
+    }
+
+    #[test]
+    fn spoke_resolved_detail_counts_designed_vs_other() {
+        let details = vec![
+            CheckDetail::new("graph.utterance_spoke_resolved", "info", "info", "a")
+                .with_values("designed:chair_title_skip", "Voorzitter"),
+            CheckDetail::new("graph.utterance_spoke_resolved", "info", "info", "b")
+                .with_values("designed:chair_title_skip", "Voorzitter"),
+            CheckDetail::new("graph.utterance_spoke_resolved", "info", "info", "c")
+                .with_values("other:unresolved", "Someone"),
+        ];
+        let refs: Vec<&CheckDetail> = details.iter().collect();
+        assert_eq!(
+            spoke_resolved_detail(&refs),
+            "3 missing SPOKE (designed=2, other=1)"
+        );
     }
 }

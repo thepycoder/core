@@ -1,6 +1,7 @@
 use crate::{SESSION_ID, types::CheckDetail};
 use crawl::utils::is_flwb_document_id;
 use identity::parquet_io::{read_all_rows, read_string_column};
+use normalize::{MissingSpokeKind, classify_missing_spoke};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::Path;
@@ -11,6 +12,13 @@ struct EdgeRow {
     from_id: String,
     to_type: String,
     to_id: String,
+}
+
+struct UtteranceSpeakerMeta {
+    raw_speaker: String,
+    speaker_role: String,
+    speaker_person_id: String,
+    speaker_entity_id: String,
 }
 
 pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error>> {
@@ -123,16 +131,37 @@ pub fn run_graph_checks(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Err
         }
     }
 
+    let utterance_meta = load_utterance_speaker_meta(data_dir)?;
+
     for uid in &utterance_ids {
         if !spoke_targets.contains(uid) {
+            let kind = match utterance_meta.get(uid) {
+                Some(meta) => classify_missing_spoke(
+                    Some(&meta.raw_speaker),
+                    Some(&meta.speaker_role),
+                    &meta.speaker_person_id,
+                    &meta.speaker_entity_id,
+                ),
+                None => MissingSpokeKind::MissingNormalizedRow,
+            };
+            let (severity, status) = if kind == MissingSpokeKind::ResolvedWithoutSpoke {
+                ("warn", "warn")
+            } else {
+                ("info", "info")
+            };
+            let raw = utterance_meta
+                .get(uid)
+                .map(|m| m.raw_speaker.as_str())
+                .unwrap_or("");
             details.push(
                 CheckDetail::new(
                     "graph.utterance_spoke_resolved",
-                    "info",
-                    "info",
-                    format!("Utterance {uid} has no SPOKE edge"),
+                    severity,
+                    status,
+                    format!("Utterance {uid} has no SPOKE edge ({})", kind.label()),
                 )
-                .with_entity("utterance", uid),
+                .with_entity("utterance", uid)
+                .with_values(kind.label(), raw),
             );
         }
     }
@@ -277,4 +306,33 @@ fn load_edges(path: &Path) -> Result<Vec<EdgeRow>, Box<dyn Error>> {
         }
     }
     Ok(edges)
+}
+
+fn load_utterance_speaker_meta(
+    data_dir: &Path,
+) -> Result<HashMap<String, UtteranceSpeakerMeta>, Box<dyn Error>> {
+    let path = data_dir.join("normalized/utterances.parquet");
+    let mut out = HashMap::new();
+    if !path.exists() {
+        return Ok(out);
+    }
+    for batch in read_all_rows(&path)? {
+        let ids = read_string_column(&batch, "utterance_id")?;
+        let raw_speakers = read_string_column(&batch, "raw_speaker")?;
+        let speaker_roles = read_string_column(&batch, "speaker_role")?;
+        let speaker_person_ids = read_string_column(&batch, "speaker_person_id")?;
+        let speaker_entity_ids = read_string_column(&batch, "speaker_entity_id")?;
+        for i in 0..batch.num_rows() {
+            out.insert(
+                ids[i].clone(),
+                UtteranceSpeakerMeta {
+                    raw_speaker: raw_speakers[i].clone(),
+                    speaker_role: speaker_roles[i].clone(),
+                    speaker_person_id: speaker_person_ids[i].clone(),
+                    speaker_entity_id: speaker_entity_ids[i].clone(),
+                },
+            );
+        }
+    }
+    Ok(out)
 }

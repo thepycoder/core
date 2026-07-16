@@ -23,6 +23,7 @@ pub fn stats_for_check(
         "vote.source_inventory_vs_parquet" => inventory_gap_stats(details),
         "agenda.entity_count_vs_parquet" => entity_count_gap_stats(details),
         "graph.edge_endpoints_exist" => entity_type_breakdown_stats(details),
+        "graph.utterance_spoke_resolved" => utterance_spoke_resolved_stats(details),
         "normalize.unresolved_persons_by_bucket" => bucket_breakdown_stats(details),
         _ => generic_meeting_kind_stats(check_id, details),
     }
@@ -348,6 +349,58 @@ fn entity_type_breakdown_stats(details: &[CheckDetail]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+fn utterance_spoke_resolved_stats(details: &[CheckDetail]) -> Option<String> {
+    let rows: Vec<_> = details
+        .iter()
+        .filter(|d| d.check_id == "graph.utterance_spoke_resolved")
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+
+    let mut by_kind: HashMap<String, usize> = HashMap::new();
+    let mut designed = 0usize;
+    let mut other = 0usize;
+    for d in &rows {
+        let kind = if d.expected.is_empty() {
+            "unclassified".to_string()
+        } else {
+            d.expected.clone()
+        };
+        if kind.starts_with("designed:") {
+            designed += 1;
+        } else {
+            other += 1;
+        }
+        *by_kind.entry(kind).or_default() += 1;
+    }
+    let mut pairs: Vec<_> = by_kind.into_iter().collect();
+    pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut lines = vec![format!(
+        "**Missing SPOKE breakdown:** {} total (designed={designed}, other={other})",
+        rows.len()
+    )];
+    for (kind, count) in pairs {
+        let note = match kind.as_str() {
+            "designed:chair_title_skip" => {
+                " — bare Voorzitter/Président skipped in normalize (`skip_speaker`)"
+            }
+            "designed:unknown_speaker_skip" => {
+                " — empty / onbekend / n . speaker skipped by design"
+            }
+            "other:unresolved" => " — speaker unresolved after actor resolution",
+            "unexpected:resolved_without_spoke" => {
+                " — has Person/ExternalPerson id but no SPOKE (investigate graph builder)"
+            }
+            "other:missing_normalized_row" => " — graph Utterance without normalized row",
+            _ => "",
+        };
+        lines.push(format!("- `{kind}`: {count}{note}"));
+    }
+    Some(lines.join("\n"))
+}
+
 fn bucket_breakdown_stats(details: &[CheckDetail]) -> Option<String> {
     let rows: Vec<_> = details
         .iter()
@@ -449,5 +502,21 @@ mod tests {
         let stats = inventory_gap_stats(&details).unwrap();
         assert!(stats.contains("gap 2"));
         assert!(stats.contains("meeting 129"));
+    }
+
+    #[test]
+    fn utterance_spoke_stats_designed_vs_other() {
+        let details = vec![
+            CheckDetail::new("graph.utterance_spoke_resolved", "info", "info", "a")
+                .with_values("designed:chair_title_skip", "Voorzitter"),
+            CheckDetail::new("graph.utterance_spoke_resolved", "info", "info", "b")
+                .with_values("designed:chair_title_skip", "Voorzitter"),
+            CheckDetail::new("graph.utterance_spoke_resolved", "warn", "warn", "c")
+                .with_values("unexpected:resolved_without_spoke", "X"),
+        ];
+        let stats = utterance_spoke_resolved_stats(&details).unwrap();
+        assert!(stats.contains("designed=2, other=1"));
+        assert!(stats.contains("`designed:chair_title_skip`"));
+        assert!(stats.contains("`unexpected:resolved_without_spoke`"));
     }
 }

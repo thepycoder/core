@@ -228,8 +228,8 @@ Referential integrity, graph linkage, and plausibility constraints.
 
 #### B6. Utterance SPOKE edge coverage
 - **Check id:** `graph.utterance_spoke_resolved`
-- **Compares:** Utterance nodes with resolvable non-chair speakers should have `SPOKE` edge (1,154 without today).
-- **Why:** Separates expected chair/unresolved from resolver regressions.
+- **Compares:** Utterance nodes without a `SPOKE` edge, classified against normalize `skip_speaker` / resolution.
+- **Why:** Bare chair titles (`Voorzitter`/`Président`) are skipped by design; summary reports designed vs other counts so resolver/graph regressions stay visible.
 
 #### B7. Commission hearing headings flagged
 - **Check id:** `agenda.hearing_not_extracted`

@@ -53,12 +53,77 @@ pub struct UtteranceOutput {
     pub unresolved: Vec<UnresolvedRow>,
 }
 
-fn skip_speaker(raw: &str, speaker_role: &str) -> bool {
+/// Bare procedural chair labels that normalize intentionally leaves unresolved (no SPOKE).
+/// Meeting reports usually name the chair only as "Voorzitter" / "Président", not the sitting MP
+/// — e.g. utterance `56_plenary_97_14_chair_112` with `raw_speaker = "Voorzitter"`.
+pub fn is_bare_chair_title(raw: &str, speaker_role: &str) -> bool {
+    let lower = raw.trim().to_lowercase();
+    speaker_role == "chair" && matches!(lower.as_str(), "voorzitter" | "président" | "president")
+}
+
+/// Speakers that intentionally get no Person/ExternalPerson resolution (and thus no SPOKE edge).
+pub fn skip_speaker(raw: &str, speaker_role: &str) -> bool {
     let lower = raw.trim().to_lowercase();
     if lower.is_empty() || lower == "onbekend" || lower == "n ." {
         return true;
     }
-    speaker_role == "chair" && matches!(lower.as_str(), "voorzitter" | "président" | "president")
+    is_bare_chair_title(raw, speaker_role)
+}
+
+/// Why an Utterance has no incoming SPOKE edge — for QA (`graph.utterance_spoke_resolved`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingSpokeKind {
+    /// Bare "Voorzitter"/"Président" chair title skipped by design.
+    DesignedChairTitleSkip,
+    /// Empty / "onbekend" / "n ." speaker skipped by design.
+    DesignedUnknownSpeakerSkip,
+    /// Speaker left unresolved after actor resolution.
+    UnresolvedSpeaker,
+    /// Normalized row has a Person/ExternalPerson id but graph has no SPOKE (builder bug).
+    ResolvedWithoutSpoke,
+    /// Graph Utterance node with no matching normalized row.
+    MissingNormalizedRow,
+}
+
+impl MissingSpokeKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DesignedChairTitleSkip => "designed:chair_title_skip",
+            Self::DesignedUnknownSpeakerSkip => "designed:unknown_speaker_skip",
+            Self::UnresolvedSpeaker => "other:unresolved",
+            Self::ResolvedWithoutSpoke => "unexpected:resolved_without_spoke",
+            Self::MissingNormalizedRow => "other:missing_normalized_row",
+        }
+    }
+
+    pub fn is_designed(self) -> bool {
+        matches!(
+            self,
+            Self::DesignedChairTitleSkip | Self::DesignedUnknownSpeakerSkip
+        )
+    }
+}
+
+pub fn classify_missing_spoke(
+    raw_speaker: Option<&str>,
+    speaker_role: Option<&str>,
+    speaker_person_id: &str,
+    speaker_entity_id: &str,
+) -> MissingSpokeKind {
+    let Some(raw) = raw_speaker else {
+        return MissingSpokeKind::MissingNormalizedRow;
+    };
+    let role = speaker_role.unwrap_or("");
+    if !speaker_person_id.is_empty() || !speaker_entity_id.is_empty() {
+        return MissingSpokeKind::ResolvedWithoutSpoke;
+    }
+    if is_bare_chair_title(raw, role) {
+        return MissingSpokeKind::DesignedChairTitleSkip;
+    }
+    if skip_speaker(raw, role) {
+        return MissingSpokeKind::DesignedUnknownSpeakerSkip;
+    }
+    MissingSpokeKind::UnresolvedSpeaker
 }
 
 pub fn normalize_utterances(
@@ -360,4 +425,51 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         )
     })));
     write_parquet(path, schema, columns)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_chair_title_is_designed_skip() {
+        assert!(is_bare_chair_title("Voorzitter", "chair"));
+        assert!(is_bare_chair_title("Président", "chair"));
+        assert!(skip_speaker("Voorzitter", "chair"));
+        assert_eq!(
+            classify_missing_spoke(Some("Voorzitter"), Some("chair"), "", ""),
+            MissingSpokeKind::DesignedChairTitleSkip
+        );
+        // Named chair still resolves — not a designed skip.
+        assert!(!is_bare_chair_title("Denis Ducarme", "chair"));
+        assert!(!skip_speaker("Denis Ducarme", "chair"));
+    }
+
+    #[test]
+    fn unknown_speaker_is_designed_skip() {
+        assert_eq!(
+            classify_missing_spoke(Some("onbekend"), Some("mp"), "", ""),
+            MissingSpokeKind::DesignedUnknownSpeakerSkip
+        );
+        assert_eq!(
+            classify_missing_spoke(Some(""), Some("mp"), "", ""),
+            MissingSpokeKind::DesignedUnknownSpeakerSkip
+        );
+    }
+
+    #[test]
+    fn unresolved_and_unexpected_missing_spoke() {
+        assert_eq!(
+            classify_missing_spoke(Some("Some Unknown"), Some("mp"), "", ""),
+            MissingSpokeKind::UnresolvedSpeaker
+        );
+        assert_eq!(
+            classify_missing_spoke(Some("Voorzitter"), Some("chair"), "06447", ""),
+            MissingSpokeKind::ResolvedWithoutSpoke
+        );
+        assert_eq!(
+            classify_missing_spoke(None, None, "", ""),
+            MissingSpokeKind::MissingNormalizedRow
+        );
+    }
 }

@@ -99,8 +99,8 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             measures: "Compares each `plenary/votes.parquet` (`vote_id`, `result_id`) pair with exactly one Vote→VoteResult `HAS_RESULT` graph edge.",
         },
         "graph.utterance_spoke_resolved" => CheckDoc {
-            what: "An Utterance node has no incoming `SPOKE` edge from a resolved Person.",
-            measures: "Collects all Utterance node ids and subtracts those referenced as `SPOKE` targets.",
+            what: "An Utterance node has no incoming `SPOKE` edge. Bare chair titles (\"Voorzitter\"/\"Président\") are skipped by design in normalize; other gaps may be unresolved speakers or graph-builder bugs.",
+            measures: "Collects Utterance node ids missing as `SPOKE` targets, classifies each via normalized `raw_speaker`/`speaker_role` (`designed:chair_title_skip` vs `other:*` / `unexpected:*`), and reports designed vs other counts in summary stats.",
         },
         "graph.external_on_mp_only_edges" => CheckDoc {
             what: "An ExternalPerson is the source of an edge type reserved for chamber MPs (MEMBER_OF, CAST, ASKED, HOLDS_ROLE).",

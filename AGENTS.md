@@ -10,6 +10,8 @@ Use **uv** (never global `pip install` or system Python for project code).
 - `uv add …` / `uv add --dev …` for deps
 - `uvx …` for one-off CLIs
 
+There is a global system-wide install of duckdb you can use to inspect parquet files: `duckdb -c "..."`
+
 ## Data stack
 
 - **Parquet is canonical** — source of truth under `data/`; optimize for longevity and queryability.
@@ -60,6 +62,6 @@ Assume the reader lacks a mental model of this codebase. Before code-level detai
 - Match existing scraper pattern: fetch → parse → write Parquet; cache HTML/PDF under `SCRAPER_CACHE_DIR`.
 - New staging columns/schemas: update `STAGING.md`.
 - New nodes/edges: update `DATA_GRAPH.md` and wire through identity + graph builder.
-- **Data graph canvas:** keep `canvases/data-graph-overview.canvas.tsx` in sync with `DATA_GRAPH.md` whenever you add or change node types, edge types, implementation status, coverage counts, or pipeline stages. Update the inline `NODES` and `EDGES` catalogs (labels, domains, status, id keys, notes) and any summary stats shown in the canvas (built node/edge counts, coverage bar). The repo copy is canonical; if you use the live Cursor canvas beside chat, sync the same file there too.
+- **Data graph overview:** keep `docs/data-graph-overview.html` in sync with `DATA_GRAPH.md` whenever you add or change node types, edge types, implementation status, coverage counts, or pipeline stages. Update the inline `NODES` / `EDGES` / `BUILT` catalogs (labels, domains, status, id keys, notes, live `data/graph` counts). After `just build-graph`, refresh `BUILT` node/edge totals from `data/graph/nodes.parquet` and `edges.parquet`.
 - Minimize scope for small fixes; for structural problems, refactor properly instead of patching around them.
 - When adding exceptions or regexes or other case-specific logic, always add and example reference to a document in comments

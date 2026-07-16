@@ -26,7 +26,10 @@ pub use provenance::{
     confidence_from_label, normalize_extractor_version, provenance_columns, provenance_fields,
     provenance_of,
 };
-pub use utterances::{UtteranceOutput, UtteranceRow, normalize_utterances, write_utterances};
+pub use utterances::{
+    MissingSpokeKind, UtteranceOutput, UtteranceRow, classify_missing_spoke, is_bare_chair_title,
+    normalize_utterances, skip_speaker, write_utterances,
+};
 pub use vote_casts::{VoteCastOutput, normalize_vote_casts};
 pub use written_answers::{
     AnsweredByRow, NormalizedAnswerRow, WrittenAnswersOutput, normalize_written_answers,

@@ -28,7 +28,7 @@ import {
 // ── Node catalog (from DATA_GRAPH.md) ────────────────────────────────────────
 
 type Domain = "foundation" | "identity" | "proceedings" | "legislative" | "enrichment";
-type Status = "working" | "scraped" | "partial" | "planned";
+type Status = "working" | "scraped" | "partial" | "planned" | "derived";
 
 type NodeDef = {
   id: string;
@@ -41,33 +41,33 @@ type NodeDef = {
 
 const NODES: NodeDef[] = [
   { id: "Session", label: "Session", domain: "foundation", status: "scraped", idKey: "session_id", note: "Legislative term anchor" },
-  { id: "Person", label: "Person", domain: "identity", status: "working", idKey: "person_id", note: "Chamber MPs (cvview-backed)" },
-  { id: "ExternalPerson", label: "ExternalPerson", domain: "identity", status: "working", idKey: "external_person_id", note: "57 entities; ministers, experts, roles" },
-  { id: "Party", label: "Party", domain: "identity", status: "working", idKey: "slug / name", note: "Fraction; time-bounded membership" },
-  { id: "Commission", label: "Commission", domain: "identity", status: "working", idKey: "name / enum", note: "Committee; links to meetings & dossiers" },
-  { id: "Meeting", label: "Meeting", domain: "proceedings", status: "scraped", idKey: "{session, kind, meeting_id}", note: "Plenary + commission integraal" },
-  { id: "AgendaItem", label: "AgendaItem", domain: "proceedings", status: "partial", idKey: "{meeting_id, seq}", note: "Report headings; heuristic boundaries" },
-  { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "43,431 full-session rows; PART_OF Question/Hearing/Interpellation" },
-  { id: "Question", label: "Question", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq} | 56_written_{DOCNAME}", note: "Oral + QRVA written; oral-written inline bodies" },
-  { id: "Answer", label: "Answer", domain: "proceedings", status: "working", idKey: "56_qrva_{route}_a{slot} | {question_id}_a1", note: "QRVA slots + integraal oral-written blocks" },
-  { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-v{seq}", note: "Decision/matter; block-native assembly" },
-  { id: "VoteResult", label: "VoteResult", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-r{seq}", note: "Reusable roll-call/secret/sitting-standing/quorum evidence" },
-  { id: "VoteCast", label: "VoteCast", domain: "proceedings", status: "working", idKey: "{result_id, person_id, position}", note: "Normalized from vote_result_members; graph CAST Person→VoteResult" },
+  { id: "Person", label: "Person", domain: "identity", status: "working", idKey: "person_id", note: "175 Chamber MPs (cvview-backed)" },
+  { id: "ExternalPerson", label: "ExternalPerson", domain: "identity", status: "working", idKey: "external_person_id", note: "95 entities; ministers, experts, roles" },
+  { id: "Party", label: "Party", domain: "identity", status: "working", idKey: "slug / name", note: "13 fractions; time-bounded membership" },
+  { id: "Commission", label: "Commission", domain: "identity", status: "working", idKey: "name / enum", note: "35 committees; links to meetings & dossiers" },
+  { id: "Meeting", label: "Meeting", domain: "proceedings", status: "working", idKey: "{session, kind, meeting_id}", note: "556 plenary + commission nodes" },
+  { id: "AgendaItem", label: "AgendaItem", domain: "proceedings", status: "partial", idKey: "{meeting_id, seq}", note: "Report headings; heuristic boundaries; not graphed as nodes" },
+  { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "43,996 nodes; PART_OF Question/Hearing/Interpellation" },
+  { id: "Question", label: "Question", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq} | 56_written_{DOCNAME}", note: "18,305 oral + QRVA written" },
+  { id: "Answer", label: "Answer", domain: "proceedings", status: "working", idKey: "56_qrva_{route}_a{slot} | {question_id}_a1", note: "8,849 QRVA slots + oral-written blocks" },
+  { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-v{seq}", note: "1,424 decision/matter nodes" },
+  { id: "VoteResult", label: "VoteResult", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-r{seq}", note: "1,422 reusable roll-call/secret/sitting-standing/quorum evidence" },
+  { id: "VoteCast", label: "VoteCast", domain: "proceedings", status: "partial", idKey: "{result_id, person_id, position}", note: "Normalized vote_casts; graph uses CAST Person→VoteResult (no VoteCast nodes)" },
   { id: "Motion", label: "Motion", domain: "proceedings", status: "planned", idKey: "motion id + context", note: "Referenced in vote parsing, not modelled" },
-  { id: "Hearing", label: "Hearing", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Commission hoorzitting/audition; hearings.parquet" },
-  { id: "Interpellation", label: "Interpellation", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "Plenary Interpellatie van; internal_ids …I" },
-  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "1,647 nodes; FLWB browse + plenary refs" },
-  { id: "Document", label: "Document", domain: "legislative", status: "scraped", idKey: "FLWB doc id", note: "4,151 metadata rows, including primary /001; body via PDF pipeline" },
-  { id: "Amendment", label: "Amendment", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "Subdocument typed AMENDEMENT" },
+  { id: "Hearing", label: "Hearing", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "3 commission hoorzitting/audition nodes" },
+  { id: "Interpellation", label: "Interpellation", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq}", note: "182 plenary Interpellatie nodes" },
+  { id: "Dossier", label: "Dossier", domain: "legislative", status: "working", idKey: "{session_id}/{number}", note: "1,664 nodes; FLWB browse + plenary refs" },
+  { id: "Document", label: "Document", domain: "legislative", status: "working", idKey: "FLWB doc id", note: "4,205 metadata rows, including primary /001" },
+  { id: "Amendment", label: "Amendment", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "Subdocument typed AMENDEMENT (as Document today)" },
   { id: "Report", label: "Report", domain: "legislative", status: "scraped", idKey: "doc id + dossier", note: "VERSLAG subdocuments; PDF-heavy" },
-  { id: "Topic", label: "Topic", domain: "legislative", status: "partial", idKey: "Eurovoc id + label", note: "On dossiers; utterance tagging future" },
-  { id: "LobbyOrg", label: "LobbyOrg", domain: "enrichment", status: "scraped", idKey: "name", note: "301 orgs from lobbyregister.pdf" },
-  { id: "Remuneration", label: "Remuneration", domain: "enrichment", status: "scraped", idKey: "{person, year, mandate}", note: "regimand.be; name match only" },
+  { id: "Topic", label: "Topic", domain: "legislative", status: "working", idKey: "Eurovoc id + label", note: "1,433 topics; TAGGED_WITH on dossiers; utterance tagging future" },
+  { id: "LobbyOrg", label: "LobbyOrg", domain: "enrichment", status: "scraped", idKey: "name", note: "301 orgs from lobbyregister.pdf; not graphed" },
+  { id: "Remuneration", label: "Remuneration", domain: "enrichment", status: "scraped", idKey: "{person, year, mandate}", note: "regimand.be; name match only; not graphed" },
   { id: "MediaRecording", label: "MediaRecording", domain: "enrichment", status: "planned", idKey: "media id", note: "media.dekamer.be; fuzzy date match" },
   { id: "InterventionAnalysis", label: "InterventionAnalysis", domain: "enrichment", status: "planned", idKey: "dossier / meeting ref", note: "Structured speaker/topic data" },
-  { id: "SourceArtifact", label: "SourceArtifact", domain: "foundation", status: "working", idKey: "source_artifact_id", note: "graph/source_artifacts.parquet; transform-time hash + scraped_at from meta/manifests" },
-  { id: "ReportBlock", label: "ReportBlock", domain: "proceedings", status: "working", idKey: "{artifact_id, block_index}", note: "Derived structured blocks from integraal HTML" },
-  { id: "SourceSpan", label: "SourceSpan", domain: "proceedings", status: "working", idKey: "span_id", note: "Block-range provenance for votes, utterances, hearings…" },
+  { id: "SourceArtifact", label: "SourceArtifact", domain: "foundation", status: "derived", idKey: "source_artifact_id", note: "15,117 rows in graph/source_artifacts.parquet (not nodes.parquet)" },
+  { id: "ReportBlock", label: "ReportBlock", domain: "proceedings", status: "derived", idKey: "{artifact_id, block_index}", note: "Derived structured blocks from integraal HTML" },
+  { id: "SourceSpan", label: "SourceSpan", domain: "proceedings", status: "derived", idKey: "span_id", note: "Block-range provenance for votes, utterances, hearings…" },
 ];
 
 // ── Edge catalog ─────────────────────────────────────────────────────────────
@@ -81,51 +81,53 @@ type EdgeDef = {
 };
 
 const EDGES: EdgeDef[] = [
-  { type: "MEMBER_OF", from: "Person", to: "Party", status: "working", note: "Per-session; time range on CV" },
-  { type: "MEMBER_OF", from: "Person", to: "Commission", status: "working", note: "Permanent vs replacement" },
-  { type: "HOLDS_ROLE", from: "Person", to: "Meeting", status: "partial", note: "Chair regex for commission" },
+  { type: "MEMBER_OF", from: "Person", to: "Party", status: "working", note: "175 edges; per-session membership" },
+  { type: "MEMBER_OF", from: "Person", to: "Commission", status: "working", note: "1,076 permanent vs replacement" },
+  { type: "HOLDS_ROLE", from: "Person", to: "Meeting", status: "working", note: "422 chair edges for commission" },
   { type: "HOLDS_ROLE", from: "Person", to: "Dossier", status: "partial", note: "Rapporteur on dossier fiche" },
   { type: "ATTENDED", from: "Person", to: "Meeting", status: "planned", note: "Opening/closing attendance lists" },
-  { type: "SPOKE", from: "Person", to: "Utterance", status: "working", note: "40,311 edges; chairs/unresolved skipped" },
-  { type: "SPOKE", from: "ExternalPerson", to: "Utterance", status: "working", note: "Ministers, experts, roles via ActorResolver" },
-  { type: "PART_OF", from: "Utterance", to: "Meeting", status: "working", note: "61,057 edges across all item kinds" },
-  { type: "PART_OF", from: "Utterance", to: "Question", status: "working", note: "When item_kind = question" },
-  { type: "PART_OF", from: "Utterance", to: "Hearing", status: "working", note: "When item_kind = hearing" },
-  { type: "PART_OF", from: "Utterance", to: "Interpellation", status: "working", note: "When item_kind = interpellation" },
-  { type: "PART_OF", from: "Hearing", to: "Meeting", status: "working", note: "Proceeding entity under meeting" },
-  { type: "PART_OF", from: "Interpellation", to: "Meeting", status: "working", note: "Proceeding entity under meeting" },
-  { type: "INTERPELLED", from: "Person", to: "Interpellation", status: "working", note: "From interpellators field" },
-  { type: "RESPONDED", from: "Person", to: "Interpellation", status: "working", note: "Named respondents" },
-  { type: "RESPONDED", from: "ExternalPerson", to: "Interpellation", status: "working", note: "Portfolio-title respondents" },
-  { type: "INVITED", from: "ExternalPerson", to: "Hearing", status: "partial", note: "Witnesses when parseable" },
-  { type: "ASKED", from: "Person", to: "Question", status: "working", note: "Oral + written_asked (actr id first)" },
-  { type: "ADDRESSED_TO", from: "Question", to: "ExternalPerson", status: "working", note: "QRVA dept routes; metadata in properties_json" },
-  { type: "HAS_ANSWER", from: "Question", to: "Answer", status: "working", note: "One edge per answer slot / inline block" },
-  { type: "ANSWERED_BY", from: "Answer", to: "ExternalPerson", status: "working", note: "Dept role + named minister when resolvable" },
-  { type: "ANSWERED_BY", from: "Answer", to: "Person", status: "working", note: "Inline oral-written respondents" },
-  { type: "REFERENCES", from: "Question", to: "Question", status: "working", note: "Exact oral ref merges written QRVA → oral Question" },
-  { type: "ANSWERED", from: "ExternalPerson", to: "Question", status: "working", note: "Legacy header respondents (oral)" },
-  { type: "ANSWERED", from: "Person", to: "Question", status: "working", note: "Legacy header respondents (oral)" },
+  { type: "SPOKE", from: "Person", to: "Utterance", status: "working", note: "39,160 edges; chairs/unresolved skipped" },
+  { type: "SPOKE", from: "ExternalPerson", to: "Utterance", status: "working", note: "2,198 ministers, experts, roles via ActorResolver" },
+  { type: "PART_OF", from: "Utterance", to: "Meeting", status: "working", note: "43,996 edges" },
+  { type: "PART_OF", from: "Utterance", to: "Question", status: "working", note: "33,235 when item_kind = question" },
+  { type: "PART_OF", from: "Utterance", to: "Hearing", status: "working", note: "31 when item_kind = hearing" },
+  { type: "PART_OF", from: "Utterance", to: "Interpellation", status: "working", note: "647 when item_kind = interpellation" },
+  { type: "PART_OF", from: "Hearing", to: "Meeting", status: "working", note: "3 proceeding entities under meeting" },
+  { type: "PART_OF", from: "Interpellation", to: "Meeting", status: "working", note: "182 proceeding entities under meeting" },
+  { type: "INTERPELLED", from: "Person", to: "Interpellation", status: "working", note: "182 from interpellators field" },
+  { type: "RESPONDED", from: "Person", to: "Interpellation", status: "working", note: "123 named respondents" },
+  { type: "RESPONDED", from: "ExternalPerson", to: "Interpellation", status: "working", note: "34 portfolio-title respondents" },
+  { type: "INVITED", from: "ExternalPerson", to: "Hearing", status: "partial", note: "Witnesses when parseable; none in current graph" },
+  { type: "ASKED", from: "Person", to: "Question", status: "working", note: "24,387 oral + written_asked" },
+  { type: "ADDRESSED_TO", from: "Question", to: "ExternalPerson", status: "working", note: "12,476 QRVA dept routes" },
+  { type: "HAS_ANSWER", from: "Question", to: "Answer", status: "working", note: "8,849 one edge per answer slot / inline block" },
+  { type: "ANSWERED_BY", from: "Answer", to: "ExternalPerson", status: "working", note: "8,733 dept role + named minister" },
+  { type: "ANSWERED_BY", from: "Answer", to: "Person", status: "working", note: "116 inline oral-written respondents" },
+  { type: "REFERENCES", from: "Question", to: "Question", status: "working", note: "Exact oral ref merges written QRVA → oral Question (emitted when written≠canonical)" },
+  { type: "ANSWERED", from: "ExternalPerson", to: "Question", status: "working", note: "1,741 legacy header respondents (oral)" },
+  { type: "ANSWERED", from: "Person", to: "Question", status: "working", note: "5,832 legacy header respondents (oral)" },
   { type: "ABOUT", from: "Question", to: "Topic", status: "planned", note: "Free text; summarizer exists" },
   { type: "LINKED_TO", from: "Question", to: "Dossier", status: "partial", note: "Commission questions carry dossier ids" },
-  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "14,039 via ActorResolver" },
+  { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "8,620 via ActorResolver" },
+  { type: "AUTHORED", from: "Person", to: "Dossier", status: "working", note: "5,419 dossier-level authors" },
+  { type: "AUTHORED", from: "ExternalPerson", to: "Dossier", status: "working", note: "142 institutional / non-MP authors" },
   { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Regex from proposition/vote titles" },
   { type: "DISCUSSED_IN", from: "Dossier", to: "Meeting", status: "planned", note: "Dossier fiche calendar not ingested" },
-  { type: "HAS_RESULT", from: "Vote", to: "VoteResult", status: "working", note: "votes.result_id → reusable evidence" },
-  { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "145 orphan refs to partial ids" },
-  { type: "VOTED_ON", from: "Vote", to: "Document", status: "working", note: "From vote title parsing" },
+  { type: "HAS_RESULT", from: "Vote", to: "VoteResult", status: "working", note: "1,424 votes.result_id → reusable evidence" },
+  { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "948 edges; some orphan refs remain" },
+  { type: "VOTED_ON", from: "Vote", to: "Document", status: "partial", note: "From vote title parsing; not in current graph" },
   { type: "VOTED_ON", from: "Vote", to: "Motion", status: "partial", note: "motion_id partially parsed" },
-  { type: "CAST", from: "Person", to: "VoteResult", status: "working", note: "Named roll-call only; shared across reused results" },
-  { type: "TAGGED_WITH", from: "Dossier", to: "Topic", status: "working", note: "Eurovoc on dossier fiche" },
+  { type: "CAST", from: "Person", to: "VoteResult", status: "working", note: "164,035 named roll-call; shared across reused results" },
+  { type: "TAGGED_WITH", from: "Dossier", to: "Topic", status: "working", note: "10,097 Eurovoc on dossier fiche" },
   { type: "TAGGED_WITH", from: "Utterance", to: "Topic", status: "planned", note: "NLP / intervention analysis" },
-  { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "4,151 source-linked FLWB documents" },
+  { type: "SUBMITTED", from: "Document", to: "Dossier", status: "working", note: "4,205 source-linked FLWB documents" },
   { type: "DECLARES_INTEREST", from: "Person", to: "LobbyOrg", status: "planned", note: "Lobby register not linked" },
-  { type: "EARNED", from: "Person", to: "Remuneration", status: "scraped", note: "Name match only" },
+  { type: "EARNED", from: "Person", to: "Remuneration", status: "scraped", note: "Name match only; not graphed" },
   { type: "RECORDED_IN", from: "Meeting", to: "MediaRecording", status: "planned", note: "Not scraped" },
-  { type: "REGISTERED_AS", from: "Meeting", to: "SourceArtifact", status: "working", note: "Scrape registers integraal HTML/PDF artifacts" },
-  { type: "PARSED_TO", from: "SourceArtifact", to: "ReportBlock", status: "working", note: "meeting_parse → report_blocks.parquet" },
-  { type: "EVIDENCES", from: "SourceSpan", to: "Vote", status: "working", note: "Also utterances, questions, hearings, interpellations" },
-  { type: "LOCATED_IN", from: "SourceSpan", to: "ReportBlock", status: "working", note: "block_start/block_end half-open range" },
+  { type: "REGISTERED_AS", from: "Meeting", to: "SourceArtifact", status: "derived", note: "Scrape registers integraal HTML/PDF artifacts" },
+  { type: "PARSED_TO", from: "SourceArtifact", to: "ReportBlock", status: "derived", note: "meeting_parse → report_blocks.parquet" },
+  { type: "EVIDENCES", from: "SourceSpan", to: "Vote", status: "derived", note: "Also utterances, questions, hearings, interpellations" },
+  { type: "LOCATED_IN", from: "SourceSpan", to: "ReportBlock", status: "derived", note: "block_start/block_end half-open range" },
 ];
 
 // Layout edges: structural spine for DAG positioning (may include cycles → back-edges)
@@ -197,6 +199,7 @@ const STATUS_LABELS: Record<Status, string> = {
   scraped: "Scraped flat",
   partial: "Partial",
   planned: "Planned",
+  derived: "Derived",
 };
 
 const STATUS_TONE: Record<Status, "success" | "info" | "warning" | "neutral"> = {
@@ -204,6 +207,7 @@ const STATUS_TONE: Record<Status, "success" | "info" | "warning" | "neutral"> = 
   scraped: "info",
   partial: "warning",
   planned: "neutral",
+  derived: "info",
 };
 
 const STATUS_STAT_TONE: Record<Status, "success" | "info" | "warning"> = {
@@ -211,6 +215,7 @@ const STATUS_STAT_TONE: Record<Status, "success" | "info" | "warning"> = {
   scraped: "info",
   partial: "warning",
   planned: "info",
+  derived: "info",
 };
 
 const STATUS_USAGE_COLOR: Record<Status, Color> = {
@@ -218,6 +223,7 @@ const STATUS_USAGE_COLOR: Record<Status, Color> = {
   scraped: "blue",
   partial: "yellow",
   planned: "gray",
+  derived: "purple",
 };
 
 const DOMAIN_FILTER_OPTIONS = [
@@ -233,7 +239,7 @@ const NODE_W = 128;
 const NODE_H = 30;
 
 function statusCounts(items: { status: Status }[]) {
-  const c: Record<Status, number> = { working: 0, scraped: 0, partial: 0, planned: 0 };
+  const c: Record<Status, number> = { working: 0, scraped: 0, partial: 0, planned: 0, derived: 0 };
   for (const item of items) c[item.status]++;
   return c;
 }
@@ -482,7 +488,7 @@ export default function DataGraphOverview() {
   const nodeCounts = statusCounts(NODES);
   const edgeCounts = statusCounts(EDGES);
 
-  const usageSegments = (["working", "scraped", "partial", "planned"] as Status[]).map((s) => ({
+  const usageSegments = (["working", "scraped", "partial", "planned", "derived"] as Status[]).map((s) => ({
     id: s,
     value: nodeCounts[s],
     color: STATUS_USAGE_COLOR[s],
@@ -503,14 +509,21 @@ export default function DataGraphOverview() {
           >
             DATA_GRAPH.md
           </Button>
+          <Text tone="tertiary">·</Text>
+          <Button
+            variant="ghost"
+            onClick={() => dispatch({ type: "openFile", path: "docs/data-graph-overview.html" })}
+          >
+            HTML overview
+          </Button>
         </Row>
       </Stack>
 
       <Grid columns={4} gap={12}>
         <Stat label="Node types" value={String(NODES.length)} tone="info" />
         <Stat label="Edge types" value={String(EDGES.length)} tone="info" />
-        <Stat label="Graph nodes (built)" value="81,448" tone="success" />
-        <Stat label="Graph edges (built)" value="371,715" tone="success" />
+        <Stat label="Graph nodes (built)" value="82,357" tone="success" />
+        <Stat label="Graph edges (built)" value="378,488" tone="success" />
       </Grid>
 
       <Card>
@@ -526,7 +539,7 @@ export default function DataGraphOverview() {
               topRightLabel={`${totalNodes} node types`}
             />
             <Row gap={16} wrap>
-              {(["working", "scraped", "partial", "planned"] as Status[]).map((s) => (
+              {(["working", "scraped", "partial", "planned", "derived"] as Status[]).map((s) => (
                 <div key={s}>
                   <Row gap={6} align="center">
                     <Swatch color={STATUS_USAGE_COLOR[s]} />
@@ -538,7 +551,7 @@ export default function DataGraphOverview() {
               ))}
             </Row>
             <Text size="small" tone="tertiary">
-              Built counts refresh after `just build-graph` · provenance flow: Meeting → SourceArtifact → ReportBlock ← SourceSpan → entities
+              Built counts refresh after `just build-graph` · HTML overview: docs/data-graph-overview.html · provenance tables beside nodes.parquet
             </Text>
           </Stack>
         </CardBody>
@@ -685,7 +698,7 @@ export default function DataGraphOverview() {
         defaultOpen={false}
       >
         <Grid columns={4} gap={12}>
-          {(["working", "scraped", "partial", "planned"] as Status[]).map((s) => (
+          {(["working", "scraped", "partial", "planned", "derived"] as Status[]).map((s) => (
             <div key={s}>
               <Stat
                 label={STATUS_LABELS[s]}
