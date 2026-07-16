@@ -136,6 +136,35 @@ function collectBlockElements(doc) {
   return nodes;
 }
 
+/**
+ * Center a block inside the iframe's own scrolling root.
+ * Avoid scrollIntoView: it no-ops while the iframe is display:none, and on
+ * long reports "smooth" crawls for seconds while also scrolling the parent page.
+ */
+function scrollBlockIntoView(element) {
+  if (!element) return;
+  const doc = element.ownerDocument;
+  const root = doc.scrollingElement || doc.documentElement;
+  if (!root) return;
+
+  const rect = element.getBoundingClientRect();
+  const targetTop =
+    root.scrollTop + rect.top - root.clientHeight / 2 + rect.height / 2;
+  const maxScroll = Math.max(0, root.scrollHeight - root.clientHeight);
+  root.scrollTop = Math.max(0, Math.min(maxScroll, targetTop));
+}
+
+function scheduleScrollToBlock(doc, index) {
+  if (doc == null || index == null) return;
+  const run = () => {
+    const elements = collectBlockElements(doc);
+    scrollBlockIntoView(elements[Number(index)]);
+  };
+  requestAnimationFrame(() => {
+    requestAnimationFrame(run);
+  });
+}
+
 function clearOverlayClasses(el) {
   el.classList.remove(
     "pg-block",
@@ -177,11 +206,6 @@ function applyOverlays(doc, blocks, focusIndex) {
       selectBlock(index, { scroll: false });
     };
   });
-
-  if (focusIndex != null) {
-    const target = elements[Number(focusIndex)];
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
 }
 
 function appendMetadataRow(container, label, value) {
@@ -262,10 +286,7 @@ function selectBlock(index, options = {}) {
   for (const el of doc.querySelectorAll("[data-pg-block]")) {
     el.classList.toggle("pg-selected", el.getAttribute("data-pg-block") === String(index));
   }
-  if (scroll) {
-    const elements = collectBlockElements(doc);
-    elements[Number(index)]?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
+  if (scroll) scheduleScrollToBlock(doc, index);
 }
 
 async function loadReportMeetings() {
@@ -340,10 +361,15 @@ function mountReportHtml(html, blocks, focusIndex) {
   return new Promise((resolve, reject) => {
     frame.onload = () => {
       try {
-        const doc = frame.contentDocument;
-        applyOverlays(doc, blocks, focusIndex);
+        // Unhide before measuring/scrolling — display:none makes scroll a no-op.
         status?.classList.add("hidden");
         frame.classList.remove("hidden");
+        const doc = frame.contentDocument;
+        applyOverlays(doc, blocks, focusIndex);
+        if (focusIndex != null) {
+          scheduleScrollToBlock(doc, focusIndex);
+          setTimeout(() => scheduleScrollToBlock(doc, focusIndex), 220);
+        }
         resolve();
       } catch (err) {
         reject(err);
