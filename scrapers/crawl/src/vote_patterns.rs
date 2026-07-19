@@ -19,6 +19,7 @@ static CANDIDATE_TALLY: OnceLock<Regex> = OnceLock::new();
 static DOSSIER_REF: OnceLock<Regex> = OnceLock::new();
 static FORMAL_VOTE_BEGIN: OnceLock<Regex> = OnceLock::new();
 static PARTICIPATION_COUNT: OnceLock<Regex> = OnceLock::new();
+static ELECTRONIC_COUNT: OnceLock<Regex> = OnceLock::new();
 
 pub fn compact_vote_re() -> &'static Regex {
     COMPACT_VOTE.get_or_init(|| Regex::new(r"(?i)\(\s*Stemming\s*/\s*vote\s+(\d+)\s*\)").unwrap())
@@ -128,6 +129,23 @@ pub fn parse_appendix_vote_number(text: &str) -> Option<String> {
     appendix_vote_re()
         .captures(text)
         .or_else(|| appendix_vote_reverse_re().captures(text))
+        .map(|caps| caps[1].to_string())
+}
+
+/// Electronic-count appendix headers — meetings 12, 48, 49, 92, 96 plenary cache.
+/// Both FR→NL and NL→FR orders; ASCII or en-dash; HTML often wraps mid-phrase.
+pub fn electronic_count_re() -> &'static Regex {
+    ELECTRONIC_COUNT.get_or_init(|| {
+        Regex::new(
+            r"(?is)(?:Comptage\s+électronique\s*[-–]\s*Elektronische\s+telling|Elektronische\s+telling\s*[-–]\s*Comptage\s+électronique)\s*:\s*(\d+)",
+        )
+        .unwrap()
+    })
+}
+
+pub fn parse_electronic_count_number(text: &str) -> Option<String> {
+    electronic_count_re()
+        .captures(text)
         .map(|caps| caps[1].to_string())
 }
 
@@ -299,6 +317,9 @@ pub fn looks_like_voter_names(text: &str) -> bool {
     if parse_appendix_vote_number(trimmed).is_some() {
         return false;
     }
+    if parse_electronic_count_number(trimmed).is_some() {
+        return false;
+    }
     if compact_vote_re().is_match(trimmed)
         || paragraph_vote_re().is_match(trimmed)
         || paragraph_vote_reverse_re().is_match(trimmed)
@@ -362,5 +383,36 @@ mod tests {
             ),
             VoteSectionKind::SecretBallot
         );
+    }
+
+    #[test]
+    fn parses_electronic_count_headers() {
+        // meeting 12 ip012x — FR→NL after abstentions of naamstemming 1
+        assert_eq!(
+            parse_electronic_count_number("Comptage électronique – Elektronische telling: 2")
+                .as_deref(),
+            Some("2")
+        );
+        // meetings 48/92/96 — NL→FR
+        assert_eq!(
+            parse_electronic_count_number("Elektronische telling – Comptage électronique: 1")
+                .as_deref(),
+            Some("1")
+        );
+        // meeting 49 — ASCII hyphen, no space before dash
+        assert_eq!(
+            parse_electronic_count_number("Elektronische telling- Comptage électronique: 1")
+                .as_deref(),
+            Some("1")
+        );
+        // HTML wrap mid-phrase (meeting 12)
+        assert_eq!(
+            parse_electronic_count_number("Comptage électronique – Elektronische\ntelling: 2")
+                .as_deref(),
+            Some("2")
+        );
+        assert!(!looks_like_voter_names(
+            "Comptage électronique – Elektronische telling: 2"
+        ));
     }
 }

@@ -17,3 +17,5 @@
 /summarizers/**/adopted_text_extraction.html
 
 **/__pycache__/
+
+tmp/*

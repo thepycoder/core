@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 
 pub const BLOCK_PARSER_VERSION: &str = "report_blocks_v2";
 pub const REPORT_BLOCK_EXTRACTOR_VERSION: &str = "report_blocks_materialize_v1";
-pub const VOTE_EXTRACTOR_VERSION: &str = "vote_assembly_v1";
+pub const VOTE_EXTRACTOR_VERSION: &str = "vote_assembly_v2";
 pub const MEETING_SCOPE_EXTRACTOR_VERSION: &str = "meeting_parse_v2";
 
 /// Content-independent SHA-256 hex id from provenance keys.

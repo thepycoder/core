@@ -285,7 +285,10 @@ fn parse_appendix_buckets(blocks: &[ReportBlock]) -> Vec<AppendixBucket> {
         *occurrence += 1;
         let end = blocks[marker_idx + 1..]
             .iter()
-            .position(|block| parse_appendix_vote_number(&block.text).is_some())
+            .position(|block| {
+                parse_appendix_vote_number(&block.text).is_some()
+                    || crate::vote_patterns::parse_electronic_count_number(&block.text).is_some()
+            })
             .map_or(blocks.len(), |offset| marker_idx + 1 + offset);
         let mut current_bucket: Option<usize> = None;
         for block in &blocks[marker_idx + 1..end] {
@@ -398,6 +401,9 @@ mod tests {
             "sitting" => include_str!("../tests/fixtures/votes/sitting_standing.html"),
             "appendix" => include_str!("../tests/fixtures/votes/appendix_reverse_order.html"),
             "debate" => include_str!("../tests/fixtures/votes/debate_quoted_table.html"),
+            "electronic" => {
+                include_str!("../tests/fixtures/votes/electronic_count_between_appendix.html")
+            }
             _ => html,
         };
         let document = Html::parse_document(source);
@@ -436,6 +442,36 @@ mod tests {
         assert_eq!(inventory.appendix_buckets[0].occurrence, 1);
         assert_eq!(inventory.appendix_buckets[0].declared_count, 61);
         assert_eq!(inventory.appendix_buckets[0].collected_name_count, 2);
+    }
+
+    #[test]
+    fn electronic_count_header_ends_inventory_appendix_slice() {
+        // meeting 12: do not attribute electronic-count Oui/128 or header to naamstemming 1
+        let inventory = fixture("electronic");
+        let vote1: Vec<_> = inventory
+            .appendix_buckets
+            .iter()
+            .filter(|b| b.vote_number == "1")
+            .collect();
+        assert_eq!(vote1.len(), 3);
+        assert_eq!(vote1[0].position, "yes");
+        assert_eq!(vote1[0].declared_count, 64);
+        assert_eq!(vote1[0].collected_name_count, 2);
+        assert_eq!(vote1[2].position, "abstain");
+        assert_eq!(vote1[2].declared_count, 0);
+        assert_eq!(vote1[2].collected_name_count, 0);
+        assert!(
+            !vote1.iter().any(|b| b.declared_count == 128),
+            "electronic-count Oui must not leak into vote 1 inventory buckets"
+        );
+        let vote3: Vec<_> = inventory
+            .appendix_buckets
+            .iter()
+            .filter(|b| b.vote_number == "3")
+            .collect();
+        assert_eq!(vote3.len(), 1);
+        assert_eq!(vote3[0].declared_count, 2);
+        assert_eq!(vote3[0].collected_name_count, 2);
     }
 
     #[test]

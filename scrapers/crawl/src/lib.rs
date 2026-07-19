@@ -123,7 +123,7 @@ pub use vote_io::{
 pub use vote_patterns::{
     VoteBucket, VoteSectionKind, appendix_marker_for_vote, appendix_vote_re, compact_vote_re,
     paragraph_vote_re, parse_appendix_vote_number, parse_compact_vote_number,
-    parse_paragraph_vote_number, vote_bucket_label,
+    parse_electronic_count_number, parse_paragraph_vote_number, vote_bucket_label,
 };
 pub use vote_types::{
     SpanEvidence, UnresolvedVoteEventDraft, VoteAssemblyOutput, VoteDecisionDraft, VoteResultDraft,

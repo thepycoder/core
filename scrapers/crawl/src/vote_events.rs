@@ -3,7 +3,7 @@
 use crate::report_blocks::{ReportBlock, TableRow};
 use crate::vote_patterns::{
     VoteBucket, is_language_group_header, parse_appendix_vote_number, parse_compact_vote_number,
-    parse_paragraph_vote_number, vote_bucket_label,
+    parse_electronic_count_number, parse_paragraph_vote_number, vote_bucket_label,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +241,9 @@ pub fn parse_appendix_from_blocks(
         if parse_appendix_vote_number(&block.text).is_some() {
             break;
         }
+        if parse_electronic_count_number(&block.text).is_some() {
+            break;
+        }
         if let Some(rows) = block.table_rows.as_ref() {
             for row in rows {
                 if let Some((position, count)) = parse_appendix_bucket_row(row) {
@@ -251,6 +254,7 @@ pub fn parse_appendix_from_blocks(
                         let name_block = &blocks[name_idx];
                         if name_block.tag == crate::report_blocks::BlockTag::Table
                             || parse_appendix_vote_number(&name_block.text).is_some()
+                            || parse_electronic_count_number(&name_block.text).is_some()
                         {
                             break;
                         }
@@ -337,5 +341,33 @@ mod tests {
         assert_eq!(parsed.voters, Some(82));
         assert_eq!(parsed.valid, Some(82));
         assert_eq!(parsed.majority_threshold, Some(42));
+    }
+
+    #[test]
+    fn electronic_count_header_ends_appendix_before_leaking_names_or_buckets() {
+        // meeting 12: abstentions 0, then electronic count 2, then naamstemming 3
+        let blocks = blocks("electronic_count_between_appendix.html");
+        let marker_idx = blocks
+            .iter()
+            .position(|b| b.text.contains("Naamstemming: 1"))
+            .unwrap();
+        let buckets = parse_appendix_from_blocks(&blocks, marker_idx, "1");
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(buckets[0].position, "yes");
+        assert_eq!(buckets[0].count, 64);
+        assert_eq!(buckets[0].names.len(), 2);
+        assert_eq!(buckets[1].position, "no");
+        assert_eq!(buckets[1].count, 63);
+        assert_eq!(buckets[2].position, "abstain");
+        assert_eq!(buckets[2].count, 0);
+        assert!(
+            buckets[2].names.is_empty(),
+            "electronic-count header must not become abstain names: {:?}",
+            buckets[2].names
+        );
+        assert!(
+            !buckets.iter().any(|b| b.position == "yes" && b.count == 128),
+            "electronic-count Oui table must not attach to prior naamstemming"
+        );
     }
 }
