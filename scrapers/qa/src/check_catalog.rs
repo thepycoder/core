@@ -271,8 +271,8 @@ pub fn check_doc(check_id: &str) -> CheckDoc {
             measures: "Compares route `deptnum` values against `identity/external_persons.parquet`.",
         },
         "dossier.ref_exists" => CheckDoc {
-            what: "A vote references a `dossier_id` that is not present in `sessions/56/dossiers.parquet`.",
-            measures: "Checks vote `dossier_id` foreign keys against the dossier id set.",
+            what: "A vote or agenda item references a `dossier_id` that is not present in `sessions/56/dossiers.parquet`.",
+            measures: "Checks vote and agenda_items `dossier_id` foreign keys against the dossier id set.",
         },
         "meeting.chair_source_vs_parquet" => CheckDoc {
             what: "The chair name stored on a commission meeting row cannot be found in the cached report text.",

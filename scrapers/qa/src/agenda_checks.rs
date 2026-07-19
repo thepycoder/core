@@ -209,6 +209,47 @@ fn check_dossier_refs(data_dir: &Path) -> Result<Vec<CheckDetail>, Box<dyn Error
             }
         }
     }
+
+    for kind in ["plenary", "commission"] {
+        let agenda_path =
+            data_dir.join(format!("sessions/{SESSION_ID}/{kind}/agenda_items.parquet"));
+        if !agenda_path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&agenda_path)? {
+            let dossier_ids_col = read_string_column(&batch, "dossier_id")?;
+            let agenda_item_ids = read_string_column(&batch, "agenda_item_id")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let raw = dossier_ids_col[i].trim();
+                if raw.is_empty() {
+                    continue;
+                }
+                let did = if raw.contains('/') {
+                    raw.to_string()
+                } else {
+                    format!("{SESSION_ID}/{raw}")
+                };
+                if !dossier_ids.contains_key(&did) {
+                    details.push(
+                        CheckDetail::new(
+                            "dossier.ref_exists",
+                            "warn",
+                            "warn",
+                            format!(
+                                "dossier ref {did} on agenda item {} not in dossiers.parquet",
+                                agenda_item_ids[i]
+                            ),
+                        )
+                        .with_entity("dossier", &did)
+                        .with_warning_kind("integrity")
+                        .with_source(&source_urls[i], &cache_paths[i]),
+                    );
+                }
+            }
+        }
+    }
     Ok(details)
 }
 

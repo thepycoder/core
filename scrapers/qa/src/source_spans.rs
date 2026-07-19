@@ -407,12 +407,15 @@ fn load_entity_ids(data_dir: &Path) -> Result<HashMap<String, HashSet<String>>, 
         ),
         ("Proposition", "propositions.parquet", "proposition_id"),
         ("Notice", "notices.parquet", "notice_id"),
+        ("AgendaItem", "agenda_items.parquet", "agenda_item_id"),
     ] {
-        let path = data_dir.join(format!("sessions/{SESSION_ID}/plenary/{file}"));
         let mut ids = HashSet::new();
-        if path.exists() {
-            for batch in read_all_rows(&path)? {
-                ids.extend(read_string_column(&batch, column)?);
+        for kind in ["plenary", "commission"] {
+            let path = data_dir.join(format!("sessions/{SESSION_ID}/{kind}/{file}"));
+            if path.exists() {
+                for batch in read_all_rows(&path)? {
+                    ids.extend(read_string_column(&batch, column)?);
+                }
             }
         }
         out.insert(entity_type.to_string(), ids);
@@ -427,8 +430,10 @@ fn entity_exists(
     meeting_id: &str,
 ) -> bool {
     match entity_type {
-        "Meeting" => entity_id == format!("plenary_{SESSION_ID}_{meeting_id}"),
-        "AgendaItem" => !entity_id.is_empty(),
+        "Meeting" => {
+            entity_id == format!("plenary_{SESSION_ID}_{meeting_id}")
+                || entity_id == format!("commission_{SESSION_ID}_{meeting_id}")
+        }
         _ => ids
             .get(entity_type)
             .is_some_and(|values| values.contains(entity_id)),

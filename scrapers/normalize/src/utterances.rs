@@ -20,6 +20,7 @@ pub struct UtteranceRow {
     pub meeting_id: String,
     pub meeting_kind: String,
     pub agenda_id: String,
+    pub agenda_item_id: String,
     pub turn_number: String,
     pub seq: String,
     pub item_kind: String,
@@ -155,6 +156,11 @@ pub fn normalize_utterances(
             let session_ids = read_string_column(&batch, "session_id")?;
             let meeting_ids = read_string_column(&batch, "meeting_id")?;
             let agenda_ids = read_string_column(&batch, "agenda_id")?;
+            let agenda_item_ids = if batch.schema().index_of("agenda_item_id").is_ok() {
+                Some(read_string_column(&batch, "agenda_item_id")?)
+            } else {
+                None
+            };
             let turn_numbers = read_string_column(&batch, "turn_number")?;
             let seqs = read_string_column(&batch, "seq")?;
             let item_kinds = read_string_column(&batch, "item_kind")?;
@@ -256,6 +262,10 @@ pub fn normalize_utterances(
                     meeting_id: meeting_ids[i].clone(),
                     meeting_kind: meeting_kind.to_string(),
                     agenda_id: agenda_ids[i].clone(),
+                    agenda_item_id: agenda_item_ids
+                        .as_ref()
+                        .map(|ids| ids[i].clone())
+                        .unwrap_or_default(),
                     turn_number: turn_numbers[i].clone(),
                     seq: seqs[i].clone(),
                     item_kind: item_kinds[i].clone(),
@@ -358,6 +368,7 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         utf8_field("meeting_id", false),
         utf8_field("meeting_kind", false),
         utf8_field("agenda_id", false),
+        utf8_field("agenda_item_id", false),
         utf8_field("turn_number", false),
         utf8_field("seq", false),
         utf8_field("item_kind", false),
@@ -393,6 +404,7 @@ pub fn write_utterances(path: &Path, rows: &[UtteranceRow]) -> Result<(), Box<dy
         col!(|r| r.meeting_id.clone()),
         col!(|r| r.meeting_kind.clone()),
         col!(|r| r.agenda_id.clone()),
+        col!(|r| r.agenda_item_id.clone()),
         col!(|r| r.turn_number.clone()),
         col!(|r| r.seq.clone()),
         col!(|r| r.item_kind.clone()),

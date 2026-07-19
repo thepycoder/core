@@ -14,6 +14,19 @@ pub fn composite_scoped_id(session_id: u32, scope: &str, meeting_id: u32, seq: i
     format!("{}_{}_{}_{}", session_id, scope, meeting_id, seq)
 }
 
+/// Stable AgendaItem node id: `{session}_{kind}_{meeting}_agenda_{start_block}`.
+///
+/// Printed agenda numbers (`"15"`) are not unique within a meeting; the timeline
+/// `start_block` is. Example: `56_plenary_42_agenda_596`.
+pub fn agenda_item_id(
+    session_id: u32,
+    meeting_kind: &str,
+    meeting_id: u32,
+    start_block: u32,
+) -> String {
+    format!("{session_id}_{meeting_kind}_{meeting_id}_agenda_{start_block}")
+}
+
 /// True when `id` looks like a site-native FLWB document key (e.g. `56K1280004`), not a
 /// dossier sub-number from vote title parentheses like `(297/10)`.
 pub fn is_flwb_document_id(id: &str) -> bool {
@@ -50,6 +63,18 @@ mod tests {
         assert_eq!(
             composite_scoped_id(56, "commission", 10, 2),
             "56_commission_10_2"
+        );
+    }
+
+    #[test]
+    fn agenda_item_id_uses_start_block() {
+        assert_eq!(
+            agenda_item_id(56, "plenary", 42, 596),
+            "56_plenary_42_agenda_596"
+        );
+        assert_eq!(
+            agenda_item_id(56, "commission", 15, 1),
+            "56_commission_15_agenda_1"
         );
     }
 

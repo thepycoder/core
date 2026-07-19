@@ -135,6 +135,7 @@ pub fn build_graph(data_dir: &Path) -> Result<GraphBuild, Box<dyn Error>> {
     load_interpellation_responded_edges(data_dir, &mut add_edge)?;
     load_invited_edges(data_dir, &mut add_edge)?;
     load_proceeding_meeting_edges(data_dir, &mut add_edge)?;
+    load_agenda_item_edges(data_dir, &mut add_edge)?;
     load_holds_role_edges(data_dir, &mut add_edge)?;
     let site_ref_nodes = build_site_ref_node_lookup(data_dir, &node_seen)?;
     load_spoke_and_part_of_edges(data_dir, &site_ref_nodes, &node_seen, &mut add_edge)?;
@@ -640,6 +641,39 @@ fn load_staging_nodes(
                 add_node(
                     node_type,
                     &entity_id,
+                    &label,
+                    &source_urls[i],
+                    &cache_paths[i],
+                );
+            }
+        }
+    }
+
+    for kind in ["plenary", "commission"] {
+        let path = session.join(format!("{kind}/agenda_items.parquet"));
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let agenda_item_ids = read_string_column(&batch, "agenda_item_id")?;
+            let titles_nl = read_string_column(&batch, "title_nl")?;
+            let titles_fr = read_string_column(&batch, "title_fr")?;
+            let agenda_ids = read_string_column(&batch, "agenda_id")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let label = if !titles_nl[i].is_empty() {
+                    titles_nl[i].chars().take(120).collect::<String>()
+                } else if !titles_fr[i].is_empty() {
+                    titles_fr[i].chars().take(120).collect::<String>()
+                } else if !agenda_ids[i].is_empty() {
+                    format!("agenda {}", agenda_ids[i])
+                } else {
+                    agenda_item_ids[i].clone()
+                };
+                add_node(
+                    "AgendaItem",
+                    &agenda_item_ids[i],
                     &label,
                     &source_urls[i],
                     &cache_paths[i],
@@ -1212,6 +1246,98 @@ fn load_answered_edges(
     Ok(())
 }
 
+/// AgendaItem → Meeting, AgendaItem → Dossier, and typed proceedings → AgendaItem.
+fn load_agenda_item_edges(
+    data_dir: &Path,
+    add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
+) -> Result<(), Box<dyn Error>> {
+    let session = data_dir.join(format!("sessions/{SESSION_ID}"));
+    for kind in ["plenary", "commission"] {
+        let path = session.join(format!("{kind}/agenda_items.parquet"));
+        if !path.exists() {
+            continue;
+        }
+        for batch in read_all_rows(&path)? {
+            let agenda_item_ids = read_string_column(&batch, "agenda_item_id")?;
+            let session_ids = read_string_column(&batch, "session_id")?;
+            let meeting_ids = read_string_column(&batch, "meeting_id")?;
+            let meeting_kinds = read_string_column(&batch, "meeting_kind")?;
+            let item_kinds = read_string_column(&batch, "item_kind")?;
+            let item_ids = read_string_column(&batch, "item_id")?;
+            let dossier_ids = read_string_column(&batch, "dossier_id")?;
+            let source_urls = read_string_column(&batch, "source_url")?;
+            let cache_paths = read_string_column(&batch, "cache_path")?;
+            for i in 0..batch.num_rows() {
+                let meeting_kind = if meeting_kinds[i].is_empty() {
+                    kind
+                } else {
+                    meeting_kinds[i].as_str()
+                };
+                let meeting_node_id =
+                    format!("{meeting_kind}_{}_{}", session_ids[i], meeting_ids[i]);
+                add_edge(
+                    "PART_OF",
+                    "AgendaItem",
+                    &agenda_item_ids[i],
+                    "Meeting",
+                    &meeting_node_id,
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    1.0,
+                );
+
+                let dossier_raw = dossier_ids[i].trim();
+                if !dossier_raw.is_empty() {
+                    let dossier_node = if dossier_raw.contains('/') {
+                        dossier_raw.to_string()
+                    } else {
+                        format!("{}/{}", session_ids[i], dossier_raw)
+                    };
+                    add_edge(
+                        "REFERENCES",
+                        "AgendaItem",
+                        &agenda_item_ids[i],
+                        "Dossier",
+                        &dossier_node,
+                        "",
+                        &source_urls[i],
+                        &cache_paths[i],
+                        1.0,
+                    );
+                }
+
+                if item_ids[i].is_empty() {
+                    continue;
+                }
+                let proceeding_type = match item_kinds[i].as_str() {
+                    "question" => Some("Question"),
+                    "hearing" => Some("Hearing"),
+                    "interpellation" => Some("Interpellation"),
+                    _ => None,
+                };
+                let Some(proceeding_type) = proceeding_type else {
+                    continue;
+                };
+                let proceeding_id =
+                    ensure_question_id(&session_ids[i], meeting_kind, &item_ids[i]);
+                add_edge(
+                    "PART_OF",
+                    proceeding_type,
+                    &proceeding_id,
+                    "AgendaItem",
+                    &agenda_item_ids[i],
+                    "",
+                    &source_urls[i],
+                    &cache_paths[i],
+                    1.0,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_holds_role_edges(
     data_dir: &Path,
     add_edge: &mut impl FnMut(&str, &str, &str, &str, &str, &str, &str, &str, f64),
@@ -1552,6 +1678,11 @@ fn load_spoke_and_part_of_edges(
         let item_kinds = read_string_column(&batch, "item_kind")?;
         let item_ids = read_string_column(&batch, "item_id")?;
         let question_ids = read_string_column(&batch, "question_ids")?;
+        let agenda_item_ids = if batch.schema().index_of("agenda_item_id").is_ok() {
+            Some(read_string_column(&batch, "agenda_item_id")?)
+        } else {
+            None
+        };
         let speaker_ids = read_string_column(&batch, "speaker_person_id")?;
         let entity_types = read_string_column(&batch, "speaker_entity_type")?;
         let entity_ids = read_string_column(&batch, "speaker_entity_id")?;
@@ -1572,6 +1703,21 @@ fn load_spoke_and_part_of_edges(
                 &cache_paths[i],
                 1.0,
             );
+            if let Some(ref agenda_ids) = agenda_item_ids {
+                if !agenda_ids[i].is_empty() {
+                    add_edge(
+                        "PART_OF",
+                        "Utterance",
+                        &utterance_ids[i],
+                        "AgendaItem",
+                        &agenda_ids[i],
+                        "",
+                        &source_urls[i],
+                        &cache_paths[i],
+                        1.0,
+                    );
+                }
+            }
             if item_kinds[i] == "question" && !item_ids[i].is_empty() {
                 if let Some(target_id) = resolve_proceeding_target_id(
                     &session_ids[i],
@@ -1959,6 +2105,177 @@ mod tests {
                 .all(|edge| edge.source_artifact_id == shared_artifact)
         );
         assert_eq!(artifacts.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn agenda_item_references_dossier_and_utterance_part_of() {
+        use crawl::{AgendaItemDraft, MeetingKind, write_agenda_items_parquet};
+
+        let root = test_dir();
+        let plenary = root.join("sessions/56/plenary");
+        let normalized = root.join("normalized");
+        std::fs::create_dir_all(&plenary).unwrap();
+        std::fs::create_dir_all(&normalized).unwrap();
+
+        write_agenda_items_parquet(
+            &plenary.join("agenda_items.parquet"),
+            &[AgendaItemDraft {
+                agenda_item_id: "56_plenary_42_agenda_100".into(),
+                session_id: 56,
+                meeting_id: 42,
+                meeting_kind: MeetingKind::Plenary,
+                agenda_id: "15".into(),
+                item_kind: "proposition".into(),
+                item_id: String::new(),
+                title_nl: "Wetsontwerp (56/318)".into(),
+                title_fr: String::new(),
+                dossier_id: "56/318".into(),
+                document_id: "1-9".into(),
+                internal_ids: String::new(),
+                start_block: 100,
+                end_block: 200,
+                title_blocks: "100".into(),
+                source_section: "propositions".into(),
+                source_url: "https://example.test/ip042".into(),
+                cache_path: "sessions/56/meetings/plenary/56-42.html".into(),
+            }],
+        )
+        .unwrap();
+
+        {
+            use identity::parquet_io::{utf8_field, write_parquet};
+            use arrow::array::{ArrayRef, Float64Array, StringArray};
+            use arrow::datatypes::Schema;
+            use std::sync::Arc;
+            let schema = Schema::new(vec![
+                utf8_field("utterance_id", false),
+                utf8_field("session_id", false),
+                utf8_field("meeting_id", false),
+                utf8_field("meeting_kind", false),
+                utf8_field("agenda_id", false),
+                utf8_field("agenda_item_id", false),
+                utf8_field("turn_number", false),
+                utf8_field("seq", false),
+                utf8_field("item_kind", false),
+                utf8_field("item_id", false),
+                utf8_field("question_ids", false),
+                utf8_field("dossier_id", false),
+                utf8_field("document_id", false),
+                utf8_field("motion_id", false),
+                utf8_field("vote_id", false),
+                utf8_field("raw_speaker", false),
+                utf8_field("speaker_role", false),
+                utf8_field("speaker_entity_type", false),
+                utf8_field("speaker_entity_id", false),
+                utf8_field("text", false),
+                utf8_field("language", false),
+                utf8_field("block_start", false),
+                utf8_field("block_end", false),
+                utf8_field("source_section", false),
+                utf8_field("speaker_person_id", false),
+                utf8_field("source_url", false),
+                utf8_field("cache_path", false),
+                utf8_field("source_artifact_id", false),
+                utf8_field("source_content_hash", false),
+                utf8_field("block_parser_version", false),
+                utf8_field("extractor_version", false),
+                Field::new("confidence", DataType::Float64, false),
+            ]);
+            let s = |v: &str| Arc::new(StringArray::from(vec![v.to_string()])) as ArrayRef;
+            write_parquet(
+                &normalized.join("utterances.parquet"),
+                schema,
+                vec![
+                    s("56_plenary_42_15_15_01"),
+                    s("56"),
+                    s("42"),
+                    s("plenary"),
+                    s("15"),
+                    s("56_plenary_42_agenda_100"),
+                    s("15.01"),
+                    s("1"),
+                    s("proposition"),
+                    s(""),
+                    s(""),
+                    s("56/318"),
+                    s("1-9"),
+                    s(""),
+                    s(""),
+                    s("Someone"),
+                    s("mp"),
+                    s("Person"),
+                    s("01226"),
+                    s("Hello"),
+                    s("NL"),
+                    s("101"),
+                    s("101"),
+                    s("propositions"),
+                    s("01226"),
+                    s("https://example.test/ip042"),
+                    s("sessions/56/meetings/plenary/56-42.html"),
+                    s("art"),
+                    s("hash"),
+                    s("v1"),
+                    s("v1"),
+                    Arc::new(Float64Array::from(vec![1.0])) as ArrayRef,
+                ],
+            )
+            .unwrap();
+        }
+
+        let mut edges = Vec::new();
+        let mut add_edge =
+            |edge_type: &str,
+             from_type: &str,
+             from_id: &str,
+             to_type: &str,
+             to_id: &str,
+             role: &str,
+             source_url: &str,
+             cache_path: &str,
+             confidence: f64| {
+                edges.push(EdgeRow {
+                    edge_type: edge_type.into(),
+                    from_type: from_type.into(),
+                    from_id: from_id.into(),
+                    to_type: to_type.into(),
+                    to_id: to_id.into(),
+                    role: role.into(),
+                    source_artifact_id: String::new(),
+                    source_url: source_url.into(),
+                    cache_path: cache_path.into(),
+                    confidence,
+                    properties_json: "{}".into(),
+                });
+            };
+
+        load_agenda_item_edges(&root, &mut add_edge).unwrap();
+        load_spoke_and_part_of_edges(&root, &HashMap::new(), &HashMap::new(), &mut add_edge)
+            .unwrap();
+
+        assert!(edges.iter().any(|e| {
+            e.edge_type == "REFERENCES"
+                && e.from_type == "AgendaItem"
+                && e.from_id == "56_plenary_42_agenda_100"
+                && e.to_type == "Dossier"
+                && e.to_id == "56/318"
+        }));
+        assert!(edges.iter().any(|e| {
+            e.edge_type == "PART_OF"
+                && e.from_type == "AgendaItem"
+                && e.from_id == "56_plenary_42_agenda_100"
+                && e.to_type == "Meeting"
+                && e.to_id == "plenary_56_42"
+        }));
+        assert!(edges.iter().any(|e| {
+            e.edge_type == "PART_OF"
+                && e.from_type == "Utterance"
+                && e.from_id == "56_plenary_42_15_15_01"
+                && e.to_type == "AgendaItem"
+                && e.to_id == "56_plenary_42_agenda_100"
+        }));
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

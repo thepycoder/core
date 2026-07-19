@@ -414,7 +414,7 @@
     // ── Catalog (keep in sync with DATA_GRAPH.md) ────────────────────────────
     // Built counts from data/graph after last build-graph (2026-07-16).
 
-    const BUILT = { nodes: 82357, edges: 378488 };
+    const BUILT = { nodes: 91520, edges: 439787 };
 
     const NODES = [
       { id: "Session", label: "Session", domain: "foundation", status: "scraped", idKey: "session_id", note: "Legislative term anchor" },
@@ -423,8 +423,8 @@
       { id: "Party", label: "Party", domain: "identity", status: "working", idKey: "slug / name", note: "13 fractions; time-bounded membership" },
       { id: "Commission", label: "Commission", domain: "identity", status: "working", idKey: "name / enum", note: "35 committees; links to meetings & dossiers" },
       { id: "Meeting", label: "Meeting", domain: "proceedings", status: "working", idKey: "{session, kind, meeting_id}", note: "556 plenary + commission nodes" },
-      { id: "AgendaItem", label: "AgendaItem", domain: "proceedings", status: "partial", idKey: "{meeting_id, seq}", note: "Report headings; heuristic boundaries; not graphed as nodes" },
-      { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "43,996 nodes; PART_OF Question/Hearing/Interpellation" },
+      { id: "AgendaItem", label: "AgendaItem", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_agenda_{start_block}", note: "9,163 nodes; REFERENCES dossier from heading cites (863)" },
+      { id: "Utterance", label: "Utterance", domain: "proceedings", status: "working", idKey: "{meeting}_{agenda}_{turn}", note: "43,996 nodes; PART_OF AgendaItem (+ Question/Hearing/Interpellation)" },
       { id: "Question", label: "Question", domain: "proceedings", status: "working", idKey: "{session}_{kind}_{meeting}_{seq} | 56_written_{DOCNAME}", note: "18,305 oral + QRVA written" },
       { id: "Answer", label: "Answer", domain: "proceedings", status: "working", idKey: "56_qrva_{route}_a{slot} | {question_id}_a1", note: "8,849 QRVA slots + oral-written blocks" },
       { id: "Vote", label: "Vote", domain: "proceedings", status: "working", idKey: "{session}-{meeting}-v{seq}", note: "1,424 decision/matter nodes" },
@@ -456,9 +456,14 @@
       { type: "SPOKE", from: "Person", to: "Utterance", status: "working", note: "39,160 edges; chairs/unresolved skipped" },
       { type: "SPOKE", from: "ExternalPerson", to: "Utterance", status: "working", note: "2,198 ministers, experts, roles via ActorResolver" },
       { type: "PART_OF", from: "Utterance", to: "Meeting", status: "working", note: "43,996 edges" },
+      { type: "PART_OF", from: "Utterance", to: "AgendaItem", status: "working", note: "43,755 containing timeline slots" },
+      { type: "PART_OF", from: "AgendaItem", to: "Meeting", status: "working", note: "9,163 every agenda slot" },
       { type: "PART_OF", from: "Utterance", to: "Question", status: "working", note: "33,235 when item_kind = question" },
       { type: "PART_OF", from: "Utterance", to: "Hearing", status: "working", note: "31 when item_kind = hearing" },
       { type: "PART_OF", from: "Utterance", to: "Interpellation", status: "working", note: "647 when item_kind = interpellation" },
+      { type: "PART_OF", from: "Question", to: "AgendaItem", status: "working", note: "7,238 oral questions under slot" },
+      { type: "PART_OF", from: "Hearing", to: "AgendaItem", status: "working", note: "3 hearings under slot" },
+      { type: "PART_OF", from: "Interpellation", to: "AgendaItem", status: "working", note: "277 interpellation→slot links" },
       { type: "PART_OF", from: "Hearing", to: "Meeting", status: "working", note: "3 proceeding entities under meeting" },
       { type: "PART_OF", from: "Interpellation", to: "Meeting", status: "working", note: "182 proceeding entities under meeting" },
       { type: "INTERPELLED", from: "Person", to: "Interpellation", status: "working", note: "182 from interpellators field" },
@@ -478,7 +483,8 @@
       { type: "AUTHORED", from: "Person", to: "Document", status: "working", note: "8,620 via ActorResolver" },
       { type: "AUTHORED", from: "Person", to: "Dossier", status: "working", note: "5,419 dossier-level authors" },
       { type: "AUTHORED", from: "ExternalPerson", to: "Dossier", status: "working", note: "142 institutional / non-MP authors" },
-      { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Regex from proposition/vote titles" },
+      { type: "REFERENCES", from: "Meeting", to: "Dossier", status: "partial", note: "Prefer AgendaItem→Dossier" },
+      { type: "REFERENCES", from: "AgendaItem", to: "Dossier", status: "working", note: "863 heading (N/M) dossier cites" },
       { type: "DISCUSSED_IN", from: "Dossier", to: "Meeting", status: "planned", note: "Dossier fiche calendar not ingested" },
       { type: "HAS_RESULT", from: "Vote", to: "VoteResult", status: "working", note: "1,424 votes.result_id → reusable evidence" },
       { type: "VOTED_ON", from: "Vote", to: "Dossier", status: "working", note: "948 edges; some orphan refs remain" },
@@ -508,12 +514,17 @@
       { from: "Person", to: "Commission" },
       { from: "Person", to: "Meeting" },
       { from: "Meeting", to: "AgendaItem" },
+      { from: "AgendaItem", to: "Dossier" },
       { from: "Meeting", to: "Vote" },
       { from: "Meeting", to: "MediaRecording" },
       { from: "AgendaItem", to: "Utterance" },
+      { from: "Utterance", to: "AgendaItem" },
       { from: "AgendaItem", to: "Question" },
       { from: "AgendaItem", to: "Interpellation" },
       { from: "AgendaItem", to: "Hearing" },
+      { from: "Question", to: "AgendaItem" },
+      { from: "Hearing", to: "AgendaItem" },
+      { from: "Interpellation", to: "AgendaItem" },
       { from: "Person", to: "Utterance" },
       { from: "ExternalPerson", to: "Utterance" },
       { from: "Person", to: "Question" },

@@ -91,7 +91,9 @@ Amounts are stored as Utf8 canonical decimal EUR strings (not Arrow DECIMAL/FLOA
 
 **questions.parquet:** `question_id`, `session_id`, `meeting_id`, `questioners`, `respondents`, `topics_nl`, `topics_fr`, `internal_ids`, `source_url`, `cache_path`
 
-**utterances.parquet:** `utterance_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `turn_number`, `seq`, `item_kind`, `item_id`, `question_ids`, `dossier_id`, `document_id`, `motion_id`, `vote_id`, `raw_speaker`, `speaker_role`, `text`, `language`, `block_start`, `block_end`, `source_section`, `source_url`, `cache_path`
+**agenda_items.parquet:** `agenda_item_id` (`{session}_{kind}_{meeting}_agenda_{start_block}`), `session_id`, `meeting_id`, `meeting_kind`, `agenda_id` (printed heading number), `item_kind`, `item_id` (proceeding entity when typed), `title_nl`, `title_fr`, `dossier_id`, `document_id`, `internal_ids`, `start_block`, `end_block`, `title_blocks`, `source_section`, `source_url`, `cache_path` — full meeting timeline; graph AgendaItem nodes + `REFERENCES` dossier cites.
+
+**utterances.parquet:** `utterance_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `agenda_item_id`, `turn_number`, `seq`, `item_kind`, `item_id`, `question_ids`, `dossier_id`, `document_id`, `motion_id`, `vote_id`, `raw_speaker`, `speaker_role`, `text`, `language`, `block_start`, `block_end`, `source_section`, `source_url`, `cache_path`
 
 **votes.parquet** (decision/matter): `vote_id`, `result_id`, `session_id` (UINT32), `meeting_id` (UINT32), `date`, `seq` (UINT32), `title_nl`, `title_fr`, `method`, `status`, `outcome`, `dossier_id`, `document_id`, `motion_id`, `source_roll_call_number`, `reuses_result` (BOOLEAN), `source_url`, `cache_path`
 
@@ -177,6 +179,8 @@ Plenary report URL pattern: `https://www.dekamer.be/doc/PCRI/html/{session}/ip{m
 **meetings.parquet:** `session_id`, `meeting_id`, `date`, `time_of_day`, `start_time`, `end_time`, `commission`, `chair`, `source_url`, `cache_path`
 
 **questions.parquet:** same columns as plenary questions (`internal_ids`, not `dossier_ids`)
+
+**agenda_items.parquet:** same columns as plenary agenda_items
 
 **utterances.parquet:** same columns as plenary utterances
 

@@ -349,40 +349,21 @@ fn semantic_spans(
         cache_path,
     )];
     for item in agenda {
-        if matches!(
-            item.item_kind,
-            crate::agenda_timeline::ItemKind::Proposition
-                | crate::agenda_timeline::ItemKind::Notice
-        ) {
-            continue;
-        }
-        let entity_type = match item.item_kind {
-            crate::agenda_timeline::ItemKind::Question => "Question",
-            // Hearings and interpellations become their own entities only after the
-            // dedicated parser can materialize them. Until then this is merely an
-            // agenda heading and must not claim provenance for a missing entity.
-            crate::agenda_timeline::ItemKind::Hearing
-            | crate::agenda_timeline::ItemKind::Interpellation => "AgendaItem",
-            crate::agenda_timeline::ItemKind::Proposition => "Proposition",
-            crate::agenda_timeline::ItemKind::Notice => "Notice",
-            _ => "AgendaItem",
-        };
-        let entity_id = if item.item_id.is_empty() {
-            format!(
-                "{session_id}_{}_{meeting_id}_agenda_{}",
-                meeting_kind.as_str(),
-                item.start_block
-            )
-        } else {
-            item.item_id.clone()
-        };
+        use crate::utils::agenda_item_id;
+        let agenda_entity_id = agenda_item_id(
+            session_id,
+            meeting_kind.as_str(),
+            meeting_id,
+            item.start_block,
+        );
+        // Every timeline slot gets an AgendaItem scope (including questions/propositions).
         spans.push(scope_span(
             artifact,
             source_content_hash,
             session_id,
             meeting_id,
-            entity_type,
-            &entity_id,
+            "AgendaItem",
+            &agenda_entity_id,
             "agenda_item_scope",
             item.start_block,
             item.end_block,
@@ -395,8 +376,8 @@ fn semantic_spans(
                 source_content_hash,
                 session_id,
                 meeting_id,
-                entity_type,
-                &entity_id,
+                "AgendaItem",
+                &agenda_entity_id,
                 "entity_title",
                 block_index,
                 block_index + 1,
@@ -404,23 +385,41 @@ fn semantic_spans(
                 source_url,
                 cache_path,
             ));
-            if item.item_kind == crate::agenda_timeline::ItemKind::Question
-                && question_heading_has_respondent(item, blocks, block_index)
-            {
+        }
+        // Typed proceeding title/participant spans stay on Question / Hearing / Interpellation.
+        if item.item_kind == crate::agenda_timeline::ItemKind::Question && !item.item_id.is_empty()
+        {
+            for &block_index in &item.title_blocks {
                 spans.push(extraction_span(
                     artifact,
                     source_content_hash,
                     session_id,
                     meeting_id,
                     "Question",
-                    &entity_id,
-                    "question_participants",
+                    &item.item_id,
+                    "entity_title",
                     block_index,
                     block_index + 1,
-                    "questioners,respondents",
+                    "title_nl,title_fr,agenda_id,internal_ids,dossier_id,document_id",
                     source_url,
                     cache_path,
                 ));
+                if question_heading_has_respondent(item, blocks, block_index) {
+                    spans.push(extraction_span(
+                        artifact,
+                        source_content_hash,
+                        session_id,
+                        meeting_id,
+                        "Question",
+                        &item.item_id,
+                        "question_participants",
+                        block_index,
+                        block_index + 1,
+                        "questioners,respondents",
+                        source_url,
+                        cache_path,
+                    ));
+                }
             }
         }
     }

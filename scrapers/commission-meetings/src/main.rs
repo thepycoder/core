@@ -5,13 +5,14 @@ use crawl::paths::{cache_dir, cache_only, data_dir};
 use crawl::upsert_gap;
 use crawl::utils::{max_cached_meeting_id, relative_cache_path};
 use crawl::{
-    AnswerDraft, BundlePublisher, GAP_REASON_NOT_FOUND, GAP_REASON_UNSUPPORTED_FORMAT,
-    HearingDraft, InterpellationDraft, MANIFEST_STATUS_PARSED, MeetingGapRow, MeetingKind,
-    OralQuestionDraft, ReportBlockRow, SourceManifestRow, SourceSpanDraft, UtteranceDraft,
-    content_hash, content_hash_bytes, extract_questions_from_agenda, gap_reason_to_manifest_status,
-    load_prior_gaps, looks_like_pdf, manifest_path, now_rfc3339, parse_commission_meeting_report,
-    read_cache_metadata, read_report_html, reconcile_meeting_coverage, record_gap,
-    validate_manifest_rows, write_answers_parquet, write_cache_artifact, write_hearings_parquet,
+    AgendaItemDraft, AnswerDraft, BundlePublisher, GAP_REASON_NOT_FOUND,
+    GAP_REASON_UNSUPPORTED_FORMAT, HearingDraft, InterpellationDraft, MANIFEST_STATUS_PARSED,
+    MeetingGapRow, MeetingKind, OralQuestionDraft, ReportBlockRow, SourceManifestRow,
+    SourceSpanDraft, UtteranceDraft, content_hash, content_hash_bytes, extract_questions_from_agenda,
+    gap_reason_to_manifest_status, load_prior_gaps, looks_like_pdf, manifest_path,
+    materialize_agenda_items, now_rfc3339, parse_commission_meeting_report, read_cache_metadata,
+    read_report_html, reconcile_meeting_coverage, record_gap, validate_manifest_rows,
+    write_agenda_items_parquet, write_answers_parquet, write_cache_artifact, write_hearings_parquet,
     write_interpellations_parquet, write_meeting_gaps_parquet, write_report_blocks_parquet,
     write_source_manifest, write_source_spans_parquet, write_utterances_parquet,
 };
@@ -99,6 +100,7 @@ struct ScrapedQuestion {
 struct MeetingOutput {
     meeting: ScrapedMeeting,
     questions: Vec<ScrapedQuestion>,
+    agenda_items: Vec<AgendaItemDraft>,
     hearings: Vec<HearingDraft>,
     interpellations: Vec<InterpellationDraft>,
     utterances: Vec<UtteranceDraft>,
@@ -340,6 +342,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut all_meetings = Vec::new();
     let mut all_questions = Vec::new();
+    let mut all_agenda_items = Vec::new();
     let mut all_hearings = Vec::new();
     let mut all_interpellations = Vec::new();
     let mut all_utterances = Vec::new();
@@ -476,6 +479,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 gaps.remove(&meeting_id);
                 all_meetings.push(output.meeting);
                 all_questions.extend(output.questions);
+                all_agenda_items.extend(output.agenda_items);
                 all_hearings.extend(output.hearings);
                 all_interpellations.extend(output.interpellations);
                 all_utterances.extend(output.utterances);
@@ -510,6 +514,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut bundle = BundlePublisher::new("commission-meetings", &data_dir())?;
     let stage_meetings = bundle.stage_path(&session_dir.join("meetings.parquet"))?;
     let stage_questions = bundle.stage_path(&session_dir.join("questions.parquet"))?;
+    let stage_agenda_items = bundle.stage_path(&session_dir.join("agenda_items.parquet"))?;
     let stage_hearings = bundle.stage_path(&session_dir.join("hearings.parquet"))?;
     let stage_interpellations = bundle.stage_path(&session_dir.join("interpellations.parquet"))?;
     let stage_utterances = bundle.stage_path(&session_dir.join("utterances.parquet"))?;
@@ -522,6 +527,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     write_meetings(&stage_meetings, &all_meetings)?;
     write_questions(&stage_questions, &all_questions)?;
+    write_agenda_items_parquet(&stage_agenda_items, &all_agenda_items)?;
     write_hearings_parquet(&stage_hearings, &all_hearings)?;
     write_interpellations_parquet(&stage_interpellations, &all_interpellations)?;
     write_utterances_parquet(&stage_utterances, &all_utterances)?;
@@ -775,6 +781,15 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         }
     }
 
+    let agenda_items = materialize_agenda_items(
+        &parsed.agenda,
+        MeetingKind::Commission,
+        session_id,
+        meeting_id,
+        &url,
+        &cache_path,
+    );
+
     Ok(MeetingOutput {
         meeting: ScrapedMeeting {
             session_id,
@@ -789,6 +804,7 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
             cache_path,
         },
         questions,
+        agenda_items,
         hearings: parsed.hearings,
         interpellations: parsed.interpellations,
         utterances: parsed.utterances,

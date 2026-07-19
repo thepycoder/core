@@ -3,6 +3,7 @@ pub mod client;
 pub mod paths;
 pub mod utils;
 
+pub mod agenda_io;
 pub mod agenda_timeline;
 pub mod answer_io;
 pub mod artifact_id;
@@ -37,6 +38,7 @@ pub mod written_oral_qa;
 
 pub mod vote_inventory;
 
+pub use agenda_io::{AgendaItemDraft, materialize_agenda_items, write_agenda_items_parquet};
 pub use agenda_timeline::{
     AgendaItem, ItemKind, MeetingKind, count_agenda_questions_from_cache, extract_agenda_number,
     looks_like_fr_heading,
@@ -115,6 +117,7 @@ pub use speaker_parse::{
 };
 pub use utterance_io::write_utterances_parquet;
 pub use utterance_segment::{UtteranceDraft, segment_utterances};
+pub use utils::agenda_item_id;
 pub use vote_assembly::assemble_votes_from_blocks;
 pub use vote_io::{
     write_unresolved_vote_events_parquet, write_vote_bundle, write_vote_result_members_parquet,

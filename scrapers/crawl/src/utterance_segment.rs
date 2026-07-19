@@ -4,6 +4,7 @@ use crate::speaker_parse::{
     SpeakerRole, TurnStart, detect_turn_start, language_from_class, parse_turn_start,
 };
 use crate::speech_zones::{is_hard_boundary, is_stage_direction, is_vote_appendix_heading};
+use crate::utils::agenda_item_id;
 
 #[derive(Debug, Clone)]
 pub struct UtteranceDraft {
@@ -12,6 +13,7 @@ pub struct UtteranceDraft {
     pub meeting_id: u32,
     pub meeting_kind: MeetingKind,
     pub agenda_id: String,
+    pub agenda_item_id: String,
     pub turn_number: String,
     pub seq: u32,
     pub item_kind: String,
@@ -41,6 +43,7 @@ struct OpenTurn {
     block_start: u32,
     block_end: u32,
     agenda_id: String,
+    agenda_item_id: String,
     item_kind: String,
     item_id: String,
     question_ids: String,
@@ -149,6 +152,11 @@ pub fn segment_utterances(
                 _ => String::new(),
             };
             let agenda_id = turn_agenda_id(&turn_number, item);
+            let stamped_agenda_item_id = item
+                .map(|i| {
+                    agenda_item_id(session_id, meeting_kind.as_str(), meeting_id, i.start_block)
+                })
+                .unwrap_or_default();
             let text = block.text[content_start..].trim().to_string();
 
             open = Some(OpenTurn {
@@ -160,6 +168,7 @@ pub fn segment_utterances(
                 block_start: block.index,
                 block_end: block.index,
                 agenda_id: agenda_id.clone(),
+                agenda_item_id: stamped_agenda_item_id,
                 item_kind: item_kind.clone(),
                 item_id: item.map(|i| i.item_id.clone()).unwrap_or_default(),
                 question_ids: item.map(|i| i.internal_ids.join(",")).unwrap_or_default(),
@@ -237,6 +246,7 @@ fn push_turn(
         meeting_id,
         meeting_kind,
         agenda_id: turn.agenda_id,
+        agenda_item_id: turn.agenda_item_id,
         turn_number: turn.turn_number,
         seq: *seq,
         item_kind: turn.item_kind,
@@ -289,7 +299,7 @@ mod tests {
     #[test]
     fn segments_plenary_questions_fixture() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../partijgedrag/core/cache/sessions/56/meetings/plenary/56-117.html");
+            .join("../../cache/sessions/56/meetings/plenary/56-117.html");
         if !path.exists() {
             return;
         }
@@ -308,5 +318,54 @@ mod tests {
         );
         assert!(utterances.len() > 50);
         assert!(utterances.iter().all(|u| u.seq > 0));
+    }
+
+    #[test]
+    fn stamps_agenda_item_id_matching_timeline_start_block() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cache/sessions/56/meetings/plenary/56-42.html");
+        if !path.exists() {
+            return;
+        }
+        let html = read_report_html(&path).unwrap();
+        let document = scraper::Html::parse_document(&html);
+        let blocks = parse_report_blocks(&document);
+        let agenda = build_agenda_timeline(&blocks, MeetingKind::Plenary, 56, 42);
+        let utterances = segment_utterances(
+            &blocks,
+            &agenda,
+            MeetingKind::Plenary,
+            56,
+            42,
+            "url",
+            "cache",
+        );
+        let with_dossier: Vec<_> = utterances
+            .iter()
+            .filter(|u| u.dossier_id == "56/318")
+            .collect();
+        assert!(
+            !with_dossier.is_empty(),
+            "expected utterances under dossier 56/318"
+        );
+        for u in &with_dossier {
+            assert!(
+                u.agenda_item_id.starts_with("56_plenary_42_agenda_"),
+                "got {}",
+                u.agenda_item_id
+            );
+            let start: u32 = u
+                .agenda_item_id
+                .rsplit('_')
+                .next()
+                .unwrap()
+                .parse()
+                .unwrap();
+            let item = agenda
+                .iter()
+                .find(|a| a.start_block == start)
+                .expect("agenda item for stamped id");
+            assert_eq!(item.dossier_id, "56/318");
+        }
     }
 }

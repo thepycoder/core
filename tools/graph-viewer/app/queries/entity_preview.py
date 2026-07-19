@@ -33,6 +33,7 @@ def fetch_entity_preview(
     settings = settings or get_settings()
     handlers = {
         "Utterance": _preview_utterance,
+        "AgendaItem": _preview_agenda_item,
         "Question": _preview_question,
         "Answer": _preview_answer,
         "Hearing": _preview_hearing,
@@ -88,7 +89,8 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         SELECT session_id, meeting_id, meeting_kind, seq, turn_number,
                raw_speaker, speaker_person_id, speaker_role,
                speaker_entity_type, speaker_entity_id, text, confidence,
-               item_id, item_kind
+               item_id, item_kind, coalesce(agenda_item_id, '') AS agenda_item_id,
+               coalesce(dossier_id, '') AS dossier_id
         FROM utterances
         WHERE utterance_id = ?
         LIMIT 1
@@ -114,11 +116,19 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         fields.append(_field("Item", row[12]))
     if row[13]:
         fields.append(_field("Item kind", row[13]))
+    if row[14]:
+        fields.append(_field("Agenda item", row[14]))
+    if row[15]:
+        fields.append(_field("Dossier", row[15]))
 
     related: list[PreviewRelated] = []
     meeting_id = meeting_node_id(row[0], row[2], row[1])
     if meeting_id:
         related.append(_related("Meeting", meeting_id, f"{row[2]} {row[1]}"))
+    if row[14]:
+        related.append(_related("AgendaItem", row[14], row[14]))
+    if row[15]:
+        related.append(_related("Dossier", row[15], row[15]))
 
     proceeding_type = proceeding_node_type(row[13])
     if row[12] and proceeding_type:
@@ -136,6 +146,69 @@ def _preview_utterance(conn, node_id: str, settings: Settings) -> EntityPreview 
         fields=fields,
         content=_clip(row[10], 5000),
         content_label="Utterance text",
+        related=related,
+    )
+
+
+def _preview_agenda_item(conn, node_id: str, settings: Settings) -> EntityPreview | None:
+    try:
+        row = conn.execute(
+            """
+            SELECT agenda_item_id, session_id, meeting_id, meeting_kind, agenda_id,
+                   item_kind, item_id, title_nl, title_fr, dossier_id, document_id,
+                   start_block, end_block
+            FROM agenda_items
+            WHERE agenda_item_id = ?
+            LIMIT 1
+            """,
+            [node_id],
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+
+    title = row[7] or row[8] or node_id
+    fields = [
+        _field("Agenda number", row[4] or "—"),
+        _field("Kind", row[5] or "—"),
+        _field("Meeting", f"{row[3]} {row[2]} (session {row[1]})"),
+        _field("Blocks", f"{row[11]}–{row[12]}"),
+    ]
+    if row[6]:
+        fields.append(_field("Proceeding id", row[6]))
+    if row[9]:
+        fields.append(_field("Dossier", row[9]))
+    if row[10]:
+        fields.append(_field("Document", row[10]))
+
+    utterance_count = 0
+    try:
+        utterance_count = conn.execute(
+            """
+            SELECT count(*) FROM utterances WHERE agenda_item_id = ?
+            """,
+            [node_id],
+        ).fetchone()[0]
+    except Exception:
+        pass
+    fields.append(_field("Utterances", utterance_count))
+
+    related: list[PreviewRelated] = []
+    mid = meeting_node_id(row[1], row[3], row[2])
+    if mid:
+        related.append(_related("Meeting", mid, f"{row[3]} {row[2]}"))
+    if row[9]:
+        related.append(_related("Dossier", row[9], row[9]))
+    proceeding_type = proceeding_node_type(row[5])
+    if row[6] and proceeding_type:
+        related.append(_related(proceeding_type, row[6], f"{proceeding_type} {row[6]}"))
+
+    return EntityPreview(
+        title=title,
+        fields=fields,
+        content=None,
+        content_label=None,
         related=related,
     )
 

@@ -183,8 +183,10 @@ class DataQualityWarning(BaseModel):
 
 class UtteranceGroup(BaseModel):
     agenda_id: str = ""
+    agenda_item_id: str = ""
     title: str
     item_kind: str = ""
+    dossier_id: str = ""
     utterances: list[dict[str, Any]] = Field(default_factory=list)
 
 
