@@ -12,7 +12,10 @@ pub struct OralQuestionDraft {
     pub session_id: u32,
     pub meeting_id: u32,
     pub questioners: String,
-    pub respondents: String,
+    /// Addressee(s) parsed from the question heading ("Vraag van X aan Y").
+    /// Upstream renamed this from `respondents`: the actual respondents are
+    /// derived from discussion speakers and may differ from the addressee.
+    pub questionees: String,
     pub topics_nl: String,
     pub topics_fr: String,
     pub internal_ids: String,
@@ -22,7 +25,7 @@ pub struct OralQuestionDraft {
 
 struct QuestionData {
     questioners: Vec<String>,
-    respondents: Vec<String>,
+    questionees: Vec<String>,
     topics: Vec<String>,
     internal_ids: Vec<String>,
 }
@@ -112,7 +115,7 @@ pub fn extract_questions_from_agenda(
                 session_id,
                 meeting_id,
                 questioners: data_nl.questioners.join(","),
-                respondents: data_nl.respondents.join(","),
+                questionees: data_nl.questionees.join(","),
                 topics_nl: data_nl.topics.join(";"),
                 topics_fr: data_fr.topics.join(";"),
                 internal_ids: internal_ids.join(","),
@@ -130,7 +133,7 @@ fn extract_question_data(
 ) -> Result<QuestionData, Box<dyn Error>> {
     let mut questioners = Vec::new();
     let mut topics = Vec::new();
-    let mut respondents = Vec::new();
+    let mut questionees = Vec::new();
     let mut internal_ids = Vec::new();
 
     match meeting_kind {
@@ -143,7 +146,7 @@ fn extract_question_data(
                     .get(&questioner_raw)
                     .cloned()
                     .unwrap_or(questioner_raw);
-                let respondent = capture[2].trim().to_string();
+                let questionee = capture[2].trim().to_string();
                 let topic = capture
                     .get(3)
                     .or_else(|| capture.get(4))
@@ -156,8 +159,8 @@ fn extract_question_data(
                     .unwrap_or_default();
 
                 questioners.push(questioner);
-                if !respondents.contains(&respondent) {
-                    respondents.push(respondent);
+                if !questionees.contains(&questionee) {
+                    questionees.push(questionee);
                 }
                 internal_ids.push(internal_id);
                 topics.push(topic);
@@ -168,7 +171,7 @@ fn extract_question_data(
                 let Some(questioner) = normalize_questioner_name(&capture[1]) else {
                     continue;
                 };
-                let respondent = capture
+                let questionee = capture
                     .get(2)
                     .map(|m| m.as_str().trim().to_string())
                     .unwrap_or_else(|| "Onbekend".to_string());
@@ -176,8 +179,8 @@ fn extract_question_data(
                 let internal_id = format!("Q{}", capture[4].trim());
 
                 questioners.push(questioner);
-                if !respondents.contains(&respondent) {
-                    respondents.push(respondent);
+                if !questionees.contains(&questionee) {
+                    questionees.push(questionee);
                 }
                 internal_ids.push(internal_id);
                 topics.push(topic);
@@ -187,7 +190,7 @@ fn extract_question_data(
 
     Ok(QuestionData {
         questioners,
-        respondents,
+        questionees,
         topics,
         internal_ids,
     })
@@ -229,7 +232,7 @@ mod tests {
         let text = "-Vraag van Xavier Dubois aan Bernard Quintin (Veiligheid) over \"test topic\" (56001234C)";
         let data = extract_question_data(MeetingKind::Commission, &HashMap::new(), text).unwrap();
         assert_eq!(data.questioners, vec!["Xavier Dubois".to_string()]);
-        assert_eq!(data.respondents, vec!["Bernard Quintin".to_string()]);
+        assert_eq!(data.questionees, vec!["Bernard Quintin".to_string()]);
     }
 
     fn commission_fixture_questions(meeting_id: u32) -> Option<Vec<OralQuestionDraft>> {

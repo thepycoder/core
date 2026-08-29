@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 import fitz
 import requests
+from dotenv import load_dotenv
 from tqdm import tqdm
 
 # GLOBAL FLAGS
@@ -20,7 +21,7 @@ ONLY_DOSSIER_ID = None  # "859"
 
 # LAYOUT FRACTIONS
 FRENCH_RIGHT_HALF_FRACTION = 0.50
-TITLE_PAGE_TOP_FRACTION = 0.35
+TITLE_PAGE_TOP_FRACTION = 0.30
 TITLE_PAGE_BOTTOM_FRACTION = 0.55
 PAGE_TOP_FRACTION = 0.08
 PAGE_BOTTOM_FRACTION = 0.09
@@ -73,31 +74,52 @@ TABLE_OF_CONTENTS_PAGE_MARKERS = [
 ]
 
 # Regex to detect "same as committee text" redirect pages
+# _REDIRECT_PATTERN = re.compile(
+#     r"(?:"
+#     # Dutch: "...is dezelfde als de tekst/artikelen aangenomen [in eerste/tweede lezing] door de commissie"
+#     r"tekst aangenomen door de plenaire vergadering\s+is dezelfde als de (?:tekst|artikelen) aangenomen"
+#     r"(?:\s+in (?:eerste|tweede) lezing)?\s+door de commissie"
+#     r"|"
+#     # French: mirror both variants (texte/articles, première/deuxième lecture)
+#     r"texte adopt[eé] (?:en s[eé]ance pl[eé]ni[eè]re|par la s[eé]ance pl[eé]ni[eè]re)\s+est identique (?:au texte adopt[eé]|aux articles adopt[eé]s)"
+#     r"(?:\s+en (?:premi[eè]re|deuxi[eè]me) lecture)?\s+par la commission"
+#     r")"
+#     r"\s*\(?DOC\s+(\d+)\s+(\d+)/(\d{3,4})\)?",
+#     re.IGNORECASE | re.DOTALL,
+# )
+
 _REDIRECT_PATTERN = re.compile(
-    r"(?:"
-    # Dutch: "...is dezelfde als de tekst aangenomen [in tweede lezing] door de commissie"
-    r"tekst aangenomen door de plenaire vergadering\s+is dezelfde als de tekst aangenomen"
-    r"(?:\s+in tweede lezing)?\s+door de commissie"
-    r"|"
-    # French
-    r"texte adopt[eé] (?:en s[eé]ance pl[eé]ni[eè]re|par la s[eé]ance pl[eé]ni[eè]re)\s+est identique au texte adopt[eé] par la commission"
-    r")"
-    r"\s*\(?DOC\s+(\d+)\s+(\d+)/(\d{3,4})\)?",
+    r"(?:tekst aangenomen door de plenaire vergadering\s+is dezelfde als de (?:tekst|artikelen)[^()]{0,150}?|texte adopt[eé] (?:en s[eé]ance pl[eé]ni[eè]re|par la s[eé]ance pl[eé]ni[eè]re)\s+est identique (?:au texte|aux articles)[^()]{0,150}?)\s*\(?DOC\s+(\d+)\s+(\d+)\/(\d{3,4})\)?",
     re.IGNORECASE | re.DOTALL,
 )
 
 
+# Trigger phrases indicating a "same as" redirect (Dutch + French, any variant:
+# plenary=committee, second reading=first reading, etc.)
+_REDIRECT_TRIGGER = re.compile(
+    r"is dezelfde als|est identique (?:à|au|aux)",
+    re.IGNORECASE,
+)
+
+# DOC citation, tolerant of "zie DOC", "voir DOC", "(DOC", "(zie DOC", etc.
+_DOC_REF_PATTERN = re.compile(
+    r"DOC\s+(\d+)\s+(\d+)\/(\d{3,4})",
+    re.IGNORECASE,
+)
+
+# How far past the trigger phrase we're willing to look for the DOC reference
+_REDIRECT_WINDOW = 250
+
+
 def detect_adopted_text_redirect(pdf_path: Path) -> Optional[str]:
     """
-    If the first page of *pdf_path* says the plenary text is the same as
-    the committee text and cites a DOC reference, return the URL of that
-    document.  Otherwise return None.
-
-    E.g. "DOC 56 1518/004"  →  https://www.dekamer.be/FLWB/PDF/56/1518/56K1518004.pdf
+    If the first page(s) of *pdf_path* say the text is the same as some
+    other DOC (plenary==committee, second reading==first reading, etc.)
+    and cite a DOC reference nearby, return the URL of that document.
+    Otherwise return None.
     """
     try:
         doc = fitz.open(pdf_path)
-        # Only check the first 1-2 pages
         text = ""
         for page in doc[: min(2, len(doc))]:
             text += page.get_text()
@@ -105,12 +127,16 @@ def detect_adopted_text_redirect(pdf_path: Path) -> Optional[str]:
     except Exception:
         return None
 
-    m = _REDIRECT_PATTERN.search(text)
+    trig = _REDIRECT_TRIGGER.search(text)
+    if not trig:
+        return None
+
+    window = text[trig.end(): trig.end() + _REDIRECT_WINDOW]
+    m = _DOC_REF_PATTERN.search(window)
     if not m:
         return None
 
     session_str, dossier_str, seq_str = m.group(1), m.group(2), m.group(3)
-    # seq_str may be "004" → keep zero-padding as-is
     filename = f"{session_str}K{dossier_str}{seq_str}.pdf"
     url = f"https://www.dekamer.be/FLWB/PDF/56/{dossier_str}/{filename}"
     tqdm.write(f"  [redirect] DOC {session_str} {dossier_str}/{seq_str} → {url}")
@@ -175,6 +201,9 @@ REPORT_CONFIG = ExtractionConfig(
     page_top_fraction=0.07,
     page_bottom_fraction=0.08,
     skip_page=_report_skip_page,
+)
+ORIGINAL_TEXT_CONFIG = ExtractionConfig(
+    md_filename="original_text.md", skip_page=_adopted_text_skip_page
 )
 
 
@@ -623,7 +652,11 @@ def download_pdf_following_redirect(
 
 # ── Cleanup helper ─────────────────────────────────────────────────────────────
 # Files that should never be deleted (the raw PDF downloads)
-_KEEP_FILENAMES = {"adopted_text_original.pdf", "report_original.pdf"}
+_KEEP_FILENAMES = {
+    "adopted_text_original.pdf",
+    "report_original.pdf",
+    "original_text_original.pdf",
+}
 
 
 def clean_dossier_dir(dossier_dir: Path):
@@ -659,17 +692,24 @@ def read_dossier_rows(parquet_path: Path) -> list[dict]:
         if "latest_report_url" in schema_names
         else [None] * len(ids)
     )
+    original = (
+        table.column("original_text_url").to_pylist()
+        if "original_text_url" in schema_names
+        else [None] * len(ids)
+    )
 
-    for dossier_id, at_url, r_url in zip(ids, adopted, report):
+    for dossier_id, at_url, r_url, orig_url in zip(ids, adopted, report, original):
         at_url = (at_url or "").strip() or None
         r_url = (r_url or "").strip() or None
-        if at_url is None and r_url is None:
+        orig_url = (orig_url or "").strip() or None
+        if at_url is None and r_url is None and orig_url is None:
             continue
         rows.append(
             {
                 "dossier_id": str(dossier_id),
                 "adopted_text_url": at_url,
                 "report_url": r_url,
+                "original_text_url": orig_url,
             }
         )
 
@@ -678,10 +718,20 @@ def read_dossier_rows(parquet_path: Path) -> list[dict]:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
+    load_dotenv()
+
+    SCRAPER_DATA_DIR = Path(os.environ["SCRAPER_DATA_DIR"])
+    SCRAPER_CACHE_DIR = Path(os.environ["SCRAPER_CACHE_DIR"])
+
     root = Path(__file__).resolve().parents[0]
-    dossiers_parquet = root / f"../../data/sessions/{SESSION_ID}/dossiers.parquet"
-    pdf_cache_dir = root / f"../cache/sessions/{SESSION_ID}/dossiers"
-    pdf_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    dossiers_parquet = SCRAPER_DATA_DIR / f"sessions/{SESSION_ID}/dossiers.parquet"
+
+    pdf_cache_root = SCRAPER_CACHE_DIR / f"sessions/{SESSION_ID}/dossiers/pdfs"
+    pdf_cache_root.mkdir(parents=True, exist_ok=True)
+
+    output_root = SCRAPER_CACHE_DIR / f"sessions/{SESSION_ID}/dossiers"
+    output_root.mkdir(parents=True, exist_ok=True)
 
     # Read dossier list
     if not dossiers_parquet.exists():
@@ -712,7 +762,7 @@ def main():
             dossier_id = row["dossier_id"]
             pbar.set_description(f"Processing {dossier_id}")
 
-            dossier_dir = pdf_cache_dir / dossier_id
+            dossier_dir = pdf_cache_root / dossier_id
             dossier_dir.mkdir(parents=True, exist_ok=True)
 
             # ── Clean up derived files from previous runs ──────────────────
@@ -736,6 +786,15 @@ def main():
                         "pdf_path": dossier_dir / "report_original.pdf",
                         "cfg": REPORT_CONFIG,
                         "doc_type": "Report",
+                    }
+                )
+            if row["original_text_url"]:
+                documents.append(
+                    {
+                        "url": row["original_text_url"],
+                        "pdf_path": dossier_dir / "original_text_original.pdf",
+                        "cfg": ORIGINAL_TEXT_CONFIG,
+                        "doc_type": "Original Text",
                     }
                 )
 

@@ -104,6 +104,7 @@ struct ScrapedDossier {
     latest_report_url: Option<String>,
     eurovoc_main_descriptor: String,
     eurovoc_descriptors: String,
+    original_text_url: Option<String>,
     source_url: String,
     cache_path: String,
 }
@@ -132,6 +133,7 @@ struct Dossier {
     subdocuments: Vec<Subdocument>,
     eurovoc_main_descriptor: String,
     eurovoc_descriptors: String,
+    original_text_url: Option<String>,
 }
 
 /// A subdocument.
@@ -176,6 +178,7 @@ enum DocumentType {
     Bijlage,
     Errata,
     Kaft,
+    Naturalisatielijsten,
     NietGeevoceerdOntwerp,
     OpmerkingenVanHetRekenhof,
     OvergezondenOntwerp,
@@ -188,6 +191,8 @@ enum DocumentType {
     VoorstelTotHerziening,
     VoorstelVanResolutie,
     VoorstelVanMotie,
+    VoorstelVanNaturalisatieAkte,
+    VoorstelVanVerklaring,
     WetsOntwerp,
     WetsVoorstel,
     Onbekend,
@@ -1052,6 +1057,7 @@ fn scrape_expected_dossiers(
             latest_report_url,
             eurovoc_main_descriptor: dossier.eurovoc_main_descriptor,
             eurovoc_descriptors: dossier.eurovoc_descriptors,
+            original_text_url: dossier.original_text_url,
             source_url: source_url.clone(),
             cache_path: cache_path_rel.clone(),
         });
@@ -1159,6 +1165,7 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
     let mut subdocuments = Vec::new();
     let mut eurovoc_main_descriptor = String::new();
     let mut eurovoc_descriptors = String::new();
+    let mut original_text_url: Option<String> = None;
 
     let document_table = document
         .select(selector_table())
@@ -1176,12 +1183,7 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
             let (Some(col_1), Some(col_2)) = (columns.next(), columns.next()) else {
                 continue;
             };
-            let label = col_1
-                .text()
-                .collect::<String>()
-                .to_lowercase()
-                .trim()
-                .to_string();
+            let label = normalize_label(col_1.text().collect::<String>());
             let value = col_2.text().collect::<String>().trim().to_string();
             let value_lower = value.to_lowercase();
 
@@ -1217,6 +1219,20 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
                 if !matches!(candidate, DocumentStatus::Onbekend) {
                     status = candidate;
                 }
+            } else if label.contains("document kamer") {
+                if original_text_url.is_none() {
+                    original_text_url = col_2
+                        .select(selector_a())
+                        .filter_map(|a| a.value().attr("href"))
+                        .find(|href| href.ends_with(".pdf"))
+                        .map(|href| {
+                            if href.starts_with("http") {
+                                href.to_string()
+                            } else {
+                                format!("{}{}", DEKAMER_BASE, href)
+                            }
+                        });
+                }
             } else if label.contains("eurovoc-hoofddescriptor") {
                 eurovoc_main_descriptor = value.trim().to_uppercase();
             } else if label.contains("eurovoc descriptoren")
@@ -1245,6 +1261,32 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
         subdocuments.insert(0, primary_document);
     }
 
+    // Upstream behaviour: the original submitted text scraped from the
+    // "Document Kamer" row is actually subdocument 1 (the main document).
+    // Make sure it shows up in `subdocuments`, backfilling the primary
+    // document's file_url when the top-level table did not expose a PDF.
+    // Only insert when `parse_primary_document` found nothing, otherwise
+    // the primary document would appear twice under different ids.
+    if let Some(existing) = subdocuments.iter_mut().find(|s| s.id == "1") {
+        if existing.file_url.is_none() {
+            existing.file_url = original_text_url.clone();
+        }
+    } else if subdocuments.is_empty()
+        && (original_text_url.is_some() || !submission_date.is_empty())
+    {
+        subdocuments.insert(
+            0,
+            Subdocument {
+                dossier_id: dossier_id.to_string(),
+                id: "1".to_string(),
+                document_type,
+                date: submission_date.clone(),
+                authors: dossier_authors.clone(),
+                file_url: original_text_url.clone(),
+            },
+        );
+    }
+
     Ok(Dossier {
         title,
         authors: dossier_authors,
@@ -1256,6 +1298,7 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
         subdocuments,
         eurovoc_main_descriptor,
         eurovoc_descriptors,
+        original_text_url,
     })
 }
 
@@ -1355,6 +1398,13 @@ fn pdf_url_from_cell(cell: &ElementRef) -> Option<String> {
         })
 }
 
+fn normalize_label(text: String) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
     let subdocument_table = match cell.select(selector_table()).next() {
         Some(t) => t,
@@ -1412,13 +1462,21 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
                 .trim()
                 .to_string();
 
-            // The link cell (cell_1) contains an <a> whose text is the
-            // sub-document number, e.g. "003".
-            // stripped down to 3
-            if let Some(link) = cell_1.select(selector_a()).last()
-                && let Some(id_text) = link.text().next()
-            {
-                document_id = id_text.trim().trim_start_matches('0').to_string();
+            let cell_1_text = cell_1.text().collect::<String>();
+            // The link cell (cell_1) usually contains an <a> whose text is the
+            // sub-document number, e.g. "003", stripped down to 3.
+            // Some subdocuments ("niet beschikbaar") have no <a> at all so the number is plain text instead.
+            // Only attempt this on the header row of a subdocument (i.e. before
+            // document_id has been set) — later rows like "Datum ronddeling" or
+            // "Auteur(s)" also lack an <a> and must not clobber the id.
+            if document_id.is_empty() {
+                if let Some(link) = cell_1.select(selector_a()).last() {
+                    if let Some(id_text) = link.text().next() {
+                        document_id = id_text.trim().trim_start_matches('0').to_string();
+                    }
+                } else if let Some(id_text) = cell_1_text.split_whitespace().next() {
+                    document_id = id_text.trim().trim_start_matches('0').to_string();
+                }
             }
 
             // cell_2 may carry an inline <font> tag with the document type.
@@ -1432,6 +1490,11 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
                 if pdf_url.is_some() {
                     file_url = pdf_url;
                 }
+            }
+
+            // Explicitly flag documents marked as unavailable (no PDF exists).
+            if cell_1_text.to_lowercase().contains("niet beschikbaar") {
+                file_url = Some("NIET_BESCHIKBAAR".to_string());
             }
 
             if label.contains("datum ronddeling") {
@@ -1538,6 +1601,10 @@ fn parse_document_type(raw: &str) -> DocumentType {
         DocumentType::AangenomenMotie
     } else if raw.contains("voorstel van motie") {
         DocumentType::VoorstelVanMotie
+    } else if raw.contains("voorstel van naturalisatieakte") {
+        DocumentType::VoorstelVanNaturalisatieAkte
+    } else if raw.contains("voorstel van verklaring") {
+        DocumentType::VoorstelVanVerklaring
     } else if raw.contains("aangenomen tekst") {
         DocumentType::AangenomenTekst
     } else if raw.contains("advies") {
@@ -1560,6 +1627,8 @@ fn parse_document_type(raw: &str) -> DocumentType {
         DocumentType::NietGeevoceerdOntwerp
     } else if raw.contains("kaft") {
         DocumentType::Kaft
+    } else if raw.contains("naturalisatielijsten") {
+        DocumentType::Naturalisatielijsten
     } else {
         DocumentType::Onbekend
     }
@@ -1568,7 +1637,7 @@ fn parse_document_type(raw: &str) -> DocumentType {
 fn write_dossiers(path: &Path, rows: &[ScrapedDossier]) -> Result<(), Box<dyn Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("session_id", DataType::Utf8, false),
-        Field::new("id", DataType::Utf8, false),
+        Field::new("dossier_id", DataType::Utf8, false),
         Field::new("last_updated", DataType::Utf8, false),
         Field::new("title", DataType::Utf8, false),
         Field::new("authors", DataType::Utf8, false),
@@ -1581,6 +1650,7 @@ fn write_dossiers(path: &Path, rows: &[ScrapedDossier]) -> Result<(), Box<dyn Er
         Field::new("latest_report_url", DataType::Utf8, true),
         Field::new("eurovoc_main_descriptor", DataType::Utf8, false),
         Field::new("eurovoc_descriptors", DataType::Utf8, false),
+        Field::new("original_text_url", DataType::Utf8, true),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -1602,6 +1672,7 @@ fn write_dossiers(path: &Path, rows: &[ScrapedDossier]) -> Result<(), Box<dyn Er
             col_opt!(rows, |d| d.latest_report_url.clone()),
             col!(rows, |d| d.eurovoc_main_descriptor.clone()),
             col!(rows, |d| d.eurovoc_descriptors.clone()),
+            col_opt!(rows, |d| d.original_text_url.clone()),
             col!(rows, |d| d.source_url.clone()),
             col!(rows, |d| d.cache_path.clone()),
         ],

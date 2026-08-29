@@ -147,6 +147,7 @@ async fn main() {
                 discussie samen in maximaal 4 zinnen, hoe korter hoe beter. Hou de informatiedensiteit \
                 heel hoog, geen onnodige woorden. \
                 - Schrijf in het Nederlands. \
+                - Vermeld politici enkel met hun volledige naam. Laat partijlabels zoals \"(N-VA)\", \"(CD&V)\", \"(Open Vld)\", enzovoort weg. \
                 - Benadruk het hoofdonderwerp en de belangrijkste standpunten/antwoorden. \
                 – Formuleer waarderende, kritische of beschuldigende uitspraken expliciet als meningen, \
                 kritiek of beweringen van de betrokken spreker (bv. \"volgens X\", \"X stelt dat\", \

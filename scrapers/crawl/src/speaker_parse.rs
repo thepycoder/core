@@ -52,7 +52,11 @@ static ARTICLE_FP: OnceLock<Regex> = OnceLock::new();
 fn turn_start_regex() -> &'static Regex {
     TURN_START.get_or_init(|| {
         Regex::new(
+            // NOTE: See IC311 question 1: some speaker paragraphs have multiple
+            // leading sequence numbers such as '01.02 01.03' instead of just
+            // '01.01' (example vanessa matz). We need to skip all of them.
             r"(?xi)^\s*
+            (?:(?P<lead>\d{2}\.\d{2}\d?)[\s\u00A0\u202F\u00AD]+)*
             (?P<turn>\d{2}\.\d{2}\d?)
             [\s\u00A0\u202F\u00AD]*
             (?P<label>[^:]+?)
@@ -106,8 +110,8 @@ pub fn detect_turn_start(paragraph: &str) -> Option<(TurnStart, usize)> {
     }
 
     let prefix: String = trimmed.chars().take(120).collect();
-    if article_fp_regex().is_match(&prefix) {
-        turn_start_regex().find(trimmed)?;
+    if article_fp_regex().is_match(&prefix) && turn_start_regex().find(trimmed).is_none() {
+        return None;
     }
 
     if let Some(cap) = turn_start_regex().captures(trimmed) {
@@ -263,6 +267,23 @@ mod tests {
         let p = "01.01\u{00a0}Annick Ponthier (VB): Mijnheer de voorzitter";
         let (start, _) = detect_turn_start(p).unwrap();
         assert!(matches!(start, TurnStart::Numbered { .. }));
+    }
+
+    #[test]
+    fn detects_turn_with_multiple_leading_sequence_numbers() {
+        // IC311 question 1: '01.02 01.03' leading numbers (example vanessa matz)
+        let p = "01.02 01.03 Vanessa Matz (LE): Merci, monsieur le président.";
+        let (start, _) = detect_turn_start(p).unwrap();
+        match start {
+            TurnStart::Numbered {
+                turn_number,
+                raw_label,
+            } => {
+                assert_eq!(turn_number, "01.03");
+                assert_eq!(raw_label, "Vanessa Matz (LE)");
+            }
+            other => panic!("expected numbered turn, got {other:?}"),
+        }
     }
 
     #[test]

@@ -33,17 +33,21 @@ use tokio::fs;
 /// REGEXES
 static TIME_REGEX: OnceLock<Regex> = OnceLock::new();
 static DATE_REGEX: OnceLock<Regex> = OnceLock::new();
+static DATE_NUMERIC_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_REGEX: OnceLock<Regex> = OnceLock::new();
 static PROPOSITION_TOPIC_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn time_regex() -> &'static Regex {
-    TIME_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})\.(\d{2})\s*uur").unwrap())
+    TIME_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})\.(\d{2})\s*(?:uur|u)").unwrap())
 }
 
 fn date_regex() -> &'static Regex {
     DATE_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})\s+([a-zA-Z]+)\s+(\d{4})").unwrap())
 }
 
+fn date_numeric_regex() -> &'static Regex {
+    DATE_NUMERIC_REGEX.get_or_init(|| Regex::new(r"(\d{1,2})-(\d{1,2})-(\d{4})").unwrap())
+}
 fn proposition_regex() -> &'static Regex {
     PROPOSITION_REGEX.get_or_init(|| Regex::new(r#"^(.+?)\s*\((\d+)\/(\d+(?:-\d+)?)\).*"#).unwrap())
     // PROPOSITION_REGEX.get_or_init(|| Regex::new(r#"^((?:Voorstel van resolutie|Proposition de résolution|Wetsvoorstel|Proposition de loi|Wetsontwerp|Projet de loi|Voorstel tot|Proposition visant|Voorstel van bijzondere wet).*)\((\d+)\/(\d+(?:-\d+)?)\).*$"#).unwrap())
@@ -80,6 +84,7 @@ struct ScrapedQuestion {
     session_id: u32,
     meeting_id: u32,
     questioners: String,
+    questionees: String,
     respondents: String,
     topics_nl: String,
     topics_fr: String,
@@ -87,6 +92,7 @@ struct ScrapedQuestion {
     question_body_nl: String,
     question_body_fr: String,
     treatment_mode: String,
+    date: String,
     source_url: String,
     cache_path: String,
 }
@@ -99,6 +105,7 @@ struct ScrapedProposition {
     title_fr: String,
     dossier_id: String,
     document_id: String,
+    date: String,
     source_url: String,
     cache_path: String,
 }
@@ -109,6 +116,7 @@ struct ScrapedNotice {
     meeting_id: u32,
     title_nl: String,
     title_fr: String,
+    date: String,
     source_url: String,
     cache_path: String,
 }
@@ -185,6 +193,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("session_id", DataType::Utf8, false),
         Field::new("meeting_id", DataType::Utf8, false),
         Field::new("questioners", DataType::Utf8, false),
+        Field::new("questionees", DataType::Utf8, false),
         Field::new("respondents", DataType::Utf8, false),
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
@@ -192,6 +201,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("question_body_nl", DataType::Utf8, false),
         Field::new("question_body_fr", DataType::Utf8, false),
         Field::new("treatment_mode", DataType::Utf8, false),
+        Field::new("date", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -203,6 +213,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.session_id.to_string()),
             col!(rows, |q| q.meeting_id.to_string()),
             col!(rows, |q| q.questioners.clone()),
+            col!(rows, |q| q.questionees.clone()),
             col!(rows, |q| q.respondents.clone()),
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
@@ -210,6 +221,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.question_body_nl.clone()),
             col!(rows, |q| q.question_body_fr.clone()),
             col!(rows, |q| q.treatment_mode.clone()),
+            col!(rows, |q| q.date.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
         ],
@@ -225,6 +237,7 @@ fn write_propositions(path: &Path, rows: &[ScrapedProposition]) -> Result<(), Bo
         Field::new("title_fr", DataType::Utf8, false),
         Field::new("dossier_id", DataType::Utf8, false),
         Field::new("document_id", DataType::Utf8, false),
+        Field::new("date", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -239,6 +252,7 @@ fn write_propositions(path: &Path, rows: &[ScrapedProposition]) -> Result<(), Bo
             col!(rows, |p| p.title_fr.clone()),
             col!(rows, |p| p.dossier_id.clone()),
             col!(rows, |p| p.document_id.clone()),
+            col!(rows, |p| p.date.clone()),
             col!(rows, |p| p.source_url.clone()),
             col!(rows, |p| p.cache_path.clone()),
         ],
@@ -252,6 +266,7 @@ fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Erro
         Field::new("meeting_id", DataType::Utf8, false),
         Field::new("title_nl", DataType::Utf8, false),
         Field::new("title_fr", DataType::Utf8, false),
+        Field::new("date", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -264,6 +279,7 @@ fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Erro
             col!(rows, |n| n.meeting_id.to_string()),
             col!(rows, |n| n.title_nl.clone()),
             col!(rows, |n| n.title_fr.clone()),
+            col!(rows, |n| n.date.clone()),
             col!(rows, |n| n.source_url.clone()),
             col!(rows, |n| n.cache_path.clone()),
         ],
@@ -272,6 +288,8 @@ fn write_notices(path: &Path, rows: &[ScrapedNotice]) -> Result<(), Box<dyn Erro
 
 const MEETING_KIND: &str = "plenary";
 const SOURCE_NAME: &str = "plenary_meetings";
+
+const SESSION_IDS: &[u32] = &[56, 55];
 
 fn meeting_url(session_id: u32, meeting_id: u32) -> String {
     format!(
@@ -292,16 +310,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
     let client = ScrapingClient::new();
-    let session_id: u32 = 56;
 
+    for &session_id in SESSION_IDS {
+        if let Err(err) = scrape_session(&client, session_id).await {
+            eprintln!(
+                "[meetings-plenary] session {} failed entirely: {}",
+                session_id, err
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Scrape a single session.
+async fn scrape_session(client: &ScrapingClient, session_id: u32) -> Result<(), Box<dyn Error>> {
     let session_dir = data_dir()
         .join("sessions")
         .join(session_id.to_string())
         .join("plenary");
     fs::create_dir_all(&session_dir).await?;
 
-    let meeting_id_path = data_dir().join("current_plenary_id.txt");
-    let current_meeting_id: u32 = std::fs::read_to_string(&meeting_id_path)?.trim().parse()?;
+    let meeting_id_path = session_dir.join("current_plenary_id.txt");
+    let current_meeting_id: u32 = if meeting_id_path.exists() {
+        std::fs::read_to_string(&meeting_id_path)?.trim().parse()?
+    } else {
+        0
+    };
 
     let mut web_request_count = 0u32;
     let gaps_path = session_dir.join("meeting_gaps.parquet");
@@ -311,7 +346,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_cached_meeting_id(session_id, "plenary").unwrap_or(current_meeting_id)
     } else {
         fetch_new_meetings(
-            &client,
+            client,
             session_id,
             current_meeting_id,
             &mut web_request_count,
@@ -323,11 +358,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if cache_only() {
         println!("[meetings-plenary] cache-only: parsing meetings 1..={last_meeting_id}");
     } else if last_meeting_id == current_meeting_id {
-        println!("[meetings-plenary] no new meeting available to download");
+        println!(
+            "[meetings-plenary] session {}: no new meeting available to download",
+            session_id
+        );
     } else {
         println!(
-            "[meetings-plenary] found new meetings up to {}",
-            last_meeting_id
+            "[meetings-plenary] session {}: found new meetings up to {}",
+            session_id, last_meeting_id
         );
     }
 
@@ -358,13 +396,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mp = MultiProgress::new();
     let meetings_pb = mp.add(ProgressBar::new(last_meeting_id as u64));
-    meetings_pb.set_style(
-        ProgressStyle::with_template(
-            "[meetings-plenary] [{elapsed_precise}] {spinner:.blue} {bar:40.cyan/blue} {pos}/{len} ({percent}%) | {msg}",
-        )?
-        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    let template = format!(
+        "[meetings-plenary] session {} [{{elapsed_precise}}] {{spinner:.blue}} {{bar:40.cyan/blue}} {{pos}}/{{len}} ({{percent}}%) | {{msg}}",
+        session_id
     );
-
+    meetings_pb.set_style(ProgressStyle::with_template(&template)?.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"));
     meetings_pb.set_message(web_request_count.to_string());
 
     let mut encountered_dossier_ids: HashMap<String, String> = HashMap::new();
@@ -385,7 +421,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         if !cache_only() && !filepath.exists() && !gaps.contains_key(&meeting_id) {
-            match download_meeting(&client, session_id, meeting_id, &mut web_request_count).await? {
+            match download_meeting(client, session_id, meeting_id, &mut web_request_count).await? {
                 DownloadOutcome::NotFound => {
                     let gap = MeetingGapRow::new(
                         session_id,
@@ -587,6 +623,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         unresolved_events: all_vote_unresolved,
     };
 
+    meetings_pb.finish_with_message("done");
+
     let mut bundle = BundlePublisher::new("plenary-meetings", &data_dir())?;
     let stage_meetings = bundle.stage_path(&session_dir.join("meetings.parquet"))?;
     let stage_questions = bundle.stage_path(&session_dir.join("questions.parquet"))?;
@@ -651,11 +689,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     bundle.commit()?;
 
     println!(
-        "[meetings-plenary] scraped {} meetings using {} web requests ({} gaps)",
+        "[meetings-plenary] session {}: scraped {} meetings using {} web requests ({} gaps)",
+        session_id,
         all_meetings.len(),
         web_request_count,
         gap_rows.len()
     );
+
     Ok(())
 }
 
@@ -772,6 +812,12 @@ async fn fetch_new_meetings(
         }
         probe += 1;
     }
+
+    println!(
+        "[meetings-plenary] last meeting for session {} = {}",
+        session_id, last
+    );
+
     Ok(last)
 }
 
@@ -904,6 +950,16 @@ async fn parse_meeting_from_cache(
             q.treatment_mode = "oral_written".to_string();
         }
     }
+    // Upstream features: questions carry the meeting date, and respondents
+    // (actual speakers) may differ from the questionees (addressees).
+    for q in questions.iter_mut() {
+        q.date = date.clone();
+        q.respondents = speakers_from_utterances(&parsed.utterances, &q.question_id)
+            .into_iter()
+            .filter(|s| !q.questioners.split(',').any(|n| n == s))
+            .collect::<Vec<_>>()
+            .join(",");
+    }
     let propositions = extract_propositions(
         &parsed.blocks,
         session_id,
@@ -914,8 +970,15 @@ async fn parse_meeting_from_cache(
         &cache_path,
     )
     .await?;
-    let notices =
-        extract_notices(&parsed.blocks, session_id, meeting_id, &url, &cache_path).await?;
+    let notices = extract_notices(
+        &parsed.blocks,
+        session_id,
+        meeting_id,
+        &date,
+        &url,
+        &cache_path,
+    )
+    .await?;
     let crawl::MeetingParseOutput {
         votes,
         report_block_rows: report_blocks,
@@ -967,16 +1030,38 @@ fn scraped_question_from_draft(draft: OralQuestionDraft) -> ScrapedQuestion {
         session_id: draft.session_id,
         meeting_id: draft.meeting_id,
         questioners: draft.questioners,
-        respondents: draft.respondents,
+        questionees: draft.questionees,
+        respondents: String::new(),
         topics_nl: draft.topics_nl,
         topics_fr: draft.topics_fr,
         internal_ids: draft.internal_ids,
         question_body_nl: String::new(),
         question_body_fr: String::new(),
         treatment_mode: String::new(),
+        date: String::new(),
         source_url: draft.source_url,
         cache_path: draft.cache_path,
     }
+}
+
+/// Collect the distinct speakers of the utterances belonging to an agenda
+/// item, excluding the chair — upstream's "respondents" (actual speakers,
+/// may differ from the questionee/addressee).
+fn speakers_from_utterances(utterances: &[UtteranceDraft], agenda_item_id: &str) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for u in utterances
+        .iter()
+        .filter(|u| u.agenda_item_id == agenda_item_id)
+    {
+        if u.speaker_role == "chair" {
+            continue;
+        }
+        let name = u.raw_speaker.trim().to_string();
+        if !name.is_empty() && name.to_lowercase() != "de voorzitter" && !seen.contains(&name) {
+            seen.push(name);
+        }
+    }
+    seen
 }
 
 /// Extract the propositions from the plenary meeting.
@@ -1087,6 +1172,7 @@ async fn extract_propositions(
                 title_fr: data_fr.topic,
                 dossier_id: dossier_id_opt.clone().unwrap_or_default(),
                 document_id: data_nl.document_id.unwrap_or_default(),
+                date: date.to_string(),
                 source_url: source_url.to_string(),
                 cache_path: cache_path.to_string(),
             });
@@ -1110,6 +1196,7 @@ async fn extract_notices(
     blocks: &[ReportBlock],
     session_id: u32,
     meeting_id: u32,
+    date: &str,
     source_url: &str,
     cache_path: &str,
 ) -> Result<Vec<ScrapedNotice>, Box<dyn Error>> {
@@ -1189,6 +1276,7 @@ async fn extract_notices(
                 meeting_id,
                 title_nl: nl.clone(),
                 title_fr: fr.clone(),
+                date: date.to_string(),
                 source_url: source_url.to_string(),
                 cache_path: cache_path.to_string(),
             });
@@ -1234,12 +1322,26 @@ fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>>
         .collect::<Vec<_>>()
         .join(" ");
 
-    let caps = date_regex()
-        .captures(&text)
-        .ok_or("Could not find date in document")?;
+    // Format 1: "10 november 2021"
+    if let Some(caps) = date_regex().captures(&text) {
+        let day = format!("{:02}", caps[1].parse::<u8>()?);
+        let month = month_name_to_number(&caps[2])?;
+        return Ok(format!("{}-{}-{}", &caps[3], month, day));
+    }
 
-    let day = format!("{:02}", caps[1].parse::<u8>()?);
-    let month = match &caps[2].to_lowercase()[..] {
+    // Format 2): "3-10-2019" (used in plenary meeting 55007)
+    if let Some(caps) = date_numeric_regex().captures(&text) {
+        let day = format!("{:02}", caps[1].parse::<u8>()?);
+        let month = format!("{:02}", caps[2].parse::<u8>()?);
+        return Ok(format!("{}-{}-{}", &caps[3], month, day));
+    }
+
+    Err("Could not find date in document".into())
+}
+
+fn month_name_to_number(name: &str) -> Result<&'static str, Box<dyn Error>> {
+    Ok(match &name.to_lowercase()[..] {
+        // Dutch
         "januari" => "01",
         "februari" => "02",
         "maart" => "03",
@@ -1252,9 +1354,21 @@ fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>>
         "oktober" => "10",
         "november" => "11",
         "december" => "12",
-        _ => return Err("Invalid month name".into()),
-    };
-    Ok(format!("{}-{}-{}", &caps[3], month, day))
+        // French
+        "janvier" => "01",
+        "février" | "fevrier" => "02",
+        "mars" => "03",
+        "avril" => "04",
+        "mai" => "05",
+        "juin" => "06",
+        "juillet" => "07",
+        "août" | "aout" => "08",
+        "septembre" => "09",
+        "octobre" => "10",
+        "novembre" => "11",
+        "décembre" | "decembre" => "12",
+        other => return Err(format!("Invalid month name: {}", other).into()),
+    })
 }
 
 fn extract_time_of_day_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
@@ -1286,6 +1400,7 @@ fn extract_end_time_from_document(document: &Html) -> Result<String, Box<dyn Err
     [
         "De vergadering wordt gesloten",
         "De vergadering wordt geschorst",
+        "De openbare commissievergadering wordt gesloten", // IP55039
     ]
     .iter()
     .find_map(|phrase| extract_time_from_document(document, phrase).ok())
@@ -1449,7 +1564,7 @@ mod question_extract_tests {
         )
         .await
         .unwrap();
-        let notices = extract_notices(&parsed.blocks, 56, 9, "url", "cache")
+        let notices = extract_notices(&parsed.blocks, 56, 9, "2026-01-01", "url", "cache")
             .await
             .unwrap();
         assert_eq!(propositions.len(), 1);

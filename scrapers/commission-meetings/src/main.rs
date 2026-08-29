@@ -87,6 +87,7 @@ struct ScrapedQuestion {
     session_id: u32,
     meeting_id: u32,
     questioners: String,
+    questionees: String,
     respondents: String,
     topics_nl: String,
     topics_fr: String,
@@ -94,6 +95,7 @@ struct ScrapedQuestion {
     question_body_nl: String,
     question_body_fr: String,
     treatment_mode: String,
+    date: String,
     source_url: String,
     cache_path: String,
 }
@@ -251,6 +253,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("session_id", DataType::Utf8, false),
         Field::new("meeting_id", DataType::Utf8, false),
         Field::new("questioners", DataType::Utf8, false),
+        Field::new("questionees", DataType::Utf8, false),
         Field::new("respondents", DataType::Utf8, false),
         Field::new("topics_nl", DataType::Utf8, false),
         Field::new("topics_fr", DataType::Utf8, false),
@@ -258,6 +261,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
         Field::new("question_body_nl", DataType::Utf8, false),
         Field::new("question_body_fr", DataType::Utf8, false),
         Field::new("treatment_mode", DataType::Utf8, false),
+        Field::new("date", DataType::Utf8, false),
         Field::new("source_url", DataType::Utf8, false),
         Field::new("cache_path", DataType::Utf8, false),
     ]));
@@ -269,6 +273,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.session_id.to_string()),
             col!(rows, |q| q.meeting_id.to_string()),
             col!(rows, |q| q.questioners.clone()),
+            col!(rows, |q| q.questionees.clone()),
             col!(rows, |q| q.respondents.clone()),
             col!(rows, |q| q.topics_nl.clone()),
             col!(rows, |q| q.topics_fr.clone()),
@@ -276,6 +281,7 @@ fn write_questions(path: &Path, rows: &[ScrapedQuestion]) -> Result<(), Box<dyn 
             col!(rows, |q| q.question_body_nl.clone()),
             col!(rows, |q| q.question_body_fr.clone()),
             col!(rows, |q| q.treatment_mode.clone()),
+            col!(rows, |q| q.date.clone()),
             col!(rows, |q| q.source_url.clone()),
             col!(rows, |q| q.cache_path.clone()),
         ],
@@ -296,21 +302,40 @@ fn meeting_cache_file(session_id: u32, meeting_id: u32) -> std::path::PathBuf {
     ))
 }
 
+const SESSION_IDS: &[u32] = &[56, 55];
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
 
     let client = ScrapingClient::new();
-    let session_id: u32 = 56;
 
+    for &session_id in SESSION_IDS {
+        if let Err(err) = scrape_session(&client, session_id).await {
+            eprintln!(
+                "[meetings-commission] session {} failed entirely: {}",
+                session_id, err
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Scrape a single session.
+async fn scrape_session(client: &ScrapingClient, session_id: u32) -> Result<(), Box<dyn Error>> {
     let session_dir = data_dir()
         .join("sessions")
         .join(session_id.to_string())
         .join("commission");
     fs::create_dir_all(&session_dir).await?;
 
-    let meeting_id_path = data_dir().join("current_commission_id.txt");
-    let current_meeting_id: u32 = std::fs::read_to_string(&meeting_id_path)?.trim().parse()?;
+    let meeting_id_path = session_dir.join("current_commission_id.txt");
+    let current_meeting_id: u32 = if meeting_id_path.exists() {
+        std::fs::read_to_string(&meeting_id_path)?.trim().parse()?
+    } else {
+        0
+    };
 
     let mut web_request_count = 0u32;
     let gaps_path = session_dir.join("meeting_gaps.parquet");
@@ -321,7 +346,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         max_cached_meeting_id(session_id, "commission").unwrap_or(current_meeting_id)
     } else {
         fetch_new_meetings(
-            &client,
+            client,
             session_id,
             current_meeting_id,
             &mut web_request_count,
@@ -782,6 +807,17 @@ fn parse_meeting(session_id: u32, meeting_id: u32) -> Result<MeetingOutput, Box<
         }
     }
 
+    // Upstream features: questions carry the meeting date, and respondents
+    // (actual speakers) may differ from the questionees (addressees).
+    for q in questions.iter_mut() {
+        q.date = date.clone();
+        q.respondents = speakers_from_utterances(&parsed.utterances, &q.question_id)
+            .into_iter()
+            .filter(|s| !q.questioners.split(',').any(|n| n == s))
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+
     let agenda_items = materialize_agenda_items(
         &parsed.agenda,
         MeetingKind::Commission,
@@ -821,16 +857,38 @@ fn scraped_question_from_draft(draft: OralQuestionDraft) -> ScrapedQuestion {
         session_id: draft.session_id,
         meeting_id: draft.meeting_id,
         questioners: draft.questioners,
-        respondents: draft.respondents,
+        questionees: draft.questionees,
+        respondents: String::new(),
         topics_nl: draft.topics_nl,
         topics_fr: draft.topics_fr,
         internal_ids: draft.internal_ids,
         question_body_nl: String::new(),
         question_body_fr: String::new(),
         treatment_mode: String::new(),
+        date: String::new(),
         source_url: draft.source_url,
         cache_path: draft.cache_path,
     }
+}
+
+/// Collect the distinct speakers of the utterances belonging to an agenda
+/// item, excluding the chair — upstream's "respondents" (actual speakers,
+/// may differ from the questionee/addressee).
+fn speakers_from_utterances(utterances: &[UtteranceDraft], agenda_item_id: &str) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for u in utterances
+        .iter()
+        .filter(|u| u.agenda_item_id == agenda_item_id)
+    {
+        if u.speaker_role == "chair" {
+            continue;
+        }
+        let name = u.raw_speaker.trim().to_string();
+        if !name.is_empty() && name.to_lowercase() != "de voorzitter" && !seen.contains(&name) {
+            seen.push(name);
+        }
+    }
+    seen
 }
 
 fn extract_date_from_document(document: &Html) -> Result<String, Box<dyn Error>> {
