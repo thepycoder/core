@@ -13,15 +13,18 @@ Do **not** open one PR with the whole branch. The upstream maintainer wants to k
 
 ## Snapshot (refresh before starting)
 
-Recorded 2026-08-29. Fetch and overwrite these SHAs before you cut branches.
+Recorded 2026-08-29 (strategy revised: PR A first, upstream merge second). Fetch and overwrite these SHAs before you cut branches.
 
 | Ref | SHA |
 |---|---|
 | Fork HEAD (`vote-rewrite-for-blocks`) | `3e100236cc83884ba5e3b229793bf9cf587167c4` |
-| Merge base with `upstream/main` | `29a2dbe16c9551ff3df8b5b297e364d5a3865a55` |
-| `upstream/main` | `56cc537eba89d819fed02687fd2f5ce3db846e55` |
-| Ahead / behind | 63 / 11 |
-| Whole-branch diff | 239 files, +56 754 / −2 178 |
+| PR-A base (fork tip + docs) | `f6c6ab8e7b305d10ebff8e999a5b8178b969051c` |
+| `upstream/main` (at PR-A merge) | `75c28ee82239ad4e388f68c8873db19e4f891ad3` |
+| PR-A carve-out commit | `fc8e51a` on `pr-a-staging-parsers` |
+| PR-A upstream-merge commit | `7befe96` on `pr-a-staging-parsers` (0 behind, 66 ahead) |
+| Old P0 integration branch (superseded, kept for reference) | `p0-integrate-upstream` @ `095c3fd` |
+
+**Revised order (2026-08-29):** build `pr-a-staging-parsers` directly from the fork tip with the B–E paths removed, **then** merge `upstream/main` into it. This keeps the first big increment reviewable without dragging identity/normalize/graph/qa/tools through conflict resolution; B–E are later stacked on top of this branch. The original P0-first order (merge upstream into the whole branch, then carve) is superseded; the old `p0-integrate-upstream` branch preserves that state for reference — its conflict resolutions for the scraper `main.rs` files were reused here.
 
 ```sh
 git fetch upstream main
@@ -91,6 +94,8 @@ Inside each PR, keep mechanical moves and behaviour changes in separate commits.
 **Procedure:** three-way each family; write down retained behaviour from each side; add a regression test per kept upstream feature; run targeted tests after each family.
 
 **Done when:** no conflict markers; listed upstream features present and tested; fork vote/block fixture tests still pass; `git diff --check` clean; this file updated with the new merge-base SHA.
+
+**Status (2026-08-29):** done *inside* PR A per the revised order — `7befe96` on `pr-a-staging-parsers` merges `upstream/main` (`75c28ee`) after the A carve-out (`fc8e51a`). All listed upstream features present (questionee/respondent split + respondents column, question dates, `SESSION_IDS` 56/55, members start/end dates + all-sessions scrape, dossier original-document / naturalisatieakte types, pdf-to-md dirs). Upstream's table-based vote `Tot.` fix intentionally not ported — the fork assembles votes from named appendix/report blocks in `scrapers/crawl`. Gate: `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` (15 suites, 0 failures), `git diff --check` all clean.
 
 **Out of scope:** vote-assembler rewrite, graph-viewer, QA catalog unification.
 
@@ -303,7 +308,7 @@ Python tests only while those tools still live in this repo. After D they move w
 
 Update the snapshot table, checkboxes below, and any SHA that moved. Do not mark a PR done from file moves alone — run its acceptance commands and record them.
 
-- [ ] P0 upstream integrated
+- [x] P0 upstream integrated — folded into PR A per revised order (`fc8e51a` carve-out + `7befe96` upstream merge on `pr-a-staging-parsers`)
 - [ ] PR A opened / merged
 - [ ] PR B opened / merged
 - [ ] PR C opened / merged
