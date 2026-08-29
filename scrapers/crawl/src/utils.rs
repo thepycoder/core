@@ -138,7 +138,6 @@ pub fn max_cached_meeting_id(session_id: u32, meeting_kind: &str) -> Option<u32>
 
 #[cfg(test)]
 mod meeting_cache_tests {
-    use super::*;
 
     #[test]
     fn max_cached_meeting_id_parses_filenames() {
@@ -231,11 +230,9 @@ pub fn slugify_name(name: &str) -> String {
 }
 
 pub fn clean_text(raw: &str) -> String {
-    let cleaned = raw
-        .replace(CHARACTERS::NEWLINE, " ")
+    raw.replace(CHARACTERS::NEWLINE, " ")
         .replace(CHARACTERS::SOFT_HYPHEN, "")
         .replace(CHARACTERS::NON_BREAKING_SPACE, " ")
         .trim()
-        .to_string();
-    cleaned
+        .to_string()
 }

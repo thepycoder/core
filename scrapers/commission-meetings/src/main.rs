@@ -8,13 +8,14 @@ use crawl::{
     AgendaItemDraft, AnswerDraft, BundlePublisher, GAP_REASON_NOT_FOUND,
     GAP_REASON_UNSUPPORTED_FORMAT, HearingDraft, InterpellationDraft, MANIFEST_STATUS_PARSED,
     MeetingGapRow, MeetingKind, OralQuestionDraft, ReportBlockRow, SourceManifestRow,
-    SourceSpanDraft, UtteranceDraft, content_hash, content_hash_bytes, extract_questions_from_agenda,
-    gap_reason_to_manifest_status, load_prior_gaps, looks_like_pdf, manifest_path,
-    materialize_agenda_items, now_rfc3339, parse_commission_meeting_report, read_cache_metadata,
-    read_report_html, reconcile_meeting_coverage, record_gap, validate_manifest_rows,
-    write_agenda_items_parquet, write_answers_parquet, write_cache_artifact, write_hearings_parquet,
-    write_interpellations_parquet, write_meeting_gaps_parquet, write_report_blocks_parquet,
-    write_source_manifest, write_source_spans_parquet, write_utterances_parquet,
+    SourceSpanDraft, UtteranceDraft, content_hash, content_hash_bytes,
+    extract_questions_from_agenda, gap_reason_to_manifest_status, load_prior_gaps, looks_like_pdf,
+    manifest_path, materialize_agenda_items, now_rfc3339, parse_commission_meeting_report,
+    read_cache_metadata, read_report_html, reconcile_meeting_coverage, record_gap,
+    validate_manifest_rows, write_agenda_items_parquet, write_answers_parquet,
+    write_cache_artifact, write_hearings_parquet, write_interpellations_parquet,
+    write_meeting_gaps_parquet, write_report_blocks_parquet, write_source_manifest,
+    write_source_spans_parquet, write_utterances_parquet,
 };
 use encoding_rs::WINDOWS_1252;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -373,12 +374,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let url = meeting_url(session_id, meeting_id);
         let rel_cache = relative_cache_path(&filepath, &cache_dir());
 
-        if let Some(gap) = gaps.get(&meeting_id) {
-            if gap.reason == GAP_REASON_NOT_FOUND {
-                push_gap_manifest(&mut manifest_rows, session_id, meeting_id, gap, run_mode);
-                meetings_pb.inc(1);
-                continue;
-            }
+        if let Some(gap) = gaps.get(&meeting_id)
+            && gap.reason == GAP_REASON_NOT_FOUND
+        {
+            push_gap_manifest(&mut manifest_rows, session_id, meeting_id, gap, run_mode);
+            meetings_pb.inc(1);
+            continue;
         }
 
         if filepath.exists() {
@@ -922,10 +923,10 @@ fn extract_time_from_document(document: &Html, keywords: &[&str]) -> Option<Stri
 
     for node in document.select(selector_span_p()) {
         let text = node.text().collect::<Vec<_>>().join(" ").replace('\n', " ");
-        if keywords.iter().any(|&kw| text.contains(kw)) {
-            if let Some(caps) = time_regex().captures(&text) {
-                last_time = Some(format!("{}h{}", &caps[1], &caps[2]));
-            }
+        if keywords.iter().any(|&kw| text.contains(kw))
+            && let Some(caps) = time_regex().captures(&text)
+        {
+            last_time = Some(format!("{}h{}", &caps[1], &caps[2]));
         }
     }
     last_time

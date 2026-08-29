@@ -1,7 +1,7 @@
 use arrow::array::{Array, StringArray};
 use arrow::datatypes::{DataType, Field};
 use arrow::{datatypes::Schema, record_batch::RecordBatch};
-use crawl::paths::{cache_dir, data_dir};
+use crawl::paths::data_dir;
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::{arrow::ArrowWriter, arrow::arrow_reader::ParquetRecordBatchReaderBuilder};
 use reqwest::Client;

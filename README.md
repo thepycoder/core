@@ -12,10 +12,12 @@ Also see [DISCLAIMER.md](DISCLAIMER.md).
 scrapers/              
   commission-meetings/  # commission meeting reports
   commissions/          # chamber commissions
+  crawl/                # shared HTML parsing / download helpers
   dossiers/             # dossiers
   lobby/                # lobby members
   members/              # chamber members
   plenary-meetings/     # plenary meeting reports
+  qrva/                 # written questions and answers
   remunerations/        # remunerations of members
   sessions/             # chamber sessions
 summarizers/            # summarize topics/dossiers/discussions

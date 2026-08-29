@@ -1,8 +1,8 @@
-# Scrape all sources, rebuild identity, normalize edges, and write graph Parquet.
-update: scrape-sessions scrape-commissions scrape-members scrape-plenary-meetings scrape-commission-meetings scrape-qrva scrape-dossiers scrape-lobby scrape-remunerations build-identity normalize-edges enrich-external-persons build-graph qa
+# Scrape all sources into staging Parquet.
+update: scrape-sessions scrape-commissions scrape-members scrape-plenary-meetings scrape-commission-meetings scrape-qrva scrape-dossiers scrape-lobby scrape-remunerations
 
-# Rebuild from cached scraper data, then enrich external actors via Mistral.
-reparse: reparse-scrapers build-identity normalize-edges enrich-external-persons build-graph qa
+# Rebuild staging Parquet from cached scraper data.
+reparse: reparse-scrapers
 
 reparse-scrapers:
     #!/usr/bin/env bash
@@ -44,31 +44,6 @@ scrape-remunerations:
 
 scrape-commissions:
     cargo run --release --bin commissions
-
-build-identity:
-    cargo run --release --bin identity
-    cargo run --release --bin external-identity
-
-normalize-edges:
-    cargo run --release --bin normalize
-
-build-graph:
-    cargo run --release --bin graph
-
-qa:
-    cargo run --release --bin qa
-
-qa-strict:
-    cargo run --release --bin qa -- --strict
-
-qa-update-baseline:
-    cargo run --release --bin qa -- --update-baseline
-
-qa-triage *ARGS:
-    cd tools/qa-triage && uv sync && uv run python -m qa_triage {{ARGS}}
-
-enrich-external-persons:
-    cargo run --release --bin external-person-enricher
 
 summarize-text:
     cargo run --release --bin text-summarizer

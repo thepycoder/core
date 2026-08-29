@@ -1,3 +1,7 @@
+// Parser entry points take many explicit context parameters by design; extracting
+// a context struct is planned separately (maintainability review, T3).
+#![allow(clippy::too_many_arguments)]
+
 pub mod characters;
 pub mod client;
 pub mod paths;
@@ -115,9 +119,9 @@ pub use source_spans::{
 pub use speaker_parse::{
     SpeakerRole, TurnStart, count_source_markers, detect_turn_start, parse_speaker_label,
 };
+pub use utils::agenda_item_id;
 pub use utterance_io::write_utterances_parquet;
 pub use utterance_segment::{UtteranceDraft, segment_utterances};
-pub use utils::agenda_item_id;
 pub use vote_assembly::assemble_votes_from_blocks;
 pub use vote_io::{
     write_unresolved_vote_events_parquet, write_vote_bundle, write_vote_result_members_parquet,

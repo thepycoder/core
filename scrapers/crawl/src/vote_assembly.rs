@@ -890,10 +890,10 @@ fn merge_refs(pending: &mut TitleRefs, text: &str) {
         pending.document_id = caps[3].trim().to_string();
     } else if let Some(caps) = vote_regex_2().captures(text) {
         pending.motion_id = caps[2].trim().to_string();
-    } else if let Some(caps) = dossier_ref_re().captures(text) {
-        if pending.document_id.is_empty() {
-            pending.document_id = caps[1].trim().to_string();
-        }
+    } else if let Some(caps) = dossier_ref_re().captures(text)
+        && pending.document_id.is_empty()
+    {
+        pending.document_id = caps[1].trim().to_string();
     }
 }
 

@@ -176,14 +176,14 @@ pub fn segment_utterances(
                 document_id: item.map(|i| i.document_id.clone()).unwrap_or_default(),
                 source_section: item.map(|i| i.source_section.clone()).unwrap_or_default(),
             });
-        } else if let Some(turn) = open.as_mut() {
-            if !block.text.trim().is_empty() {
-                if !turn.text.is_empty() {
-                    turn.text.push(' ');
-                }
-                turn.text.push_str(block.text.trim());
-                turn.block_end = block.index;
+        } else if let Some(turn) = open.as_mut()
+            && !block.text.trim().is_empty()
+        {
+            if !turn.text.is_empty() {
+                turn.text.push(' ');
             }
+            turn.text.push_str(block.text.trim());
+            turn.block_end = block.index;
         }
     }
 

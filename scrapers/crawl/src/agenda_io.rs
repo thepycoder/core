@@ -189,16 +189,15 @@ mod tests {
             "https://www.dekamer.be/doc/PCRI/html/56/ip042x.html",
             "sessions/56/meetings/plenary/56-42.html",
         );
-        let with_dossier: Vec<_> = rows
-            .iter()
-            .filter(|r| r.dossier_id == "56/318")
-            .collect();
+        let with_dossier: Vec<_> = rows.iter().filter(|r| r.dossier_id == "56/318").collect();
         assert!(
             !with_dossier.is_empty(),
             "expected agenda item for dossier 56/318"
         );
-        assert!(with_dossier[0]
-            .agenda_item_id
-            .starts_with("56_plenary_42_agenda_"));
+        assert!(
+            with_dossier[0]
+                .agenda_item_id
+                .starts_with("56_plenary_42_agenda_")
+        );
     }
 }

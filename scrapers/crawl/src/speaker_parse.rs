@@ -107,9 +107,7 @@ pub fn detect_turn_start(paragraph: &str) -> Option<(TurnStart, usize)> {
 
     let prefix: String = trimmed.chars().take(120).collect();
     if article_fp_regex().is_match(&prefix) {
-        if turn_start_regex().find(trimmed).is_none() {
-            return None;
-        }
+        turn_start_regex().find(trimmed)?;
     }
 
     if let Some(cap) = turn_start_regex().captures(trimmed) {

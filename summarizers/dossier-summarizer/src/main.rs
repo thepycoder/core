@@ -11,7 +11,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -443,10 +443,10 @@ fn discover_dossier_ids(base: &Path) -> Vec<String> {
     let mut ids = Vec::new();
     if let Ok(entries) = std::fs::read_dir(base) {
         for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                if let Some(name) = entry.file_name().to_str() {
-                    ids.push(name.to_string());
-                }
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                && let Some(name) = entry.file_name().to_str()
+            {
+                ids.push(name.to_string());
             }
         }
     }
@@ -542,12 +542,10 @@ async fn main() {
                         );
                         new_content += 1;
 
-                        if new_content % SAVE_EVERY == 0 {
-                            if let Err(e) = save_content(&content_out, &content_cache) {
-                                eprintln!(
-                                    "[summarizer] WARNING: content checkpoint save failed: {e}"
-                                );
-                            }
+                        if new_content.is_multiple_of(SAVE_EVERY)
+                            && let Err(e) = save_content(&content_out, &content_cache)
+                        {
+                            eprintln!("[summarizer] WARNING: content checkpoint save failed: {e}");
                         }
                     }
                 }
@@ -599,12 +597,12 @@ async fn main() {
                         );
                         new_arguments += 1;
 
-                        if new_arguments % SAVE_EVERY == 0 {
-                            if let Err(e) = save_arguments(&arguments_out, &arguments_cache) {
-                                eprintln!(
-                                    "[summarizer] WARNING: arguments checkpoint save failed: {e}"
-                                );
-                            }
+                        if new_arguments.is_multiple_of(SAVE_EVERY)
+                            && let Err(e) = save_arguments(&arguments_out, &arguments_cache)
+                        {
+                            eprintln!(
+                                "[summarizer] WARNING: arguments checkpoint save failed: {e}"
+                            );
                         }
                     }
                 }

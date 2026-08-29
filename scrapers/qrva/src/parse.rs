@@ -4,7 +4,7 @@ use crawl::qrva_text::{
     qrva_detail_url, route_id, written_question_id,
 };
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct WrittenQuestionDraft {
@@ -77,10 +77,10 @@ fn field_i64(item: &Value, keys: &[&str]) -> i64 {
             if let Some(n) = v.as_i64() {
                 return n;
             }
-            if let Some(s) = v.as_str() {
-                if let Ok(n) = s.parse() {
-                    return n;
-                }
+            if let Some(s) = v.as_str()
+                && let Ok(n) = s.parse()
+            {
+                return n;
             }
         }
     }
@@ -94,24 +94,6 @@ fn field_text(item: &Value, keys: &[&str]) -> String {
             if !flat.is_empty() {
                 return flat;
             }
-        }
-    }
-    String::new()
-}
-
-fn thesaurus_join(item: &Value, keys: &[&str]) -> String {
-    for key in keys {
-        if let Some(Value::Array(parts)) = item.get(*key) {
-            return parts
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" | ");
-        }
-        if let Some(s) = item.get(*key).and_then(|v| v.as_str()) {
-            return s.trim().to_string();
         }
     }
     String::new()
@@ -280,42 +262,6 @@ pub fn records_from_search_page(body: &Value) -> Vec<Value> {
         }
     }
     out
-}
-
-pub fn index_oral_questions_by_internal_id(
-    plenary: &[(String, String)],
-    commission: &[(String, String)],
-) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for (question_id, internal_ids) in plenary.iter().chain(commission.iter()) {
-        for part in internal_ids.split(',') {
-            let id = part.trim().to_uppercase();
-            if id.is_empty() {
-                continue;
-            }
-            map.entry(id).or_insert_with(|| question_id.clone());
-        }
-    }
-    map
-}
-
-/// When a written question references exactly one oral question, use the oral question id.
-pub fn resolve_canonical_question_id(
-    written_id: &str,
-    oral_refs: &str,
-    oral_index: &HashMap<String, String>,
-) -> String {
-    let refs: Vec<&str> = oral_refs
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    if refs.len() == 1 {
-        if let Some(oral_id) = oral_index.get(&refs[0].to_uppercase()) {
-            return oral_id.clone();
-        }
-    }
-    written_id.to_string()
 }
 
 #[cfg(test)]

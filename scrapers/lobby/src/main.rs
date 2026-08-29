@@ -52,9 +52,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         // Parse candidate from temp file before promoting into the cache.
         let candidate = pdf_path.with_extension("pdf.candidate");
         std::fs::write(&candidate, &bytes)?;
-        let layout = pdftotext_layout(&candidate).map_err(|e| {
+        let layout = pdftotext_layout(&candidate).inspect_err(|_e| {
             let _ = std::fs::remove_file(&candidate);
-            e
         })?;
         let preview = extract_lobby_from_layout(&layout, LOBBY_PDF_URL, "candidate")?;
         if preview.is_empty() {

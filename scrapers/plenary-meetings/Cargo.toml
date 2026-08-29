@@ -10,7 +10,6 @@ csv = "1.1"
 chrono = "0.4"
 regex = "1"
 crawl = { path = "../crawl" }
-identity = { path = "../identity" }
 serde = { version = "1.0.218", features = ["derive"] }
 encoding_rs = "0.8.35"
 parquet = {  version = "54.3.0" , features = ["arrow"]}

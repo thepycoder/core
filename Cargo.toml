@@ -11,13 +11,7 @@ members = [
     "scrapers/plenary-meetings",
     "scrapers/commission-meetings",
     "scrapers/dossiers",
-    "scrapers/identity",
-    "scrapers/normalize",
-    "scrapers/graph",
-    "scrapers/qa",
     "scrapers/qrva",
     "summarizers/dossier-summarizer",
     "summarizers/text-summarizer",
-    "summarizers/mistral-client",
-    "summarizers/external-person-enricher"
 ]

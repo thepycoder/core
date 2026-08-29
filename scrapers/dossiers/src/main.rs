@@ -254,7 +254,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             discover_all_dossier_ids(session_id, &client, &mut web_request_count).await?;
         let plenary_only = id_dates.len();
         for id in flwb_ids {
-            id_dates.entry(id).or_insert_with(String::new);
+            id_dates.entry(id).or_default();
         }
         let flwb_only = id_dates.len().saturating_sub(plenary_only);
         println!(
@@ -418,7 +418,7 @@ fn load_dossier_inventory(session_id: u32) -> Result<HashMap<String, String>, Bo
     // Prefer plenary discovery sidecar; union dossier ids already present in the HTML cache.
     let mut id_dates = load_plenary_dossier_ids(session_id);
     for id in dossier_ids_from_cache_filenames(session_id) {
-        id_dates.entry(id).or_insert_with(String::new);
+        id_dates.entry(id).or_default();
     }
     if id_dates.is_empty() {
         return Err(format!(
@@ -451,10 +451,10 @@ fn dossier_ids_from_cache_filenames(session_id: u32) -> Vec<String> {
             continue;
         };
         // `{id}_{version…}` — dossier id is the first underscore-separated segment.
-        if let Some(id) = rest.split('_').next() {
-            if !id.is_empty() {
-                ids.insert(id.to_string());
-            }
+        if let Some(id) = rest.split('_').next()
+            && !id.is_empty()
+        {
+            ids.insert(id.to_string());
         }
     }
     ids.into_iter().collect()
@@ -1237,13 +1237,12 @@ fn scrape_dossier(dossier_id: &str, document: &Html) -> Result<Dossier, Box<dyn 
     // row, while later documents live in the nested `Subdocumenten` table.
     // Example: dossier 62, https://www.dekamer.be/FLWB/PDF/56/0062/56K0062001.pdf.
     // Keep the primary document first so the source order remains `/001`, `/002`, ….
-    if let Some(primary_document) = parse_primary_document(dossier_id, &document_table) {
-        if !subdocuments
+    if let Some(primary_document) = parse_primary_document(dossier_id, &document_table)
+        && !subdocuments
             .iter()
             .any(|subdocument| subdocument.id == primary_document.id)
-        {
-            subdocuments.insert(0, primary_document);
-        }
+    {
+        subdocuments.insert(0, primary_document);
     }
 
     Ok(Dossier {
@@ -1416,10 +1415,10 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
             // The link cell (cell_1) contains an <a> whose text is the
             // sub-document number, e.g. "003".
             // stripped down to 3
-            if let Some(link) = cell_1.select(selector_a()).last() {
-                if let Some(id_text) = link.text().next() {
-                    document_id = id_text.trim().trim_start_matches('0').to_string();
-                }
+            if let Some(link) = cell_1.select(selector_a()).last()
+                && let Some(id_text) = link.text().next()
+            {
+                document_id = id_text.trim().trim_start_matches('0').to_string();
             }
 
             // cell_2 may carry an inline <font> tag with the document type.
@@ -1443,12 +1442,11 @@ fn parse_subdocuments(dossier_id: &str, cell: &ElementRef) -> Vec<Subdocument> {
                 parsing_authors = true;
             }
 
-            if parsing_authors {
-                if let Some(link) = cell_2.select(selector_a()).next() {
-                    if let Some(name) = link.text().next() {
-                        document_authors.push(normalize_author(name));
-                    }
-                }
+            if parsing_authors
+                && let Some(link) = cell_2.select(selector_a()).next()
+                && let Some(name) = link.text().next()
+            {
+                document_authors.push(normalize_author(name));
             }
 
             if !document_id.is_empty() && !document_date.is_empty() {
@@ -1476,10 +1474,10 @@ fn canonical_document_id(
     document_number: &str,
     file_url: Option<&str>,
 ) -> String {
-    if let Some(url) = file_url {
-        if let Some(captures) = flwb_document_id_regex().captures(url) {
-            return captures[1].to_uppercase();
-        }
+    if let Some(url) = file_url
+        && let Some(captures) = flwb_document_id_regex().captures(url)
+    {
+        return captures[1].to_uppercase();
     }
 
     format!(
@@ -1554,8 +1552,6 @@ fn parse_document_type(raw: &str) -> DocumentType {
         DocumentType::ArtikelenAangenomenInPlenum
     } else if raw.contains("artikelen in 2e lezing aangenomen") {
         DocumentType::ArtikelenInTweedeLezingAangenomen
-    } else if raw.contains("aangenomen tekst") {
-        DocumentType::AangenomenTekst
     } else if raw.contains("errata") {
         DocumentType::Errata
     } else if raw.contains("begroting") {

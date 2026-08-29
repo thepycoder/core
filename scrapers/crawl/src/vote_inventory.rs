@@ -315,10 +315,10 @@ fn parse_appendix_buckets(blocks: &[ReportBlock]) -> Vec<AppendixBucket> {
                     });
                     current_bucket = Some(buckets.len() - 1);
                 }
-            } else if block.tag == BlockTag::P {
-                if let Some(bucket_idx) = current_bucket {
-                    buckets[bucket_idx].collected_name_count += count_names(&block.text);
-                }
+            } else if block.tag == BlockTag::P
+                && let Some(bucket_idx) = current_bucket
+            {
+                buckets[bucket_idx].collected_name_count += count_names(&block.text);
             }
         }
     }
@@ -374,9 +374,11 @@ pub fn vote_number_gaps(numbers: &BTreeSet<String>) -> Vec<String> {
         .collect()
 }
 
+type VoteRow<'a> = &'a (String, String, String, String, String, String);
+
 pub fn votes_by_meeting_from_parquet(
     votes: &[(String, String, String, String, String, String)],
-) -> HashMap<String, Vec<&(String, String, String, String, String, String)>> {
+) -> HashMap<String, Vec<VoteRow<'_>>> {
     let mut map = HashMap::new();
     for row in votes {
         map.entry(row.1.clone()).or_insert_with(Vec::new).push(row);

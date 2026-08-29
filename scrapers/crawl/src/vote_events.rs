@@ -366,7 +366,9 @@ mod tests {
             buckets[2].names
         );
         assert!(
-            !buckets.iter().any(|b| b.position == "yes" && b.count == 128),
+            !buckets
+                .iter()
+                .any(|b| b.position == "yes" && b.count == 128),
             "electronic-count Oui table must not attach to prior naamstemming"
         );
     }

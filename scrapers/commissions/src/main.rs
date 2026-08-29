@@ -291,7 +291,7 @@ fn extract_index(document: &Html, detail_dir: &Path) -> Vec<CommissionIndex> {
                 } else {
                     format!("https://www.dekamer.be/kvvcr/{}", href)
                 };
-                let safe = name.replace(' ', "_").replace('/', "_");
+                let safe = name.replace([' ', '/'], "_");
                 entries.push(CommissionIndex {
                     name,
                     ctype: current_type.clone(),

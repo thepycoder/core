@@ -311,8 +311,8 @@ fn collect_index_entries(
 ) -> Vec<IndexEntry> {
     let mut entries = Vec::new();
 
-    for row in index_document.select(&selector_tr()) {
-        let raw_name = match extract_from_row(&row, &selector_name(), None) {
+    for row in index_document.select(selector_tr()) {
+        let raw_name = match extract_from_row(&row, selector_name(), None) {
             Some(n) => n,
             None => continue,
         };
@@ -329,12 +329,12 @@ fn collect_index_entries(
             continue;
         }
 
-        let detail_href = extract_from_row(&row, &selector_detail_page_link(), Some("href"))
+        let detail_href = extract_from_row(&row, selector_detail_page_link(), Some("href"))
             .unwrap_or_else(|| "unknown".to_string());
-        let fraction = extract_from_row(&row, &selector_fraction(), None)
+        let fraction = extract_from_row(&row, selector_fraction(), None)
             .unwrap_or_default()
             .to_lowercase();
-        let email = extract_from_row(&row, &selector_email(), None)
+        let email = extract_from_row(&row, selector_email(), None)
             .map(|e| e.chars().rev().collect::<String>())
             .unwrap_or_default();
 
@@ -409,7 +409,7 @@ async fn scrape_member_details(
 
         // Extract the representative paragraph
         let paragraph: Option<String> = detail
-            .select(&selector_p())
+            .select(selector_p())
             .find(|el| {
                 el.text().any(|t| {
                     t.contains("olksvertegenwoordiger")
@@ -561,10 +561,10 @@ fn extract_fraction(paragraph: Option<&str>) -> String {
         return "independent".to_string();
     }
 
-    if let Some(cap) = REGEX_FRACTION.captures(text) {
-        if let Some(m) = cap.get(1) {
-            return m.as_str().trim().to_lowercase();
-        }
+    if let Some(cap) = REGEX_FRACTION.captures(text)
+        && let Some(m) = cap.get(1)
+    {
+        return m.as_str().trim().to_lowercase();
     }
 
     "".to_string()
@@ -572,7 +572,7 @@ fn extract_fraction(paragraph: Option<&str>) -> String {
 
 fn extract_birth_place(document: &Html) -> String {
     document
-        .select(&selector_p())
+        .select(selector_p())
         .find(|el| el.text().any(|t| t.contains("Geboren te")))
         .and_then(|el| {
             let text = el.text().collect::<String>();
@@ -580,11 +580,7 @@ fn extract_birth_place(document: &Html) -> String {
             let place = if after.contains("op") {
                 after.split("op").next()?.trim().to_string()
             } else {
-                after
-                    .split(|c| c == '.' || c == '|' || c == '\n')
-                    .next()?
-                    .trim()
-                    .to_string()
+                after.split(['.', '|', '\n']).next()?.trim().to_string()
             };
             Some(place)
         })
@@ -593,7 +589,7 @@ fn extract_birth_place(document: &Html) -> String {
 
 fn extract_birth_date(document: &Html) -> String {
     document
-        .select(&selector_p())
+        .select(selector_p())
         .find(|el| el.text().any(|t| t.contains("Geboren")))
         .and_then(|el| {
             let text = el.text().collect::<String>();
@@ -627,7 +623,7 @@ fn extract_birth_date(document: &Html) -> String {
 fn extract_start_date(document: &Html) -> Option<String> {
     // Try to find a paragraph containing "sedert" or "sinds"
     let text = document
-        .select(&selector_p())
+        .select(selector_p())
         .find(|el| {
             el.text()
                 .any(|t| t.contains("sedert") || t.contains("sinds"))
@@ -749,7 +745,7 @@ fn extract_from_row(row: &ElementRef, selector: &Selector, attr: Option<&str>) -
 
 fn extract_sibling_text(document: &Html, label: &str) -> Option<String> {
     document
-        .select(&selector_p_i())
+        .select(selector_p_i())
         .find(|el| el.text().any(|t| t.contains(label)))
         .and_then(|el| {
             el.next_sibling()

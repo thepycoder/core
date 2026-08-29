@@ -5,9 +5,6 @@
 
 # data
 /data/*
-!/data/qa/
-/data/qa/*
-/data/qa/reports/
 /cache
 
 # PDF summarizers

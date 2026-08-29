@@ -208,10 +208,10 @@ fn block_text(
     tag: BlockTag,
     table_rows: Option<&Vec<TableRow>>,
 ) -> String {
-    if tag == BlockTag::Table {
-        if let Some(rows) = table_rows {
-            return table_rows_text(rows);
-        }
+    if tag == BlockTag::Table
+        && let Some(rows) = table_rows
+    {
+        return table_rows_text(rows);
     }
     let raw = element
         .text()

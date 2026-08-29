@@ -168,5 +168,5 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    name.replace('/', "_").replace('\\', "_")
+    name.replace(['/', '\\'], "_")
 }

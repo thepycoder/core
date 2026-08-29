@@ -239,15 +239,14 @@ pub fn build_agenda_timeline(
                     items[idx].title_blocks.push(block.index);
                     continue;
                 }
-            } else if let Some(item) = items.last_mut() {
-                if item.start_block == start
-                    && item.title_fr.is_empty()
-                    && is_bilingual_fr_heading(block, item)
-                {
-                    item.title_fr = block.text.clone();
-                    item.title_blocks.push(block.index);
-                    continue;
-                }
+            } else if let Some(item) = items.last_mut()
+                && item.start_block == start
+                && item.title_fr.is_empty()
+                && is_bilingual_fr_heading(block, item)
+            {
+                item.title_fr = block.text.clone();
+                item.title_blocks.push(block.index);
+                continue;
             }
         }
 
@@ -274,19 +273,18 @@ pub fn build_agenda_timeline(
                 let internal_ids = extract_interpellation_ids_from_text(&block.text);
                 let is_fr = interpellation_fr_phase || is_french_interpellation_bullet(&block.text);
 
-                if is_fr {
-                    if let Some(site_id) = internal_ids.first() {
-                        if let Some(item) = items.iter_mut().find(|it| {
-                            it.item_kind == ItemKind::Interpellation
-                                && it.internal_ids.iter().any(|id| id == site_id)
-                        }) {
-                            item.title_fr = block.text.clone();
-                            item.title_blocks.push(block.index);
-                            item.end_block = blocks.len() as u32;
-                            pending_nl = Some((block.index, block.text.clone()));
-                            continue;
-                        }
-                    }
+                if is_fr
+                    && let Some(site_id) = internal_ids.first()
+                    && let Some(item) = items.iter_mut().find(|it| {
+                        it.item_kind == ItemKind::Interpellation
+                            && it.internal_ids.iter().any(|id| id == site_id)
+                    })
+                {
+                    item.title_fr = block.text.clone();
+                    item.title_blocks.push(block.index);
+                    item.end_block = blocks.len() as u32;
+                    pending_nl = Some((block.index, block.text.clone()));
+                    continue;
                 }
 
                 close_item_range(&mut items, block.index);
@@ -438,10 +436,10 @@ pub fn build_agenda_timeline(
         });
     }
 
-    if let Some((start, nl_title)) = pending_nl {
-        if let Some(item) = items.iter_mut().find(|it| it.start_block == start) {
-            item.title_nl = nl_title;
-        }
+    if let Some((start, nl_title)) = pending_nl
+        && let Some(item) = items.iter_mut().find(|it| it.start_block == start)
+    {
+        item.title_nl = nl_title;
     }
 
     let mut interpellation_ids_by_ref: HashMap<String, String> = HashMap::new();
@@ -548,10 +546,7 @@ fn extract_dossier_refs(session_id: u32, text: &str) -> (String, String) {
         .unwrap_or_default()
 }
 
-pub fn agenda_item_for_block<'a>(
-    items: &'a [AgendaItem],
-    block_index: u32,
-) -> Option<&'a AgendaItem> {
+pub fn agenda_item_for_block(items: &[AgendaItem], block_index: u32) -> Option<&AgendaItem> {
     items
         .iter()
         .rev()
@@ -719,7 +714,7 @@ mod tests {
             .map(String::as_str)
             .collect();
         assert!(
-            all_ids.iter().any(|id| *id == "Q56001293C"),
+            all_ids.contains(&"Q56001293C"),
             "expected grouped Proximus question ids, got {:?} from {:?}",
             all_ids,
             questions

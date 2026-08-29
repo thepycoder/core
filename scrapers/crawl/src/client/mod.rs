@@ -9,6 +9,12 @@ pub struct ScrapingClient {
     user_agent: header::HeaderValue,
 }
 
+impl Default for ScrapingClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScrapingClient {
     pub fn new() -> Self {
         dotenvy::dotenv().ok();

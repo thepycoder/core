@@ -87,12 +87,11 @@ fn max_year_in_remuneration_cache() -> Option<i32> {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         // `{Last}-{First}-{year}.html`
-        if let Some(stem) = name.strip_suffix(".html") {
-            if let Some(year_str) = stem.rsplit('-').next() {
-                if let Ok(y) = year_str.parse::<i32>() {
-                    max_year = Some(max_year.map_or(y, |m| m.max(y)));
-                }
-            }
+        if let Some(stem) = name.strip_suffix(".html")
+            && let Some(year_str) = stem.rsplit('-').next()
+            && let Ok(y) = year_str.parse::<i32>()
+        {
+            max_year = Some(max_year.map_or(y, |m| m.max(y)));
         }
     }
     max_year
@@ -145,9 +144,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let members_file = File::open(&members_path)?;
     let reader = SerializedFileReader::new(members_file)?;
-    let mut iter = reader.get_row_iter(None)?;
+    let iter = reader.get_row_iter(None)?;
 
-    while let Some(row_result) = iter.next() {
+    for row_result in iter {
         let row = row_result?;
         let first_name = row.get_string(2)?.to_string();
         let last_name = row.get_string(3)?.to_string();

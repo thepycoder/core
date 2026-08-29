@@ -21,7 +21,7 @@ pub enum CommissionRole {
 /// normalization — substring matching would treat `Ondervoorzitters` as `Voorzitter`.
 pub fn normalize_role_label(label: &str) -> Option<CommissionRole> {
     let mut s = label.to_lowercase();
-    s = s.replace('(', " ").replace(')', " ");
+    s = s.replace(['(', ')'], " ");
     s = s
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' })

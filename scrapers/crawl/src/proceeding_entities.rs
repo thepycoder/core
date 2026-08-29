@@ -431,15 +431,8 @@ fn merge_interpellation_parsed(
 fn extract_witnesses_from_title(title: &str) -> Option<String> {
     let clean = clean_heading(title);
     let lower = clean.to_lowercase();
-    let after = if let Some(idx) = lower.find("hoorzitting met:") {
-        &clean[idx + "hoorzitting met:".len()..]
-    } else if let Some(idx) = lower.find("audition de:") {
-        &clean[idx + "audition de:".len()..]
-    } else if lower.ends_with("audition de") {
-        return None;
-    } else {
-        return None;
-    };
+    let after_marker = |marker: &str| lower.find(marker).map(|idx| &clean[idx + marker.len()..]);
+    let after = after_marker("hoorzitting met:").or_else(|| after_marker("audition de:"))?;
     let witnesses = after.trim().trim_end_matches(':').trim();
     if witnesses.is_empty() {
         None

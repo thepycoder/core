@@ -8,12 +8,6 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-macro_rules! col {
-    ($rows:expr, $f:expr) => {
-        Arc::new(StringArray::from($rows.iter().map($f).collect::<Vec<_>>())) as ArrayRef
-    };
-}
-
 fn write_string_table(
     path: &Path,
     fields: &[&str],

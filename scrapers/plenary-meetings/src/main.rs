@@ -13,9 +13,10 @@ use crawl::{
     extract_questions_from_agenda, gap_reason_to_manifest_status, load_prior_gaps, looks_like_pdf,
     manifest_path, materialize_agenda_items, now_rfc3339, parse_plenary_meeting_report,
     read_cache_metadata, reconcile_meeting_coverage, record_gap, validate_manifest_rows,
-    write_agenda_items_parquet, write_answers_parquet, write_cache_artifact, write_hearings_parquet,
-    write_interpellations_parquet, write_meeting_gaps_parquet, write_report_blocks_parquet,
-    write_source_manifest, write_source_spans_parquet, write_utterances_parquet, write_vote_bundle,
+    write_agenda_items_parquet, write_answers_parquet, write_cache_artifact,
+    write_hearings_parquet, write_interpellations_parquet, write_meeting_gaps_parquet,
+    write_report_blocks_parquet, write_source_manifest, write_source_spans_parquet,
+    write_utterances_parquet, write_vote_bundle,
 };
 use encoding_rs::WINDOWS_1252;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -375,12 +376,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let url = meeting_url(session_id, meeting_id);
         let rel_cache = relative_cache_path(&filepath, &cache_dir());
 
-        if let Some(gap) = gaps.get(&meeting_id) {
-            if gap.reason == GAP_REASON_NOT_FOUND {
-                push_gap_manifest(&mut manifest_rows, session_id, meeting_id, gap, run_mode);
-                meetings_pb.inc(1);
-                continue;
-            }
+        if let Some(gap) = gaps.get(&meeting_id)
+            && gap.reason == GAP_REASON_NOT_FOUND
+        {
+            push_gap_manifest(&mut manifest_rows, session_id, meeting_id, gap, run_mode);
+            meetings_pb.inc(1);
+            continue;
         }
 
         if !cache_only() && !filepath.exists() && !gaps.contains_key(&meeting_id) {

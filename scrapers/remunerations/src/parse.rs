@@ -24,7 +24,7 @@ pub fn parse_remuneration_text(raw: &str) -> Option<(String, String)> {
 }
 
 fn parse_eur_amount(raw: &str) -> Option<f64> {
-    let stripped = raw.trim().replace('\u{00a0}', "").replace('€', "");
+    let stripped = raw.trim().replace(['\u{00a0}', '€'], "");
     let mut text = stripped.trim();
     if text.len() >= 3 && text[..3].eq_ignore_ascii_case("eur") {
         text = text[3..].trim();
