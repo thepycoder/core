@@ -91,7 +91,7 @@ Amounts are stored as Utf8 canonical decimal EUR strings (not Arrow DECIMAL/FLOA
 
 **questions.parquet:** `question_id`, `session_id`, `meeting_id`, `questioners`, `respondents`, `topics_nl`, `topics_fr`, `internal_ids`, `source_url`, `cache_path`
 
-**agenda_items.parquet:** `agenda_item_id` (`{session}_{kind}_{meeting}_agenda_{start_block}`), `session_id`, `meeting_id`, `meeting_kind`, `agenda_id` (printed heading number), `item_kind`, `item_id` (proceeding entity when typed), `title_nl`, `title_fr`, `dossier_id`, `document_id`, `internal_ids`, `start_block`, `end_block`, `title_blocks`, `source_section`, `source_url`, `cache_path` — full meeting timeline; graph AgendaItem nodes + `REFERENCES` dossier cites.
+**agenda_items.parquet:** `agenda_item_id` (`{session}_{kind}_{meeting}_agenda_{start_block}`), `session_id`, `meeting_id`, `meeting_kind`, `agenda_id` (printed heading number), `item_kind`, `item_id` (proceeding entity when typed), `title_nl`, `title_fr`, `dossier_id`, `document_id`, `internal_ids`, `start_block`, `end_block`, `title_blocks`, `source_section`, `source_url`, `cache_path` — full meeting timeline.
 
 **utterances.parquet:** `utterance_id`, `session_id`, `meeting_id`, `meeting_kind`, `agenda_id`, `agenda_item_id`, `turn_number`, `seq`, `item_kind`, `item_id`, `question_ids`, `dossier_id`, `document_id`, `motion_id`, `vote_id`, `raw_speaker`, `speaker_role`, `text`, `language`, `block_start`, `block_end`, `source_section`, `source_url`, `cache_path`
 
@@ -108,57 +108,6 @@ Amounts are stored as Utf8 canonical decimal EUR strings (not Arrow DECIMAL/FLOA
 **report_blocks.parquet** (derived, rebuildable): `artifact_id`, `source_content_hash`, `block_index` (UINT32), `block_type`, `text`, `structured_json`, `language`, `class_name`, `word_count` (UINT32), `content_hash` (SHA-256 of the canonical structured block), `has_oraspr` (BOOLEAN), `block_parser_version`, `extractor_version`, `source_url`, `cache_path` under `data/derived/sessions/{session}/plenary/`
 
 **source_spans.parquet** (canonical provenance): `span_id`, `artifact_id`, `source_content_hash`, `session_id` (UINT32), `meeting_id` (UINT32), `entity_type`, `entity_id`, `span_role`, `block_start`/`block_end` (UINT32, half-open), `coverage_kind` (`extraction`|`scope`), `field_names`, `confidence` (FLOAT64, 0–1), `extractor`, `block_parser_version`, `extractor_version`, `source_url`, `cache_path`, `validation_status` (`valid`|`unresolved`), `unresolved_reason` (empty for valid spans; otherwise `wrong_artifact`, `stale_source_content`, `stale_block_parser`, `missing_entity_id`, `invalid_half_open_range`, or `out_of_bounds`). Invalid candidates are retained as explicit unresolved rows.
-
-**normalized/vote_casts.parquet:** `vote_cast_id`, `result_id`, `session_id` (UINT32), `meeting_id` (UINT32), `person_id`, `position`, `raw_name`, plus the [canonical provenance contract](#normalized-provenance) below.
-
-**normalized/vote_reconciliation.parquet:** `result_id`, `session_id`, `meeting_id`, `yes`, `no`, `abstain`, `members_yes_count`, `members_no_count`, `members_abstain_count`, `reconciled`, `source_url`, `cache_path` — derived tally cross-check; intentionally outside the full provenance contract (no artifact/hash/version/confidence).
-
-**normalized/unresolved_persons.parquet:** unresolved identity fields plus the canonical provenance contract; vote-member rows carry the same artifact provenance as their resolved casts.
-
-**normalized/asked.parquet:** `asked_id`, `person_id`, `question_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
-
-**normalized/answered.parquet:** `answered_id`, `entity_type`, `entity_id`, `question_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
-
-**normalized/authored.parquet:** `authored_id`, `person_id`, `entity_type`, `entity_id`, `target_type`, `target_id`, `raw_name`, plus provenance.
-
-**normalized/holds_role.parquet:** `holds_role_id`, `person_id`, `role`, `target_type`, `target_id`, `raw_name`, plus provenance.
-
-**normalized/invited.parquet:** `invited_id`, `entity_type`, `entity_id`, `hearing_id`, `session_id`, `meeting_id`, `meeting_kind`, `raw_name`, plus provenance.
-
-**normalized/interpellated.parquet:** `interpellated_id`, `person_id`, `interpellation_id`, `raw_name`, plus provenance.
-
-**normalized/interpellation_responded.parquet:** `responded_id`, `entity_type`, `entity_id`, `interpellation_id`, `raw_name`, plus provenance.
-
-**normalized/written_asked.parquet:** `asked_id`, `person_id`, `question_id`, `raw_name`, plus provenance.
-
-**normalized/addressed_to.parquet:** `addressed_id`, `question_id`, `entity_type`, `entity_id`, `route_id`, `deptnum`, `questnum`, `statusq`, `dept_title_nl`, `dept_title_fr`, `properties_json`, plus provenance.
-
-**normalized/answers.parquet:** `answer_id`, `question_id`, `text_nl`, `text_fr`, plus provenance.
-
-**normalized/answered_by.parquet:** `answered_by_id`, `entity_type`, `entity_id`, `answer_id`, `raw_name`, plus provenance.
-
-**normalized/oral_written_links.parquet:** `written_question_id`, `canonical_question_id`, `oral_ref`, `status`, `docname`, plus provenance.
-
-**normalized/utterances.parquet:** staging utterance fields with resolved speaker ids plus provenance (meeting-report `block_parser_version` / report extractor when applicable).
-
-<a id="normalized-provenance"></a>
-**Canonical normalized provenance** (every source-derived table above except `vote_reconciliation`):
-
-| Column | Type | Notes |
-|--------|------|--------|
-| `source_url` | Utf8 | Source page URL |
-| `cache_path` | Utf8 | Relative path under `SCRAPER_CACHE_DIR` |
-| `source_artifact_id` | Utf8 | `crawl::artifact_id(source_url, cache_path)` |
-| `source_content_hash` | Utf8 | Hash of bytes used at **normalize** time (not recomputed later as canonical) |
-| `block_parser_version` | Utf8 | Report-derived rows; empty when not applicable |
-| `extractor_version` | Utf8 | e.g. `normalize_asked_v1` / vote extractor stamp |
-| `confidence` | FLOAT64 | In `[0,1]`; `1.0` exact, `0.8` parsed, `0.5` heuristic |
-
-Graph `source_artifacts.parquet` prefers these transform-time hashes; a mismatch vs current cache bytes is rejected rather than silently overwritten. `scraped_at` is filled from cache `.meta.json` / source manifests at graph build.
-
-**graph/nodes.parquet:** `node_type`, `node_id`, `label`, `source_artifact_id`, `source_url`, `cache_path`
-
-**graph/source_artifacts.parquet:** `source_artifact_id` (stable SHA-256 of `source_url` + `cache_path`), `source_url`, `cache_path`, `source_content_hash`, `block_parser_version`, `extractor_version`, `scraped_at`
 
 **Plenary only.** Commission integraal verslag HTML does not contain roll-call vote tables (`Stemming`, `DETAIL VAN DE NAAMSTEMMINGEN`, Ja/Nee member lists). Do not expect vote parquet under `data/sessions/{session}/commission/`. Procedural adoption in commission prose (e.g. *wordt unaniem aangenomen*) is not modelled as Vote/CAST unless it appears as a formal sitting/standing outcome in plenary reports.
 
@@ -309,42 +258,6 @@ Oral `questions.parquet` (plenary + commission) gains trailing columns:
 |--------|--------|
 | `question_body_nl` / `question_body_fr` | Canonical MP letter for `treatment_mode=oral_written` (analogous to `written/questions.text_*`) |
 | `treatment_mode` | `oral_written` or empty for live debate |
-
-## Identity (`data/identity/`)
-
-**persons.parquet:** `person_id`, `first_name`, `last_name`, `date_of_birth`, `place_of_birth`, `language`, `source_url`, `cache_path` — Chamber MPs only (cvview keys).
-
-**external_persons.parquet:** `external_person_id`, `display_name`, `kind`, `source`, `first_seen_bucket`, `source_url`, `cache_path` — non-MP actors (ministers, experts, Voorzitter, institutional authors).
-
-**external_person_aliases.parquet:** `alias_norm`, `external_person_id`, `source`, `confidence`
-
-**external_person_contexts.parquet:** `context_id`, `external_person_id`, `meeting_id`, `meeting_kind`, `meeting_date`, `question_id`, `question_topics_nl`, `question_topics_fr`, `utterance_excerpt`, `source_url`, `cache_path`, `raw_field` — LLM enrichment input.
-
-**external_person_bios.parquet:** `external_person_id`, `input_hash`, `bio_nl`, `bio_json`, `model`, `search_queries`, `created_at` — LLM output from `enrich-external-persons`.
-
-## QA outputs (`data/qa/`)
-
-Produced by `just qa` (`scrapers/qa`). Detail-first: summary artifacts are always derived from detail rows.
-
-**meeting_report_check_details.parquet:** `check_id`, `severity`, `status`, `session_id`, `meeting_kind`, `meeting_id`, `entity_type`, `entity_id`, `expected`, `actual`, `message`, `source_url`, `cache_path`, `source_block`, `created_at`, `warning_id`, `warning_kind`, `graph_node_type`, `graph_node_id`, `source_artifact_id`
-
-Entity-level warnings for the graph viewer use the same detail store:
-
-- `warning_id` — deterministic SHA-256 over check subject/values/artifact/block fields (excludes `created_at`)
-- `warning_kind` — closed vocabulary: `source_conflict`, `source_anomaly`, `source_gap`, `extraction`, `integrity`, `coverage`
-- `graph_node_type` / `graph_node_id` — exact graph node target (e.g. `VoteResult` / `56-135-r16`); empty when the check subject is source-local only
-- `source_artifact_id` — `crawl::artifact_id(source_url, cache_path)` when provenance URL/cache are present
-- `entity_type` / `entity_id` — check subject, which may remain source-local (e.g. appendix `16#1`) even when a graph target is also set
-
-**checks.parquet:** `table`, `check`, `status`, `count`, `detail`, `examples` — aggregated per `check_id`; includes `qa.summary_vs_detail` meta-check.
-
-**alias_candidates.parquet:** `raw_name`, `cleaned_name`, `matched_person_id`, `source_bucket`, `context_id`, `check_id`, `confidence`
-
-**row_counts.json:** per-table row counts for `schema.row_count_delta` checks.
-
-**summary.md:** human-readable rollup of `checks.parquet`. Includes a **Corpus overview** section (document word coverage distribution, staging table row counts) and per-check **Stats** where applicable.
-
-Command: `just qa`.
 
 ## Sidecar files (not parquet)
 
