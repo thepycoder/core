@@ -1757,7 +1757,6 @@ dependencies = [
  "dotenvy",
  "parquet",
  "regex",
- "scraper",
  "tokio",
 ]
 

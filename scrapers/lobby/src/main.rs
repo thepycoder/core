@@ -1,25 +1,20 @@
+mod parse;
+
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use crawl::client::ScrapingClient;
 use crawl::paths::{cache_dir, data_dir};
 use parquet::arrow::ArrowWriter;
-use scraper::{ElementRef, Html, Selector};
+use parse::{ScrapedLobby, dedupe_lobby, parse_lobby_layout};
 use std::error::Error;
-use std::fs::{File, read_to_string};
+use std::fs::File;
 use std::path::Path;
-use std::sync::{Arc, LazyLock};
+use std::process::Command;
+use std::sync::Arc;
 use tokio::fs;
 
-static ROW_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("tr").unwrap());
-static CELL_SELECTOR: LazyLock<Selector> = LazyLock::new(|| Selector::parse("td").unwrap());
-
-#[derive(Debug)]
-struct ScrapedLobby {
-    name: String,
-    contacts: String,
-    interests: String,
-    url: String,
-}
+const LOBBY_PDF_URL: &str = "https://www.dekamer.be/kvvcr/pdf_sections/lobby/lobbyregister.pdf";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -28,28 +23,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let lobby_path = data_dir().join("lobby.parquet");
     fs::create_dir_all(lobby_path.parent().unwrap()).await?;
 
-    let source_path = cache_dir().join("lobby/lobbyregister.html");
+    let pdf_path = cache_dir().join("lobby/lobbyregister.pdf");
 
-    if !source_path.exists() {
-        // DOWNLOAD AND CONVERT TO PDF TO HTML?
-        // Replace with actual source URL
-        // let url = "YOUR_URL_HERE";
-
-        // let content = client.get(url).await?.text().await?;
-
-        // fs::create_dir_all(source_path.parent().unwrap()).await?;
-        // fs::write(&source_path, &content).await?;
+    if !pdf_path.exists() {
+        let client = ScrapingClient::new();
+        let response = client.get(LOBBY_PDF_URL).await?.error_for_status()?;
+        let bytes = response.bytes().await?;
+        if !bytes.starts_with(b"%PDF") {
+            return Err(format!("{LOBBY_PDF_URL} did not return a PDF").into());
+        }
+        fs::create_dir_all(pdf_path.parent().unwrap()).await?;
+        fs::write(&pdf_path, &bytes).await?;
     }
 
-    let content = read_to_string(&source_path)?;
-    let document = Html::parse_document(&content);
+    let layout = pdftotext_layout(&pdf_path)?;
+    let lobby = dedupe_lobby(parse_lobby_layout(&layout));
+    if lobby.is_empty() {
+        return Err(
+            "No lobby entries parsed from the register PDF — aborting Parquet write.".into(),
+        );
+    }
 
-    let lobby = extract_lobby(document)?;
     write_parquet(&lobby_path, &lobby)?;
 
     println!("Scraped {} lobby entries.", lobby.len());
 
     Ok(())
+}
+
+fn pdftotext_layout(pdf_path: &Path) -> Result<String, Box<dyn Error>> {
+    let output = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(pdf_path)
+        .arg("-")
+        .output()
+        .map_err(|e| format!("could not run pdftotext (is poppler installed?): {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "pdftotext failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    Ok(String::from_utf8(output.stdout)?)
 }
 
 fn write_parquet(path: &Path, rows: &[ScrapedLobby]) -> Result<(), Box<dyn Error>> {
@@ -81,42 +99,4 @@ fn write_parquet(path: &Path, rows: &[ScrapedLobby]) -> Result<(), Box<dyn Error
     writer.close()?;
 
     Ok(())
-}
-
-fn extract_lobby(document: Html) -> Result<Vec<ScrapedLobby>, Box<dyn Error>> {
-    let rows: Vec<_> = document.select(&ROW_SELECTOR).skip(1).collect();
-    let total_rows = rows.len();
-
-    let mut lobby = Vec::with_capacity(total_rows);
-
-    for row in rows.into_iter() {
-        lobby.push(ScrapedLobby {
-            name: extract_cell(&row, 0),
-            contacts: extract_contacts(&row, 1),
-            interests: extract_cell(&row, 2),
-            url: extract_cell(&row, 3),
-        });
-    }
-
-    Ok(lobby)
-}
-
-fn extract_contacts(row: &ElementRef, index: usize) -> String {
-    row.select(&CELL_SELECTOR)
-        .nth(index)
-        .map(|cell| {
-            cell.text()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default()
-}
-
-fn extract_cell(row: &ElementRef, index: usize) -> String {
-    row.select(&CELL_SELECTOR)
-        .nth(index)
-        .map(|cell| cell.text().collect::<Vec<_>>().join(" ").trim().to_string())
-        .unwrap_or_default()
 }
