@@ -223,7 +223,7 @@ fn clean_remuneration(raw: &str) -> Option<(String, String)> {
     let cleaned = raw
         .replace("Afgerond op ", "")
         .replace('\u{00a0}', "") // non-breaking space
-        .replace(['€', '&', ' ', ','], "")
+        .replace(['€', '&', ' '], "")
         .replace(',', ".");
 
     if let Some((left, right)) = cleaned.split_once('-') {
@@ -235,4 +235,47 @@ fn clean_remuneration(raw: &str) -> Option<(String, String)> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn amounts(raw: &str) -> (String, String) {
+        clean_remuneration(raw).expect("parsable amount")
+    }
+
+    #[test]
+    fn decimal_comma_is_not_dropped() {
+        assert_eq!(
+            amounts(" 128\u{a0}515,94 € "),
+            ("128515.94".into(), "128515.94".into())
+        );
+        assert_eq!(amounts(" 0,00 € "), ("0".into(), "0".into()));
+    }
+
+    #[test]
+    fn range_endpoints_keep_their_decimals() {
+        assert_eq!(
+            amounts(" 1,00 - 5\u{a0}271,00 € "),
+            ("1".into(), "5271".into())
+        );
+        assert_eq!(
+            amounts(" 52\u{a0}720,00 - 105\u{a0}438,00 € "),
+            ("52720".into(), "105438".into())
+        );
+    }
+
+    #[test]
+    fn rounded_amount() {
+        assert_eq!(
+            amounts(" Afgerond op 100\u{a0}000,00 €  "),
+            ("100000".into(), "100000".into())
+        );
+    }
+
+    #[test]
+    fn unpaid_mandate() {
+        assert_eq!(amounts(" Niet bezoldigd "), ("0".into(), "0".into()));
+    }
 }
