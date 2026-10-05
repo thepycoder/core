@@ -51,6 +51,8 @@ SCRAPER_PROJECT_URL="yourproject.example"
 SCRAPER_CONTACT_EMAIL="your@email.com"
 ```
 
+The `lobby` scraper converts the lobby register PDF with `pdftotext`, which comes with [poppler](https://poppler.freedesktop.org/) (`poppler-utils` on Debian/Ubuntu, `poppler` on Homebrew).
+
 ## Summarizers
 
 The summarizers summarizes topics, dossiers and discussions using the Mistral API. This requires a `MISTRAL_API_TOKEN` to be set in the `.env` file.
